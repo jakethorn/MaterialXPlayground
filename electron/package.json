@@ -1,6 +1,7 @@
 {
   "name": "materialx-playground-desktop",
   "version": "2026.8.3",
+  "homepage": "https://joaovbs96.github.io/MaterialXPlayground/",
   "private": true,
   "main": "main/main.js",
   "devDependencies": {
