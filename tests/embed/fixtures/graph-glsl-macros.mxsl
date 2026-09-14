@@ -1,0 +1,11 @@
+inline T glsl_mix<float, vec2, vec3, vec4>(T bg, T fg, T mix)
+{
+    return mix(fg, bg, mix);
+}
+
+inline T glsl_mix<vec2, vec3, vec4>(T bg, T fg, float mix)
+{
+    return mix(fg, bg, mix);
+}
+
+#define mix glsl_mix

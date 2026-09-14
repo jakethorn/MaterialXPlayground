@@ -1,0 +1,8 @@
+#include "graph-brick-pattern.mxsl"
+
+color3 color1;
+color3 color2;
+
+color3 c = get_brick_pattern(color1, color2);
+surfaceshader s = standard_surface(base_color=c);
+material m = surfacematerial(s);

@@ -45,6 +45,7 @@
     "jszip": "3.10.1",
     "katex": "0.16.47",
     "marked": "18.0.9",
+    "mxslc-javascript": "file:packages/mxslc-javascript",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "reactflow": "11.11.4",

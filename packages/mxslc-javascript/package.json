@@ -1,0 +1,14 @@
+{
+  "name": "mxslc-javascript",
+  "version": "0.1.0",
+  "description": "Vendored JsMxslc browser runtime for MaterialX Playground.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "files": [
+    "JsMxslc.js",
+    "JsMxslc.wasm",
+    "JsMxslc.data",
+    "LICENSE.txt",
+    "README.md"
+  ]
+}

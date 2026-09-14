@@ -1,0 +1,6 @@
+#include "graph-glsl-macros.mxsl"
+
+inline color3 get_brick_pattern(color3 color1, color3 color2)
+{
+    return mix(color1, color2, vec3{0.5});
+}

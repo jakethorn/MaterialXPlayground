@@ -1,0 +1,5 @@
+material main(
+{
+    surfaceshader s = standard_surface();
+    return surfacematerial(s);
+}

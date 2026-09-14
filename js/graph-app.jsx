@@ -371,8 +371,9 @@
             const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
             const [fileMap, setFileMap] = React.useState({});
             const fileMapRef = React.useRef({});
-            const [mtlxPaths, setMtlxPaths] = React.useState([]);
-            const [chosenMtlx, setChosenMtlx] = React.useState(null);
+            const [sourcePaths, setSourcePaths] = React.useState([]);
+            const [chosenSource, setChosenSource] = React.useState(null);
+            const [sourceDocKind, setSourceDocKind] = React.useState('mtlx');
             const [parsed, setParsed] = React.useState(null); // { mx, doc, nodegraphs, label }
             const [scope, setScope] = React.useState('');     // '' = document root
             const [flow, setFlow] = React.useState({ nodes: [], edges: [] });
@@ -1300,17 +1301,22 @@
 
             const loadDocument = async (path, mapArg) => {
                 const map = mapArg || fileMapRef.current;
+                const kind = graphSourceKind(path) || 'mtlx';
                 setError(null);
                 setBusy(true);
-                setStatus('Parsing ' + path + ' \u2026');
+                setStatus((kind === 'mxsl' ? 'Compiling ' : 'Parsing ') + path + ' \u2026');
                 try {
-                    const { raw, resolved } = await readMtlxText(map[path], path, map);
-                    // Validate source-of-truth (noteDocXml): the RAW,
-                    // as-opened text — before include-resolution/healing —
-                    // matching what VS Code's own tier-2 validator checks.
-                    noteDocXml(raw);
-                    const p = await parseMtlxDocument(resolved);
-                    p.label = path;
+                    const loaded = await readGraphSourceText(map[path], path, map);
+                    if (loaded.kind === 'mxsl') {
+                        setStatus('Parsing compiled MaterialX from ' + path + ' \u2026');
+                    }
+                    // Validate source-of-truth (noteDocXml): for native
+                    // .mtlx input, the as-opened XML; for .mxsl input, the
+                    // compiled MaterialX XML that the graph edits from.
+                    noteDocXml(loaded.validationXml);
+                    const p = await parseMtlxDocument(loaded.resolved);
+                    p.label = loaded.sessionLabel;
+                    setSourceDocKind(loaded.kind || kind);
                     setParsed(p);
                     setScope('');
                     // Same default-target reset as opening a document fresh:
@@ -1319,7 +1325,6 @@
                     setSelectedId(null);
                     setPreviewSel(null);
                     setPinnedTarget(null);
-                    setStatus(null);
                     if (snapshotTimerRef.current) { clearTimeout(snapshotTimerRef.current); snapshotTimerRef.current = null; }
                     try {
                         undoStateRef.current = { stack: [{ xml: serializeDocXml(p), scope: '', tag: null }], index: 0, savedIndex: 0 };
@@ -1327,6 +1332,9 @@
                         undoStateRef.current = { stack: [], index: -1, savedIndex: -1 };
                     }
                     markSaved(); // a freshly loaded document has no unsaved edits of its own
+                    setStatus(loaded.kind === 'mxsl'
+                        ? 'Imported ' + path + ' as MaterialX — Save and Export write .mtlx.'
+                        : null);
                 } catch (e2) {
                     setStatus(null);
                     setError(errMsg(e2));
@@ -1352,8 +1360,9 @@
                     p.label = 'untitled.mtlx';
                     fileMapRef.current = {};
                     setFileMap({});
-                    setMtlxPaths([]);
-                    setChosenMtlx(null);
+                    setSourcePaths([]);
+                    setChosenSource(null);
+                    setSourceDocKind('mtlx');
                     setSelectedId(null);
                     setParsed(p);
                     setScope('');
@@ -1374,10 +1383,10 @@
             };
 
             // `rootKey` (optional): when the caller already knows which
-            // .mtlx is the document (a crawled map may hold .mtlx-suffixed
+            // source file is the document (a crawled map may hold .mtlx-suffixed
             // includes too), skip the ambiguous-drop heuristic below.
             // `additive` (File > Import): never replaces the session, new
-            // .mtlx files join the mtlxPaths candidates list instead of
+            // source files join the document-picker candidates list instead of
             // loading; textures still merge and rebind live previews.
             const ingest = async (map, rootKey, additive) => {
                 setError(null);
@@ -1387,13 +1396,13 @@
                     setError(errMsg(e));
                     return;
                 }
-                const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
-                // Same session semantics as the material viewer: a .mtlx
+                const droppedSources = sourcePathsFromMap(map);
+                // Same session semantics as the material viewer: a source
                 // drop replaces the session (unless none existed yet, or
                 // additive); other files merge in as possible xi:includes.
-                const hadSession = Object.keys(fileMapRef.current).some((k) => /\.mtlx$/i.test(k));
+                const hadSession = sourcePathsFromMap(fileMapRef.current).length > 0;
                 let merged;
-                if (droppedMtlx.length && hadSession && !additive) {
+                if (droppedSources.length && hadSession && !additive) {
                     merged = Object.assign({}, map);
                     setParsed(null);
                     setScope('');
@@ -1412,29 +1421,29 @@
                 }
                 fileMapRef.current = merged;
                 setFileMap(merged);
-                const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
-                setMtlxPaths(mtlx);
-                if (!mtlx.length) {
-                    setStatus('Files received — now drop the .mtlx document itself.');
+                const docs = sourcePathsFromMap(merged);
+                setSourcePaths(docs);
+                if (!docs.length) {
+                    setStatus('Files received — now drop the .mtlx or .mxsl document itself.');
                     return;
                 }
-                if (droppedMtlx.length) {
+                if (droppedSources.length) {
                     if (additive) {
                         // Added, not loaded: the existing multi-document
-                        // dropdown (mtlxPaths) is how the user reaches them.
-                        setStatus('Added ' + droppedMtlx.length + ' .mtlx document'
-                            + (droppedMtlx.length === 1 ? '' : 's') + ' to the session, pick one below to switch.');
+                        // dropdown (sourcePaths) is how the user reaches them.
+                        setStatus('Added ' + droppedSources.length + ' source document'
+                            + (droppedSources.length === 1 ? '' : 's') + ' to the session, pick one below to switch.');
                         return;
                     }
-                    const pick = (rootKey && mtlx.indexOf(rootKey) !== -1)
-                        ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
-                    setChosenMtlx(pick);
+                    const pick = (rootKey && docs.indexOf(rootKey) !== -1)
+                        ? rootKey : (docs.length === 1 ? docs[0] : null);
+                    setChosenSource(pick);
                     if (pick) loadDocument(pick, merged);
-                    else setStatus('This drop contains several .mtlx files — pick one below.');
-                } else if (chosenMtlx) {
-                    loadDocument(chosenMtlx, merged); // includes may now resolve
+                    else setStatus('This drop contains several source documents — pick one below.');
+                } else if (chosenSource) {
+                    loadDocument(chosenSource, merged); // includes may now resolve
                 } else {
-                    setStatus('Files added — pick a .mtlx below.');
+                    setStatus('Files added — pick a document below.');
                 }
             };
 
@@ -1461,24 +1470,25 @@
                 }
                 fileMapRef.current = merged;
                 setFileMap(merged);
-                const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
-                setMtlxPaths(mtlx);
-                if (!mtlx.length) return; // shouldn't happen — the payload always carries the root .mtlx
+                const docs = sourcePathsFromMap(merged);
+                setSourcePaths(docs);
+                if (!docs.length) return; // shouldn't happen — the payload always carries the root .mtlx
                 // Prefer the previously-established root key when still
                 // present — xi:include targets can also be .mtlx-suffixed,
                 // so a plain "only one .mtlx" heuristic isn't reliable here.
-                const pick = (chosenMtlx && mtlx.indexOf(chosenMtlx) !== -1) ? chosenMtlx : mtlx[0];
+                const pick = (chosenSource && docs.indexOf(chosenSource) !== -1) ? chosenSource : docs[0];
                 if (!merged[pick]) return;
-                setChosenMtlx(pick);
+                setChosenSource(pick);
 
                 let p;
                 try {
-                    const { raw, resolved } = await readMtlxText(merged[pick], pick, merged);
-                    // Validate source-of-truth: the raw external-edit
-                    // text (parity with loadDocument), noted BEFORE either
-                    // early return so a mid-edit broken file still turns Validate red.
-                    noteDocXml(raw);
-                    p = await parseMtlxDocument(resolved);
+                    const loaded = await readGraphSourceText(merged[pick], pick, merged);
+                    // Validate source-of-truth: the raw external-edit .mtlx
+                    // text (parity with loadDocument), or the compiled
+                    // MaterialX XML for an imported .mxsl source.
+                    noteDocXml(loaded.validationXml);
+                    p = await parseMtlxDocument(loaded.resolved);
+                    setSourceDocKind(loaded.kind || 'mtlx');
                 } catch (e) {
                     // The live session must survive a mid-edit broken
                     // file (e.g. an unbalanced tag mid-keystroke) — keep
@@ -1571,8 +1581,8 @@
             const closeConfirm = () => { pendingActionRef.current = null; setConfirmCloseOpen(false); };
             useEscapeToClose(closeConfirm, confirmCloseOpen);
             const guardedIngest = (map) => {
-                const hasMtlx = Object.keys(map).some((k) => /\.mtlx$/i.test(k));
-                confirmReplace(hasMtlx, () => ingest(map));
+                const hasSource = sourcePathsFromMap(map).length > 0;
+                confirmReplace(hasSource, () => ingest(map));
             };
             // Kept current every render for the [] -dep drag-drop effect
             // below (same trick as ingestRef).
@@ -1748,8 +1758,7 @@
                         return r.text();
                     })
                     .then((xml) => {
-                        const hasSession = Object.keys(fileMapRef.current)
-                            .some((k) => /\.mtlx$/i.test(k));
+                        const hasSession = sourcePathsFromMap(fileMapRef.current).length > 0;
                         // draftPendingRef (item 9): an async autosave
                         // restore may still be in flight, don't stomp it.
                         if (hasSession || draftPendingRef.current) return;
@@ -1759,10 +1768,9 @@
                     })
                     .catch(() => {
                         setBusy(false);
-                        const hasSession = Object.keys(fileMapRef.current)
-                            .some((k) => /\.mtlx$/i.test(k));
+                        const hasSession = sourcePathsFromMap(fileMapRef.current).length > 0;
                         if (!hasSession && !draftPendingRef.current && !IN_VSCODE) {
-                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx anywhere, use Open, or pick a Preset (top left).");
+                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx or .mxsl anywhere, use Open, or pick a Preset (top left).");
                         }
                     });
             }, []);
@@ -1782,7 +1790,7 @@
                 guardedIngest(map);
             };
 
-            // Import is additive (textures merge, .mtlx documents join the
+            // Import is additive (textures merge, source documents join the
             // candidates list) so it never discards anything: no
             // confirmReplace guard, straight to ingest().
             const onPickImportFiles = (e) => {
@@ -2125,7 +2133,7 @@
                     },
                     exportForUser: () => {
                         const p = parsedRef.current;
-                        const name = String((p && p.label) || 'document').split('/').pop().replace(/\.mtlx$/i, '');
+                        const name = stripGraphSourceExt(String((p && p.label) || 'document').split('/').pop());
                         const resolved = scanExportTexturesRef.current().resolved;
                         exportZipRef.current(name, resolved);
                     },
@@ -3119,7 +3127,7 @@
             // Derives the default export base name (no extension) from
             // the parsed document's label — shared by exportMtlx and the
             // Export dialog's prefilled filename field.
-            const defaultExportBase = () => String((parsed && parsed.label) || 'document').split('/').pop().replace(/\.mtlx$/i, '');
+            const defaultExportBase = () => stripGraphSourceExt(String((parsed && parsed.label) || 'document').split('/').pop());
 
             // Hand the current document off to the material viewer (item
             // F2.2's "Send to Viewer"). Serializes through the same
@@ -6900,7 +6908,7 @@
                 !IN_VSCODE && {
                     label: 'Open…', icon: 'file-upload',
                     onSelect: () => { if (openInputRef.current) openInputRef.current.click(); },
-                    title: 'Open a .mtlx or .zip, replacing the current session (drag and drop works anywhere on the page)',
+                    title: 'Open a .mtlx, .mxsl or .zip, replacing the current session (drag and drop works anywhere on the page)',
                 },
                 IN_ELECTRON && {
                     label: 'Open Recent…', icon: 'history',
@@ -6913,7 +6921,7 @@
                 !IN_VSCODE && {
                     label: 'Import…', icon: 'file-import',
                     onSelect: () => { if (importInputRef.current) importInputRef.current.click(); },
-                    title: 'Add textures or more .mtlx documents to the session without replacing it',
+                    title: 'Add textures or more .mtlx/.mxsl documents to the session without replacing it',
                 },
                 !IN_VSCODE && {
                     label: 'Presets…', icon: 'presets', onSelect: () => setPresetPickerOpen(true),
@@ -7189,7 +7197,7 @@
                                     ref={openInputRef}
                                     type="file"
                                     multiple
-                                    accept=".mtlx,.zip"
+                                    accept=".mtlx,.mxsl,.zip"
                                     className="hidden"
                                     onChange={onPickFiles}
                                 />
@@ -7199,7 +7207,7 @@
                                     ref={importInputRef}
                                     type="file"
                                     multiple
-                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                    accept=".mtlx,.mxsl,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
                                     className="hidden"
                                     onChange={onPickImportFiles}
                                 />
@@ -7240,6 +7248,11 @@
                                     <button className="hover:text-gray-200 underline decoration-dotted" onClick={goUpScope}>
                                         {parsed.label}
                                     </button>
+                                    {sourceDocKind === 'mxsl' && (
+                                        <span className="ml-2 inline-flex items-center rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-300 align-middle">
+                                            imported from .mxsl · saves as .mtlx
+                                        </span>
+                                    )}
                                     {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
                                     {scope && <span className="text-blue-300">{scope}</span>}
                                     {scope && scopeLocked && <span className="text-amber-300"> (library, view only)</span>}
@@ -7256,14 +7269,14 @@
                         <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; } '
                             + '.mtlx-graph-editor-canvas .react-flow__attribution { margin: 0 ' + (minimapMarginRight + 200 + 8) + 'px 8px 0 !important; }'}</style>
                         <div ref={topRightClusterRef} className="flex items-center gap-1.5 flex-nowrap justify-end min-w-0">
-                            {mtlxPaths.length > 1 && (
+                            {sourcePaths.length > 1 && (
                                 <MtlxSelect
-                                    value={chosenMtlx || ''}
-                                    options={mtlxPaths}
-                                    placeholder={'Pick a .mtlx…'}
-                                    onChange={(path) => confirmReplace(true, () => { setChosenMtlx(path); loadDocument(path); })}
+                                    value={chosenSource || ''}
+                                    options={sourcePaths}
+                                    placeholder={'Pick a document…'}
+                                    onChange={(path) => confirmReplace(true, () => { setChosenSource(path); loadDocument(path); })}
                                     defValue={null}
-                                    title="Which .mtlx document to display"
+                                    title="Which source document to display"
                                     size="md"
                                     className="max-w-[10rem] md:max-w-[14rem] shrink-0"
                                 />
@@ -8239,7 +8252,7 @@
                             <div className="text-center bg-gray-800/90 border border-gray-700 rounded-xl px-8 py-6">
                                 <MtlxIcon name="file-upload" className="w-10 h-10 block mx-auto mb-3 text-gray-400" />
                                 <div className="text-sm text-gray-300 font-medium">
-                                    {status || 'Drop a .mtlx (or a folder / .zip containing one) to begin.'}
+                                    {status || 'Drop a .mtlx or .mxsl (or a folder / .zip containing one) to begin.'}
                                 </div>
                                 {/* Mentions the Open button and page-wide drag-drop,
                                     neither of which exist under VS Code (single opened

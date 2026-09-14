@@ -23,6 +23,143 @@
         // ---- Ingestion (same pipeline as material-viewer.html) ----
         // normPath/readDroppedItems/expandZips/findFileForRef/resolveIncludes
         // live in js/mtlx-engine.js, used here as window globals.
+        const MTLX_SOURCE_RE = /\.mtlx$/i;
+        const MXSL_SOURCE_RE = /\.mxsl$/i;
+        const GRAPH_SOURCE_RE = /\.(mtlx|mxsl)$/i;
+        const MXSLC_VENDOR_DIR = 'vendor/mxslc/';
+        let mxslcPromise = null;
+        let mxslcSessionSeq = 0;
+
+        const graphSourceKind = (path) => (
+            MXSL_SOURCE_RE.test(path || '') ? 'mxsl'
+                : (MTLX_SOURCE_RE.test(path || '') ? 'mtlx' : null)
+        );
+        const isGraphSourcePath = (path) => GRAPH_SOURCE_RE.test(path || '');
+        const sourcePathsFromMap = (map) => Object.keys(map || {}).filter((k) => isGraphSourcePath(k));
+        const stripGraphSourceExt = (label) => String(label || 'document').replace(/\.(mtlx|mxsl)$/i, '');
+
+        const errMessage = (err) => (err && err.message) ? err.message : String(err);
+
+        const getMxslcEnv = async () => {
+            if (!mxslcPromise) {
+                const url = new URL(MXSLC_VENDOR_DIR + 'JsMxslc.js', document.baseURI).href;
+                mxslcPromise = import(url)
+                    .then((mod) => {
+                        if (typeof mod.default !== 'function') {
+                            throw new Error('ShadingLanguageX compiler module did not export a factory function.');
+                        }
+                        return mod.default({
+                            locateFile: (file) => new URL(MXSLC_VENDOR_DIR + file, document.baseURI).href,
+                        });
+                    })
+                    .catch((e) => {
+                        mxslcPromise = null;
+                        throw new Error('The ShadingLanguageX compiler failed to load: ' + errMessage(e));
+                    });
+            }
+            return mxslcPromise;
+        };
+
+        const fsPathJoin = (...parts) => '/'
+            + parts
+                .map((part) => String(part || '').replace(/^\/+/, '').replace(/\/+$/, ''))
+                .filter(Boolean)
+                .join('/');
+
+        const ensureFsDir = (FS, dir) => {
+            const parts = String(dir || '/').split('/').filter(Boolean);
+            let cur = '';
+            for (const part of parts) {
+                cur += '/' + part;
+                try { FS.mkdir(cur); } catch (e) { /* already exists */ }
+            }
+        };
+
+        const clearFsTree = (FS, dir) => {
+            let names = null;
+            try { names = FS.readdir(dir); } catch (e) { return; }
+            names.filter((name) => name !== '.' && name !== '..').forEach((name) => {
+                const child = fsPathJoin(dir, name);
+                let mode = 0;
+                try { mode = FS.stat(child).mode; } catch (e) { return; }
+                if (FS.isDir(mode)) clearFsTree(FS, child);
+                else {
+                    try { FS.unlink(child); } catch (e) { /* best effort */ }
+                }
+            });
+            try { FS.rmdir(dir); } catch (e) { /* best effort */ }
+        };
+
+        const stageGraphSourceFiles = async (mxslc, fileMap, rootPath) => {
+            const FS = mxslc && mxslc.FS;
+            if (!FS) return { cwd: '/' };
+            const sessionRoot = '/mtlx-playground-mxsl/' + (++mxslcSessionSeq);
+            clearFsTree(FS, '/mtlx-playground-mxsl');
+            ensureFsDir(FS, sessionRoot);
+            for (const key of Object.keys(fileMap || {})) {
+                if (!GRAPH_SOURCE_RE.test(key)) continue;
+                const rel = String(key).replace(/^\/+/, '');
+                const abs = fsPathJoin(sessionRoot, rel);
+                const dir = abs.slice(0, abs.lastIndexOf('/')) || sessionRoot;
+                ensureFsDir(FS, dir);
+                const bytes = new Uint8Array(await fileMap[key].arrayBuffer());
+                FS.writeFile(abs, bytes, { encoding: 'binary' });
+            }
+            const relDir = String(rootPath || '').indexOf('/') >= 0
+                ? String(rootPath).slice(0, String(rootPath).lastIndexOf('/'))
+                : '';
+            const cwd = relDir ? fsPathJoin(sessionRoot, relDir) : sessionRoot;
+            ensureFsDir(FS, cwd);
+            return { cwd };
+        };
+
+        const compileMxslToMtlx = async (sourceText, path, fileMap) => {
+            const mxslc = await getMxslcEnv();
+            const options = new mxslc.CompileOptions();
+            const prevCwd = (mxslc.FS && typeof mxslc.FS.cwd === 'function') ? mxslc.FS.cwd() : '/';
+            options.version = (window.MtlxAssets && window.MtlxAssets.MTLX_DEFAULT_VERSION) || '1.39.5';
+            options.reduceGraph = true;
+            options.errorOnMissingGlobals = false;
+            options.errorOnUnusedGlobals = false;
+            try {
+                if (mxslc.FS && typeof mxslc.FS.chdir === 'function') {
+                    const staged = await stageGraphSourceFiles(mxslc, fileMap, path);
+                    mxslc.FS.chdir(staged.cwd);
+                }
+                return mxslc.compileSlxToMtlx(sourceText, options);
+            } catch (e) {
+                throw new Error('ShadingLanguageX compilation failed: ' + errMessage(e));
+            } finally {
+                try { options.delete(); } catch (e) { /* ignore */ }
+                try {
+                    if (mxslc.FS && typeof mxslc.FS.chdir === 'function') mxslc.FS.chdir(prevCwd);
+                } catch (e) { /* ignore */ }
+            }
+        };
+
+        const readGraphSourceText = async (entry, path, map) => {
+            if (graphSourceKind(path) === 'mxsl') {
+                const raw = await entry.text();
+                const compiled = await compileMxslToMtlx(raw, path, map || {});
+                return {
+                    kind: 'mxsl',
+                    raw,
+                    resolved: compiled,
+                    validationXml: compiled,
+                    compiledFrom: path,
+                    sessionLabel: path,
+                };
+            }
+            const { raw, resolved } = await readMtlxText(entry, path, map);
+            return {
+                kind: 'mtlx',
+                raw,
+                resolved,
+                validationXml: raw,
+                compiledFrom: null,
+                sessionLabel: path,
+            };
+        };
 
         // ---- MaterialX document → graph model ----
 
@@ -770,7 +907,8 @@
         };
 
 Object.assign(window, {
-    DEFAULT_GRAPH_URL, parseMtlxDocument, validateMtlxXml, serializeDocXml, kindOfNode,
+    DEFAULT_GRAPH_URL, graphSourceKind, isGraphSourcePath, sourcePathsFromMap,
+    stripGraphSourceExt, readGraphSourceText, parseMtlxDocument, validateMtlxXml, serializeDocXml, kindOfNode,
     resolveVersionedNodeDef,
     collectPorts, storedPos, buildScope, MTLX_PERF_LOG, ifaceColorManaged,
     ifaceNumericType, ifaceLiteralType,
