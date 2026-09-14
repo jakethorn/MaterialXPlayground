@@ -1,11 +1,4 @@
-inline T glsl_mix<float, vec2, vec3, vec4>(T bg, T fg, T mix)
+inline float brick_mix_weight()
 {
-    return mix(fg, bg, mix);
+    return 0.5;
 }
-
-inline T glsl_mix<vec2, vec3, vec4>(T bg, T fg, float mix)
-{
-    return mix(fg, bg, mix);
-}
-
-#define mix glsl_mix

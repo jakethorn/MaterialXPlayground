@@ -194,6 +194,30 @@
       "bytes": 1107
     },
     {
+      "path": "mxslc/JsMxslc.js",
+      "source": "mxslc-javascript@0.1.0",
+      "sha256": "c90b56d8c13b1de8aab78271bb3eb4563779343030ef70270bdbb5a9208a67f0",
+      "bytes": 193582
+    },
+    {
+      "path": "mxslc/JsMxslc.wasm",
+      "source": "mxslc-javascript@0.1.0",
+      "sha256": "606fdbb8c7729b8ac52805794bea110565c179ab7684519523e8e3b1e0d5d846",
+      "bytes": 1807161
+    },
+    {
+      "path": "mxslc/JsMxslc.data",
+      "source": "mxslc-javascript@0.1.0",
+      "sha256": "c6a08a77575fec0dc3c9c6019fc22b2f4e2f426ca339bd6fa445d3f3f3207364",
+      "bytes": 3930257
+    },
+    {
+      "path": "mxslc/LICENSE.txt",
+      "source": "mxslc-javascript@0.1.0",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "bytes": 11357
+    },
+    {
       "path": "react/LICENSE.txt",
       "source": "react@18.3.1",
       "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",

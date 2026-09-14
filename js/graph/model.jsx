@@ -28,7 +28,7 @@
         const GRAPH_SOURCE_RE = /\.(mtlx|mxsl)$/i;
         const MXSLC_VENDOR_DIR = 'vendor/mxslc/';
         let mxslcPromise = null;
-        let mxslcSessionSeq = 0;
+        let mxslcStagedPaths = { files: [], dirs: [] };
 
         const graphSourceKind = (path) => (
             MXSL_SOURCE_RE.test(path || '') ? 'mxsl'
@@ -37,8 +37,78 @@
         const isGraphSourcePath = (path) => GRAPH_SOURCE_RE.test(path || '');
         const sourcePathsFromMap = (map) => Object.keys(map || {}).filter((k) => isGraphSourcePath(k));
         const stripGraphSourceExt = (label) => String(label || 'document').replace(/\.(mtlx|mxsl)$/i, '');
+        const XI_INCLUDE_RE = /<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>(?:\s*<\/xi:include>)?/g;
+        const MXSL_INCLUDE_RE = /^\s*#include\s+(?:"([^"]+)"|<([^>]+)>)/gm;
 
         const errMessage = (err) => (err && err.message) ? err.message : String(err);
+
+        const graphSourceRefsFromText = (kind, text) => {
+            const refs = [];
+            const re = new RegExp(kind === 'mxsl' ? MXSL_INCLUDE_RE : XI_INCLUDE_RE);
+            let match;
+            while ((match = re.exec(String(text || '')))) {
+                const ref = match[1] || match[2] || '';
+                if (ref) refs.push(ref);
+            }
+            return refs;
+        };
+
+        const resolveMxslIncludes = async (source, fileMap, fromDir, visited) => {
+            visited = visited || new Set();
+            const parts = [];
+            let last = 0;
+            let match;
+            const re = new RegExp(MXSL_INCLUDE_RE);
+            while ((match = re.exec(String(source || '')))) {
+                parts.push(source.slice(last, match.index));
+                last = match.index + match[0].length;
+                const quotedHref = match[1] || '';
+                if (!quotedHref) {
+                    parts.push(match[0]);
+                    continue;
+                }
+                const refPath = normPath((fromDir ? fromDir + '/' : '') + quotedHref);
+                const hit = findFileForRef(fileMap, refPath) || findFileForRef(fileMap, quotedHref);
+                if (!hit || visited.has(hit.key)) {
+                    parts.push(match[0]);
+                    continue;
+                }
+                visited.add(hit.key);
+                const inc = await fileMap[hit.key].text();
+                const incDir = hit.key.indexOf('/') >= 0 ? hit.key.slice(0, hit.key.lastIndexOf('/')) : '';
+                parts.push(await resolveMxslIncludes(inc, fileMap, incDir, visited));
+            }
+            parts.push(source.slice(last));
+            return parts.join('');
+        };
+
+        const inferPrimaryGraphSourcePath = async (map, candidates, preferredPath) => {
+            const docs = Array.from(new Set((candidates || []).filter((path) => map && map[path])));
+            if (!docs.length) return null;
+            if (preferredPath && docs.indexOf(preferredPath) !== -1) return preferredPath;
+            if (docs.length === 1) return docs[0];
+            const docSet = new Set(docs);
+            const referenced = new Set();
+            for (const docPath of docs) {
+                const entry = map[docPath];
+                if (!entry || typeof entry.text !== 'function') continue;
+                let text = '';
+                try {
+                    text = await entry.text();
+                } catch (e) {
+                    continue;
+                }
+                const kind = graphSourceKind(docPath);
+                const fromDir = docPath.indexOf('/') >= 0 ? docPath.slice(0, docPath.lastIndexOf('/')) : '';
+                graphSourceRefsFromText(kind, text).forEach((href) => {
+                    const refPath = normPath((fromDir ? fromDir + '/' : '') + href);
+                    const hit = findFileForRef(map, refPath) || findFileForRef(map, href);
+                    if (hit && docSet.has(hit.key)) referenced.add(hit.key);
+                });
+            }
+            const roots = docs.filter((path) => !referenced.has(path));
+            return roots.length === 1 ? roots[0] : null;
+        };
 
         const getMxslcEnv = async () => {
             if (!mxslcPromise) {
@@ -90,26 +160,46 @@
             try { FS.rmdir(dir); } catch (e) { /* best effort */ }
         };
 
+        const clearStagedGraphSourceFiles = (FS) => {
+            (mxslcStagedPaths.files || []).forEach((file) => {
+                try { FS.unlink(file); } catch (e) { /* best effort */ }
+            });
+            (mxslcStagedPaths.dirs || []).forEach((dir) => {
+                try { FS.rmdir(dir); } catch (e) { /* best effort */ }
+            });
+            mxslcStagedPaths = { files: [], dirs: [] };
+        };
+
         const stageGraphSourceFiles = async (mxslc, fileMap, rootPath) => {
             const FS = mxslc && mxslc.FS;
             if (!FS) return { cwd: '/' };
-            const sessionRoot = '/mtlx-playground-mxsl/' + (++mxslcSessionSeq);
-            clearFsTree(FS, '/mtlx-playground-mxsl');
-            ensureFsDir(FS, sessionRoot);
+            clearStagedGraphSourceFiles(FS);
+            const stagedFiles = [];
+            const stagedDirs = new Set();
             for (const key of Object.keys(fileMap || {})) {
                 if (!GRAPH_SOURCE_RE.test(key)) continue;
                 const rel = String(key).replace(/^\/+/, '');
-                const abs = fsPathJoin(sessionRoot, rel);
-                const dir = abs.slice(0, abs.lastIndexOf('/')) || sessionRoot;
+                const abs = fsPathJoin('/', rel);
+                const dir = abs.slice(0, abs.lastIndexOf('/')) || '/';
                 ensureFsDir(FS, dir);
                 const bytes = new Uint8Array(await fileMap[key].arrayBuffer());
                 FS.writeFile(abs, bytes, { encoding: 'binary' });
+                stagedFiles.push(abs);
+                let cur = '';
+                dir.split('/').filter(Boolean).forEach((part) => {
+                    cur += '/' + part;
+                    stagedDirs.add(cur);
+                });
             }
             const relDir = String(rootPath || '').indexOf('/') >= 0
                 ? String(rootPath).slice(0, String(rootPath).lastIndexOf('/'))
                 : '';
-            const cwd = relDir ? fsPathJoin(sessionRoot, relDir) : sessionRoot;
+            const cwd = relDir ? fsPathJoin('/', relDir) : '/';
             ensureFsDir(FS, cwd);
+            mxslcStagedPaths = {
+                files: stagedFiles,
+                dirs: Array.from(stagedDirs).sort((a, b) => b.length - a.length),
+            };
             return { cwd };
         };
 
@@ -140,7 +230,9 @@
         const readGraphSourceText = async (entry, path, map) => {
             if (graphSourceKind(path) === 'mxsl') {
                 const raw = await entry.text();
-                const compiled = await compileMxslToMtlx(raw, path, map || {});
+                const dir = path.indexOf('/') >= 0 ? path.slice(0, path.lastIndexOf('/')) : '';
+                const resolved = await resolveMxslIncludes(raw, map || {}, dir);
+                const compiled = await compileMxslToMtlx(resolved, path, map || {});
                 return {
                     kind: 'mxsl',
                     raw,
@@ -908,7 +1000,7 @@
 
 Object.assign(window, {
     DEFAULT_GRAPH_URL, graphSourceKind, isGraphSourcePath, sourcePathsFromMap,
-    stripGraphSourceExt, readGraphSourceText, parseMtlxDocument, validateMtlxXml, serializeDocXml, kindOfNode,
+    stripGraphSourceExt, inferPrimaryGraphSourcePath, readGraphSourceText, parseMtlxDocument, validateMtlxXml, serializeDocXml, kindOfNode,
     resolveVersionedNodeDef,
     collectPorts, storedPos, buildScope, MTLX_PERF_LOG, ifaceColorManaged,
     ifaceNumericType, ifaceLiteralType,

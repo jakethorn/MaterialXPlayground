@@ -1435,8 +1435,7 @@
                             + (droppedSources.length === 1 ? '' : 's') + ' to the session, pick one below to switch.');
                         return;
                     }
-                    const pick = (rootKey && docs.indexOf(rootKey) !== -1)
-                        ? rootKey : (docs.length === 1 ? docs[0] : null);
+                    const pick = await inferPrimaryGraphSourcePath(merged, docs, rootKey);
                     setChosenSource(pick);
                     if (pick) loadDocument(pick, merged);
                     else setStatus('This drop contains several source documents — pick one below.');
