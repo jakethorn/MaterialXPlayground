@@ -11,39 +11,56 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 
 - [parked] **Bump and heighttonormal speckle**: MaterialX 1.39 computes heighttonormal from screen derivatives per UV unit, so high resolution height maps at the default scale produce per pixel noise on bumps (Stirling tires and sand, Playground skirting). An opt-in texel-space variant exists behind a flag; the default follows upstream.
 - [parked] **Sub-pixel flake sparkle**: procedural flakes smaller than a pixel (Stirling car paint) alias into white specks in a single-sample rasterizer; a supersampling or accumulation pass is the fix.
-- [parked] **Glossy sparkle under high contrast HDRIs**: 16-sample environment importance sampling shows fireflies on smooth surfaces; the prefiltered environment reflections item above removes it.
+- [done] **Glossy sparkle under high contrast HDRIs**: fixed by the prefiltered environment reflections.
 
 ## Rendering Engine
 
+- [in progress] **Displacement**: render MaterialX displacement in every tool by subdividing the mesh and evaluating the displacement shader per vertex, with one global on/off setting and a subdivision level.
 - [planned] **One renderer for both viewers**: the Material Viewer and the Scene Viewer still keep separate copies of some rendering code. Move it into shared modules so every feature (transparency, textures, environment, diagnostics) works the same in both.
-- [in progress] **KTX2 compressed textures**: GPU-compressed textures cut memory use by about four times, so large scenes can load at full resolution. Includes a script that converts a folder of textures once. Branch `ktx2-textures`.
-- [planned] **Displacement**: render MaterialX displacement by baking it to a texture and moving the mesh vertices on the CPU, in both viewers.
-- [planned] **MaterialXView parity**: close the known differences to the reference MaterialX viewer: per-image sampler settings, shadows, lights authored in the document, document validation, mipmaps on float textures, extra vertex streams.
-- [planned] **Prefiltered environment reflections**: replace per-pixel importance sampling of the environment with a GGX prefiltered mip chain, as MaterialXView does, so smooth surfaces stop sparkling under high contrast HDRIs.
-- [planned] **Validate documents at load**: warn about duplicate inputs, unknown colorspaces, type mismatches and mix weights outside 0 to 1 instead of letting MaterialX drop them silently.
+- [planned] **MaterialXView parity**: close the remaining differences to the reference MaterialX viewer: per-image sampler settings, document validation, mipmaps on float textures, extra vertex streams.
+- [planned] **Validate documents at load**: warn about duplicate inputs, unknown colorspaces and mix weights outside 0 to 1 instead of letting MaterialX drop them silently. Type mismatches are already reported.
 - [planned] **Correct transparency blending**: blend transparent layers in linear light instead of display space.
-- [planned] **Faster, quieter texture loading**: decode textures off the main thread, keep objects neutral until their textures are ready, show one progress line, allow cancelling.
+- [planned] **Faster, quieter texture loading**: decode textures off the main thread, keep objects neutral until their textures are ready, allow cancelling.
+- [done] **KTX2 compressed textures**: GPU-compressed textures cut memory use by about four times, so large scenes can load at full resolution. Includes a script that converts a folder of textures once.
+- [done] **Prefiltered environment reflections**: the environment is prefiltered into a GGX mip chain, as MaterialXView does, so smooth surfaces no longer sparkle under high contrast HDRIs.
+- [done] **Shadows and document lights**: shadow maps, plus directional, point and spot lights authored in the document.
+- [done] **Selectable display transform**: an sRGB mode matching MaterialXView next to tone mapped modes, with exposure in EV in every tool.
 
 ## Scene Viewer
 
+- [done] **USD Scene Viewer**: load USD stages with MaterialX materials rendered through the MaterialX shader generator, with per phase load progress and a render settings popover.
 - [planned] **UsdPreviewSurface materials**: convert UsdPreviewSurface materials to MaterialX so they render through the same pipeline as MaterialX materials.
 - [idea] **glTF scenes**: load glTF and GLB files, converting their PBR materials to MaterialX and sharing the renderer with USD.
 - [planned] **Survive broken stages**: a malformed prim currently takes down the whole USD runtime. Recover and skip the offending prim instead.
-- [idea] **Geometry budgets and instancing**: bound the amount of geometry a stage can load and draw repeated meshes with GPU instancing.
+- [idea] **Geometry budgets and instancing**: stages already stop subdividing at a triangle budget; bound the geometry a stage can load overall and draw repeated meshes with GPU instancing.
 - [idea] **Variants and purposes**: let the user pick variant selections and render purposes; the runtime already supports both.
-- [idea] **Stage lights**: read UsdLux lights from the stage and use them for lighting.
-- [idea] **Camera tools**: show camera frustums, open on the stage's authored camera, expose field of view and clipping.
+- [done] **Stage lights**: UsdLux distant, sphere, disk, rect and cylinder lights drive the lighting, with shadows.
+- [idea] **Camera tools**: stages already open on or switch to any authored camera; still to do are camera frustums in the viewport and field of view and clipping controls.
+- [done] **Subdivision surfaces**: meshes authored with a subdivision scheme are subdivided at a selectable level.
+- [done] **PointInstancer**: instanced geometry from PointInstancer prims.
+- [done] **Transparency, refraction and bloom**: depth peeled transparency, colored light transmission, refraction through thick glass and bloom.
+- [done] **Ambient occlusion**: a baked world occlusion volume combined with screen-space ambient occlusion.
+- [done] **Material preview from the viewport**: double click an object to open its material in a floating preview and graph panel.
+- [parked] **Screen-space reflections**: implemented but hidden while its behaviour is tuned.
 - [idea] **Embeds, compare and gallery for scenes**: none of these exist for the Scene Viewer yet. A scene gallery would likely work differently from the material gallery.
 - [idea] **Reload robustness**: reloading stages many times in one session has hung twice; not yet reproduced.
 
 ## Material Viewer
 
-- [planned] **Path tracing mode**: a physically based path tracer next to the real-time view, so materials can be checked against a ground-truth render of the same document, with progressive refinement while the camera is still.
+- [parked] **Path tracing mode**: a physically based path tracer next to the real-time view, so materials can be checked against a ground-truth render of the same document, with progressive refinement while the camera is still.
+- [done] **Material gallery**: browse, search and filter the MaterialX example materials with live previews, licenses, permalinks and zip downloads.
+- [done] **Preset picker**: one dialog, backed by the gallery, to pick a starting material in the Viewer, Compare and Graph Editor.
+- [done] **Custom preview models**: load OBJ, GLB and multi-file glTF models, including Draco compressed meshes.
 - [idea] **More backdrop options**: something similar to the backdrop of the Standard Shaderball.
 - [idea] **Support for ShadingLanguageX (SLX) viewing**: via SLX WASM bindings, support for directly rendering a .slx file.
 
 ## Node Graph and Tools
 
+- [done] **Node definition authoring**: create and edit nodedefs and their implementation graphs, convert a graph into a node definition, and browse library nodegraphs read-only.
+- [done] **Lossless .mtlx round trip**: saving keeps node order, comments and the original file's formatting, and the attribution comment is optional.
+- [done] **Autosave and session recovery**: the Graph Editor autosaves and offers a session browser with graph and render previews after a crash.
+- [done] **Interface input editing**: edit ui attributes, default values and colorspace on nodegraph interface inputs.
+- [done] **Texture formats**: TIFF textures, and an option to convert every texture in a zip export to PNG, JPEG or EXR.
 - [idea] **Recipes for common node tree patterns**: ability to insert commonly used sequences of nodes from a "gallery" of node patterns - e.g. a texcoord, connected to a place2d, connected to an image.
 - [idea] **Support for a ShadingLanguageX (SLX) node**: via SLX WASM bindings, support for a 'scripted' ShadingLanguageX node, which for export/rendering would be compiled down to actual MaterialX syntax
 - [idea] **Support for ShadingLanguageX (SLX) import**: via SLX WASM bindings, support for importing a .slx as a node graph.
@@ -51,7 +68,7 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 
 ## Desktop App
 
-- [planned] **Electron merge**: stability round complete; awaiting further testing, merging, further testing/validating the CI and actually releasing.
+- [in progress] **Electron merge**: an experimental desktop build is merged, with native open and save, recent files, file watching and a Windows jump list; still needs testing, CI validation and a first release.
 - [idea] **Mac verification**: traffic-light gutter, Reveal in Finder, ad-hoc signing on the runner, general testing and validation.
 
 ## Tutorials
