@@ -37,7 +37,7 @@
                 throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
             }
             try {
-                await mx.readFromXmlString(doc, xmlText);
+                await readMtlxXml(mx, doc, xmlText);
             } catch (e) {
                 throw new Error('MaterialX could not parse the document: ' + mxErr(mx, e));
             }
@@ -67,7 +67,8 @@
             const hasDefinitions = definitions.length > 0;
             const implGraphByNodedef = computeImplGraphByNodedef(doc);
 
-            return { mx, doc, nodegraphs, functionalGraphs, definitions, hasDefinitions, implGraphNames, implGraphByNodedef };
+            const envelope = splitXmlEnvelope(xmlText);
+            return { mx, doc, nodegraphs, functionalGraphs, definitions, hasDefinitions, implGraphNames, implGraphByNodedef, envelope, sourceText: xmlText };
         };
 
         // nodedef name -> nodegraph name, from <implementation nodegraph=""
@@ -123,7 +124,7 @@
                 }
                 const doc = mx.createDocument();
                 try {
-                    await mx.readFromXmlString(doc, xml);
+                    await readMtlxXml(mx, doc, xml);
                 } catch (e) {
                     // A parse failure isn't valid either — report it as
                     // the sole issue, same as VS Code's tier-1 XML scan
@@ -178,7 +179,8 @@
             // every write — the one choke point all callers share, so it
             // self-heals documents from outside the graph editor too.
             mxSafe(() => stripValuesFromConnectedInputs(parsed.doc), 0);
-            return parsed.mx.writeToXmlString(parsed.doc);
+            return preserveSourceFormatting(parsed.sourceText,
+                withXmlEnvelope(parsed.mx.writeToXmlString(parsed.doc), parsed.envelope));
         };
 
         // Document's own children only, never the library: every by-name

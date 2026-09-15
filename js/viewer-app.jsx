@@ -81,7 +81,7 @@
             // implementation that fetches XIncludes). Missing the await
             // left the renderable scan below seeing a still-empty document.
             try {
-                await mx.readFromXmlString(doc, xmlText);
+                await readMtlxXml(mx, doc, xmlText);
             } catch (e) {
                 throw new Error('MaterialX could not parse the document: ' + mxErr(mx, e));
             }
@@ -499,7 +499,8 @@
                         // value and a connection before handing off. Self-heals
                         // documents loaded before this fix existed.
                         mxSafe(() => stripValuesFromConnectedInputs(loaded.doc), 0);
-                        xml = loaded.mx.writeToXmlString(loaded.doc);
+                        xml = preserveSourceFormatting(loaded.sourceXml,
+                            withXmlEnvelope(loaded.mx.writeToXmlString(loaded.doc), splitXmlEnvelope(loaded.sourceXml)));
                     } catch (e) {
                         console.warn('Send to Editor: failed to serialize the document', e);
                         return;
