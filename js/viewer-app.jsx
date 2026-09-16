@@ -180,6 +180,17 @@
             // read it so rapid successive drops (and texture binding after a
             // regen) always see the LATEST files, not a stale closure.
             const fileMapRef = React.useRef({});
+            // .mxsl provenance for the file map: {compiledMtlxKey: {source,
+            // filename}}, populated by expandMxsl() in ingest() (see
+            // mxslc-engine.js). filename is the as-dropped .mxsl path
+            // (before it was re-keyed to compiledMtlxKey). mxslOriginFor()
+            // looks one path up; mxslOriginal mirrors it for the CURRENTLY
+            // loaded document (set only at loadDocument()'s choke point),
+            // which the ShadingLanguageX export target's "Original" reads.
+            const mxslOriginalsRef = React.useRef({});
+            const mxslOriginFor = (path) => (path && Object.prototype.hasOwnProperty.call(mxslOriginalsRef.current, path)
+                ? { path, ...mxslOriginalsRef.current[path] } : null);
+            const [mxslOriginal, setMxslOriginal] = React.useState(null); // { path, source, filename } | null
             const [mtlxPaths, setMtlxPaths] = React.useState([]);      // candidates
             const [chosenMtlx, setChosenMtlx] = React.useState(null);
             // Document actually on screen, vs chosenMtlx (the requested
@@ -533,6 +544,18 @@
                 openInGraphEditor({ xml, name, files });
             };
 
+            // ShaderExportDialog's `generate()` for the ShadingLanguageX
+            // target: unlike the shadergen targets, this is whole-document
+            // (no `renderable` scoping — mxslc's decompiler has no concept
+            // of "just this material") and runs against the SEPARATE mxsl
+            // WASM module (js/mxslc-engine.js), never `loaded.mx`. "Original"
+            // is the as-authored .mxsl source IF this document was compiled
+            // from one (mxslOriginal, set in loadDocument()); "Decompiled"
+            // decompiles the as-loaded XML, which is exactly what's on
+            // screen since the viewer never edits the document.
+            const generateSlxExportStages = () =>
+                slxExportStages(loadedRef.current.sourceXml, mxslOriginal && mxslOriginal.source);
+
             // Picker onSelect ({ xml, name, files }): the exact same shape
             // handleImport (below) already handles for the 'mtlx-view-document'
             // handoff, so this just closes the picker and reuses it.
@@ -550,8 +573,19 @@
 
             const ingest = async (map, rootKey) => {
                 setError(null);
+                const mxslOrigins = {}; // populated below, merged into mxslOriginalsRef after the replace/merge decision
                 try {
                     await expandZips(map);
+                    // Compile any ShadingLanguageX (.mxsl) files to MaterialX
+                    // XML and re-key them as .mtlx, so everything below (root-
+                    // document detection, xi:include resolution, texture
+                    // binding) treats them exactly like an authored .mtlx.
+                    // Guarded: the embed bundle (embed/viewer.html) doesn't
+                    // load js/mxslc-engine.js.
+                    const mxslcAvailable = typeof window.expandMxsl === 'function'
+                    if (mxslcAvailable) {
+                        await window.expandMxsl(map, mxslOrigins);
+                    }
                 } catch (e) {
                     reportError(errMsg(e));
                     return;
@@ -565,6 +599,10 @@
                 let merged;
                 if (droppedMtlx.length && hadSession) {
                     merged = Object.assign({}, map);
+                    // Same replace-not-merge semantics as fileMapRef right
+                    // below: a stale Original from the OLD session must not
+                    // survive into the new one.
+                    mxslOriginalsRef.current = mxslOrigins;
                     loadedRef.current = null;
                     setRenderables([]);
                     setChosenMat(0);
@@ -574,13 +612,14 @@
                     setMaterialNotices(null);
                 } else {
                     merged = Object.assign({}, fileMapRef.current, map);
+                    mxslOriginalsRef.current = Object.assign({}, mxslOriginalsRef.current, mxslOrigins);
                 }
                 fileMapRef.current = merged;
                 setFileMap(merged);
                 const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
                 setMtlxPaths(mtlx);
                 if (!mtlx.length) {
-                    setStatus('Files received — now drop the .mtlx document itself.');
+                    setStatus('Files received — now drop the .mtlx or .mxsl document itself.');
                     return;
                 }
                 if (droppedMtlx.length) {
@@ -846,7 +885,7 @@
                             // the user's own load is already in flight.
                             if (hasSession() || loadedRef.current) return;
                             setBusy(false);
-                            setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
+                            setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the toolbar.");
                         });
                     return;
                 }
@@ -878,7 +917,7 @@
                         // the user's own load is already in flight.
                         if (hasSession() || loadedRef.current) return;
                         setBusy(false);
-                        setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
+                        setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the toolbar.");
                     });
             }, []);
 
@@ -927,6 +966,7 @@
                         return;
                     }
                     loadedRef.current = loaded;
+                    setMxslOriginal(mxslOriginFor(path));
                     setRenderables(loaded.renderables);
                     if (onRenderablesRef.current) onRenderablesRef.current(loaded.renderables);
                     setChosenMat(0);
@@ -1258,7 +1298,14 @@
             // Document/Materials card summaries and the HUD status chip
             // all read the same "what's currently on screen" values.
             const currentMtlxPath = chosenMtlx || renderedMtlx;
-            const docBasename = currentMtlxPath ? currentMtlxPath.split('/').pop() : 'No document';
+            // A document compiled from .mxsl is labelled with its original
+            // .mxsl name. Looked up by path rather than read from
+            // mxslOriginal: these summaries follow the chosen document,
+            // which can differ from the loaded one (see renderedMtlx).
+            const mxslOrigin = mxslOriginFor(currentMtlxPath);
+            const docBasename = currentMtlxPath
+                ? (mxslOrigin ? mxslOrigin.filename : currentMtlxPath).split('/').pop()
+                : 'No document';
             const currentMaterialName = (renderables[chosenMat] && renderables[chosenMat].name) || '';
 
             // 28px HUD chip classes, shared by ViewportControls' built-in
@@ -1285,7 +1332,7 @@
                                     placeholder="No document loaded"
                                     multiple
                                     icon="files"
-                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
+                                    accept=".mtlx,.mxsl,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
                                     onFiles={onPickFileList}
                                 />
                             </div>
@@ -1854,7 +1901,9 @@
                             renderables={renderables} initialIndex={chosenMat}
                             overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/70"
                             generate={({ renderable, label, targetKey }) =>
-                                generateTargetSources({ mx: loadedRef.current.mx, renderable, label, targetKey })} />
+                                targetKey === "slx"
+                                    ? generateSlxExportStages()
+                                    : generateTargetSources({ mx: loadedRef.current.mx, renderable, label, targetKey })} />
                     )}
                     {/* Not chromeless-gated: the Record button is reachable
                         from EmbedControls too. */}

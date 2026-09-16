@@ -161,6 +161,27 @@ const DOWNLOADS = [
     dest: "usd-webview-bindings/LICENSE",
     sha256: "95352acbcfcbc9c30805e702802fb4c8b98c58060ca84c5afa20c5a04ed83633",
   },
+  // ShadingLanguageX compiler (mxslc) WASM bindings, used to open .mxsl files.
+  {
+    url: "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.0/JsMxslc.js",
+    dest: "mxslc/JsMxslc.js",
+    sha256: "c07be5d45517cf50bb7a98b11af2063125bd9fef95d0b5f8992f7489b1ec4f83",
+  },
+  {
+    url: "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.0/JsMxslc.wasm",
+    dest: "mxslc/JsMxslc.wasm",
+    sha256: "42de23452ae2cc1a077e069025b5f1bf27b220816fc5f3a2a6e6fa787072b330",
+  },
+  {
+    url: "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.0/JsMxslc.data",
+    dest: "mxslc/JsMxslc.data",
+    sha256: "c6a08a77575fec0dc3c9c6019fc22b2f4e2f426ca339bd6fa445d3f3f3207364",
+  },
+  {
+    url: "https://raw.githubusercontent.com/jakethorn/ShadingLanguageX/mxslcxx-0.3.0/LICENSE",
+    dest: "mxslc/LICENSE.txt",
+    sha256: "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+  },
   {
     url: "https://cdn.tailwindcss.com/3.4.17",
     dest: "tailwind/tailwind-play.min.js",
