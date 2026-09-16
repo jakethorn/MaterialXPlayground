@@ -6925,7 +6925,7 @@
                 !IN_VSCODE && {
                     label: 'Import…', icon: 'file-import',
                     onSelect: () => { if (importInputRef.current) importInputRef.current.click(); },
-                    title: 'Add textures or more .mtlx documents to the session without replacing it',
+                    title: 'Add textures, more .mtlx documents, or .mxsl files to the session without replacing it',
                 },
                 !IN_VSCODE && {
                     label: 'Presets…', icon: 'presets', onSelect: () => setPresetPickerOpen(true),
@@ -7211,7 +7211,7 @@
                                     ref={importInputRef}
                                     type="file"
                                     multiple
-                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                    accept=".mtlx,.mxsl,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
                                     className="hidden"
                                     onChange={onPickImportFiles}
                                 />
