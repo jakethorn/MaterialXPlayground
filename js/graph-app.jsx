@@ -1385,6 +1385,11 @@
                 setError(null);
                 try {
                     await expandZips(map);
+                    // Compile any ShadingLanguageX (.mxsl) files to MaterialX
+                    // XML and re-key them as .mtlx, so everything below (root-
+                    // document detection, xi:include resolution, texture
+                    // binding) treats them exactly like an authored .mtlx.
+                    await expandMxsl(map);
                 } catch (e) {
                     setError(errMsg(e));
                     return;
@@ -1573,7 +1578,9 @@
             const closeConfirm = () => { pendingActionRef.current = null; setConfirmCloseOpen(false); };
             useEscapeToClose(closeConfirm, confirmCloseOpen);
             const guardedIngest = (map) => {
-                const hasMtlx = Object.keys(map).some((k) => /\.mtlx$/i.test(k));
+                // .mxsl becomes .mtlx once ingest() runs expandMxsl(), so it
+                // must be treated as a replacing document here too.
+                const hasMtlx = Object.keys(map).some((k) => /\.(mtlx|mxsl)$/i.test(k));
                 confirmReplace(hasMtlx, () => ingest(map));
             };
             // Kept current every render for the [] -dep drag-drop effect
@@ -1764,7 +1771,7 @@
                         const hasSession = Object.keys(fileMapRef.current)
                             .some((k) => /\.mtlx$/i.test(k));
                         if (!hasSession && !draftPendingRef.current && !IN_VSCODE) {
-                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx anywhere, use Open, or pick a Preset (top left).");
+                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx or .mxsl anywhere, use Open, or pick a Preset (top left).");
                         }
                     });
             }, []);
@@ -6905,7 +6912,7 @@
                 !IN_VSCODE && {
                     label: 'Open…', icon: 'file-upload',
                     onSelect: () => { if (openInputRef.current) openInputRef.current.click(); },
-                    title: 'Open a .mtlx or .zip, replacing the current session (drag and drop works anywhere on the page)',
+                    title: 'Open a .mtlx, .mxsl, or .zip, replacing the current session (drag and drop works anywhere on the page)',
                 },
                 IN_ELECTRON && {
                     label: 'Open Recent…', icon: 'history',
@@ -7194,7 +7201,7 @@
                                     ref={openInputRef}
                                     type="file"
                                     multiple
-                                    accept=".mtlx,.zip"
+                                    accept=".mtlx,.mxsl,.zip"
                                     className="hidden"
                                     onChange={onPickFiles}
                                 />
