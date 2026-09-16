@@ -57,3 +57,6 @@ gallery/
 
 # repo-local KTX-Software install (scripts/setup-ktx.mjs)
 tools/
+
+# WebStorm files
+.idea/

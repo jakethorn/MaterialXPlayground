@@ -43,16 +43,21 @@ Copy those three files here (plus the repo's `LICENSE` as `LICENSE.txt`),
 then run `npm run build && npm run check` in MaterialXPlayground to confirm
 the build id stays consistent.
 
-## Known limitation (v1): no `#include` support
+## Multi-file projects (`#include` / `#library`)
 
-The current `JsMxslc.cpp` bindings expose a pure string-in/string-out API
-(`compileSlxToMtlx(source, opts)`) with no way to add search directories or
-preload sibling files into the compiler's virtual filesystem. A `.mxsl` file
-opened through MaterialX Playground that uses `#include "other.mxsl"` will
-fail to compile — the include target can't be found. Only self-contained
-`.mxsl` files are supported for now. Lifting this needs either new bindings
-in `JsMxslc.cpp` (e.g. exposing `CompileOptions::add_search_directory`, or a
-compile entry point that accepts a virtual file map) or relying on
-Emscripten's `Module.FS` plus the compiler's existing search-directory
-fallback of the current working directory — see the discussion in
-`js/mxsl-engine.js`'s header comment before picking either approach.
+`JsMxslc.cpp` also exposes `compileProjectToMtlx(rootSource, files, opts)`,
+where `files` is a plain `{relativePath: text}` object of sibling `.mxsl`/
+`.mtlx` files made available for `#include`/`#library` resolution — see that
+repo's `mxslc++/javascript/README.md` for the binding itself.
+
+`js/mxsl-engine.js`'s `expandMxsl()` uses this to support opening a whole
+`.mxsl` project (e.g. via folder drag-and-drop, or multi-selecting files in
+the Open dialog), not just a single self-contained file: it infers which
+dropped `.mxsl` file is the compile root by scanning every `.mxsl` file's
+text for `#include`/`#library` directives — a file nothing else's directives
+name is a root — and compiles each root candidate with every other `.mxsl`/
+`.mtlx` sibling in the drop offered up as a virtual file. When that produces
+more than one `.mtlx` document (an ambiguous drop with no single inferable
+root), MaterialX Playground's existing "this drop contains several `.mtlx`
+files — pick one below" flow is what lets the user disambiguate, the same as
+it already does for a plain multi-document `.mtlx` drop.

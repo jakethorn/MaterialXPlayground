@@ -1422,7 +1422,7 @@
                 const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
                 setMtlxPaths(mtlx);
                 if (!mtlx.length) {
-                    setStatus('Files received — now drop the .mtlx document itself.');
+                    setStatus('Files received — now drop the .mtlx or .mxsl document itself.');
                     return;
                 }
                 if (droppedMtlx.length) {

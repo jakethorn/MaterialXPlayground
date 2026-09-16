@@ -10,10 +10,20 @@
 // detection, xi:include resolution, texture binding) treats a compiled
 // .mxsl document exactly like a hand-authored .mtlx one.
 //
-// v1 scope: each .mxsl file is compiled standalone. The mxslc WASM binding
-// (JsMxslc.cpp) exposes no way to add search directories or preload sibling
-// files into the compiler's virtual filesystem, so a #include inside a
-// dropped .mxsl file will fail to resolve — see js/mxsl/README.md.
+// Multi-file projects: the mxslc WASM binding exposes compileProjectToMtlx,
+// which accepts a root source string plus a plain {relativePath: text}
+// object of sibling files for #include / #library resolution (see
+// js/mxsl/README.md and the MXSL repo's mxslc++/javascript/README.md).
+// expandMxsl() infers which dropped .mxsl file is the compile root by
+// scanning every .mxsl file's text for #include/#library directives: a
+// file no other file's directives name is a root candidate. Each candidate
+// is compiled with every other .mxsl/.mtlx sibling in the drop offered up
+// as a virtual file, and every candidate that compiles successfully is
+// written back into the map as its own .mtlx entry. When that yields more
+// than one .mtlx document, graph-app.jsx's existing "this drop contains
+// several .mtlx files — pick one below" flow (already used for plain
+// multi-document .mtlx drops) is what lets the user disambiguate — no
+// separate UI is needed for .mxsl projects.
 
 let mxslModulePromise = null;
 
@@ -68,13 +78,17 @@ const getMxslModule = () => {
     return mxslModulePromise;
 };
 
-// Compile one SLX source string to a MaterialX XML string. `label` is only
-// used to make a thrown error identify which file failed.
-const compileMxslSource = async (source, label) => {
+// Compile one SLX source string to a MaterialX XML string. `files` is an
+// optional plain object mapping a relative path — exactly as it would
+// appear inside a #include "..." or #library "..." directive in `source`
+// — to that sibling file's text; pass null/undefined for a self-contained
+// compile with no siblings. `label` is only used to make a thrown error
+// identify which file failed.
+const compileMxslSource = async (source, files, label) => {
     const mx = await getMxslModule();
     const opts = new mx.CompileOptions();
     try {
-        return mx.compileSlxToMtlx(source, opts);
+        return mx.compileProjectToMtlx(source, files || null, opts);
     } catch (e) {
         // JsMxslc.cpp rethrows C++ exceptions as real Error objects
         // (CompileError / Error), so e.message is already a readable
@@ -86,19 +100,99 @@ const compileMxslSource = async (source, label) => {
     }
 };
 
+// A #include "..." or #library "..." directive's target, e.g. "colors.mxsl"
+// or "utils.mtlx" — LanguageSpecification.md's File Inclusion section.
+const DIRECTIVE_RE = /#\s*(?:include|library)\s*"([^"]+)"/g;
+
+// Dropping a whole folder (folder drag-and-drop / the directory file
+// picker) reports every entry's path prefixed with the folder's own name
+// (File#webkitRelativePath), but a directive inside those files names
+// siblings relative to the folder's *contents*, never that outer name. If
+// every candidate key shares one leading path segment, strip it so keys
+// compare the same way the compiler itself would resolve them; otherwise
+// (flat files, or a mixed selection) leave keys exactly as given.
+const stripCommonFolderPrefix = (keys) => {
+    const parts = keys.map((k) => k.split('/'));
+    if (parts.length && parts.every((p) => p.length > 1 && p[0] === parts[0][0])) {
+        const prefixLen = parts[0][0].length + 1;
+        return (key) => key.slice(prefixLen);
+    }
+    return (key) => key;
+};
+
 // Expand any .mxsl files in the map into their compiled .mtlx equivalent
 // (in place), mirroring expandZips(map) in mtlx-engine.js. Called AFTER
 // expandZips in ingest(), so a .mxsl shipped inside a .zip is also caught.
 const expandMxsl = async (map) => {
-    const keys = Object.keys(map).filter((k) => /\.mxsl$/i.test(k));
-    for (const key of keys) {
-        const file = map[key];
-        const source = await file.text();
-        const xml = await compileMxslSource(source, key);
-        delete map[key];
-        const mtlxKey = key.replace(/\.mxsl$/i, '.mtlx');
+    const mxslKeys = Object.keys(map).filter((k) => /\.mxsl$/i.test(k));
+    if (!mxslKeys.length) return map;
+
+    // Everything a directive could plausibly target: other .mxsl sources
+    // (#include) and any .mtlx files dropped alongside them (#library).
+    const siblingKeys = Object.keys(map).filter((k) => /\.(mxsl|mtlx)$/i.test(k));
+    const effectiveKey = stripCommonFolderPrefix(siblingKeys);
+
+    // Read every candidate's text once, keyed by its effective (prefix-
+    // stripped) path — the form a directive would actually reference.
+    const textByEffectiveKey = {};
+    for (const key of siblingKeys) {
+        textByEffectiveKey[effectiveKey(key)] = await map[key].text();
+    }
+
+    // A .mxsl file that some other file's #include/#library directive
+    // names is not a root — it's pulled in by whichever file does name
+    // it. Compare both the full effective path and the bare filename, so
+    // a directive written as "colors.mxsl" still matches a file reported
+    // as "sub/colors.mxsl".
+    const included = new Set();
+    for (const key of mxslKeys) {
+        let m;
+        DIRECTIVE_RE.lastIndex = 0;
+        while ((m = DIRECTIVE_RE.exec(textByEffectiveKey[effectiveKey(key)])) !== null) {
+            included.add(m[1]);
+            included.add(m[1].split('/').pop());
+        }
+    }
+    const isIncluded = (ek) => included.has(ek) || included.has(ek.split('/').pop());
+
+    let rootKeys = mxslKeys.filter((k) => !isIncluded(effectiveKey(k)));
+    if (!rootKeys.length) {
+        // Nothing looked like a leaf (e.g. a cyclic or otherwise
+        // unusual set of directives) — fall back to trying every .mxsl
+        // file as its own root rather than refusing the whole drop.
+        rootKeys = mxslKeys.slice();
+    }
+
+    let lastError = null;
+    const compiled = [];
+    for (const rootKey of rootKeys) {
+        const rootEk = effectiveKey(rootKey);
+        const files = {};
+        for (const ek of Object.keys(textByEffectiveKey)) {
+            if (ek !== rootEk) files[ek] = textByEffectiveKey[ek];
+        }
+        try {
+            const xml = await compileMxslSource(textByEffectiveKey[rootEk], files, rootKey);
+            compiled.push({ rootKey, xml });
+        } catch (e) {
+            // Not every root candidate necessarily compiles on its own
+            // (e.g. the heuristic above can admit a genuine include as a
+            // "root" when it's also never #include'd by anything else in
+            // the drop) — skip it and keep the ones that do.
+            lastError = e;
+        }
+    }
+
+    for (const key of mxslKeys) delete map[key];
+
+    if (!compiled.length) {
+        throw lastError || new Error('No .mxsl file in this drop compiled successfully.');
+    }
+
+    for (const { rootKey, xml } of compiled) {
+        const mtlxKey = rootKey.replace(/\.mxsl$/i, '.mtlx');
         if (Object.prototype.hasOwnProperty.call(map, mtlxKey)) {
-            console.warn('expandMxsl: ' + mtlxKey + ' was already present in this drop — overwriting it with the document compiled from ' + key);
+            console.warn('expandMxsl: ' + mtlxKey + ' was already present in this drop — overwriting it with the document compiled from ' + rootKey);
         }
         map[mtlxKey] = new Blob([xml], { type: 'application/xml' });
     }
