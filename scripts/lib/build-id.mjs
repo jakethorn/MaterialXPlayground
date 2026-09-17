@@ -6,8 +6,8 @@
 // not speed: release.yml runs vendor:offline + vendor:versions before
 // `npm run build`, so it (and vendor/materialx/) exist there but not in a
 // plain deploy.yml push run. Excluding them keeps both runs' ids equal.
-// js/mxsl/ is EXCLUDED too: vendored mxslc WASM output, not source
-// (see js/mxsl/README.md).
+// js/mxslc/ is EXCLUDED too: vendored mxslc WASM output, not source
+// (see js/mxslc/README.md).
 
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -62,10 +62,10 @@ async function collectJsInputPaths() {
       const relToJs = toPosix(path.relative(JS_ROOT, abs));
       if (entry.isDirectory()) {
         if (relToJs === "materialx" || relToJs.startsWith("materialx/")) continue;
-        // js/mxsl/ is vendored mxslc WASM output (see js/mxsl/README.md),
+        // js/mxslc/ is vendored mxslc WASM output (see js/mxslc/README.md),
         // not hand-written source — excluded for the same reason as
         // js/materialx/ above.
-        if (relToJs === "mxsl" || relToJs.startsWith("mxsl/")) continue;
+        if (relToJs === "mxslc" || relToJs.startsWith("mxslc/")) continue;
         await walk(abs);
         continue;
       }

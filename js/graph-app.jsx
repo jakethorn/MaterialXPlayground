@@ -360,21 +360,6 @@
             return Math.round(hours / 24) + ' days ago';
         }
 
-        // ShaderExportDialog's shared EXPORT_TARGETS (js/mtlx-engine.js) is
-        // MaterialX-ShaderGen-only and is also consumed as-is by
-        // viewer-app.jsx, which has no .mxsl awareness at all — so this
-        // entry is added ONLY to the list this (graph-editor) view passes
-        // to the dialog, never to the shared global. `className`/`isHw`
-        // are unused for this target (its generate() branch below never
-        // calls generateTargetSources); `perMaterial: false` hides the
-        // dialog's Material selector, since mxslc's decompiler always
-        // works on the whole document, not one material's subgraph.
-        const MXSL_EXPORT_TARGET = {
-            key: 'mxsl', label: 'ShadingLanguageX', perMaterial: false,
-            ext: { original: '.mxsl', decompiled: '.mxsl' },
-        };
-        const SHADER_EXPORT_TARGETS = EXPORT_TARGETS.concat([MXSL_EXPORT_TARGET]);
-
         // ---- App ---------------------------------------------------------------
 
         function NodeGraphApp({ active = true } = {}) {
@@ -393,7 +378,7 @@
             const [parsed, setParsed] = React.useState(null); // { mx, doc, nodegraphs, label }
             // .mxsl provenance for the file map above: {compiledMtlxKey:
             // originalMxslSourceText}, populated by expandMxsl() in
-            // ingest() (see mxsl-engine.js). mxslOriginal mirrors it for
+            // ingest() (see mxslc-engine.js). mxslOriginal mirrors it for
             // whichever path is the CURRENTLY loaded document (set only at
             // loadDocument()'s choke point) — the "Original" button in the
             // ShadingLanguageX export target reads that, not the ref.
@@ -3611,16 +3596,17 @@
                 }
                 setShaderExport({ renderables: rs });
             };
+
             // ShaderExportDialog's `generate()` for the ShadingLanguageX
             // target: unlike the shadergen targets, this is whole-document
             // (no `renderable` scoping — mxslc's decompiler has no concept
             // of "just this material") and runs against the SEPARATE mxsl
-            // WASM module (js/mxsl-engine.js), never `parsed.mx`. "Original"
+            // WASM module (js/mxslc-engine.js), never `parsed.mx`. "Original"
             // is the as-authored .mxsl source IF this document was compiled
             // from one (mxslOriginal, set in loadDocument()); "Decompiled"
             // re-decompiles the CURRENT (possibly hand-edited) document via
             // resolveDocXml(), the same serializer Export/Document XML use.
-            const generateMxslExportStages = async () => {
+            const generateSlxExportStages = async () => {
                 const { xml, error } = await resolveDocXml();
                 if (xml == null) throw new Error('Could not build the document XML: ' + error);
                 const stages = [];
@@ -3629,6 +3615,7 @@
                 stages.push({ id: 'decompiled', label: 'Decompiled', code: decompiled });
                 return { stages };
             };
+
             // Export dialog's onExport: routes to .mtlx/.zip through the
             // same exportBusyRef-guarded wrappers as the toolbar. Errors
             // thrown here are caught by ExportDialog, keeping it open to retry.
@@ -6978,7 +6965,7 @@
                 !IN_VSCODE && {
                     label: 'Import…', icon: 'file-import',
                     onSelect: () => { if (importInputRef.current) importInputRef.current.click(); },
-                    title: 'Add textures, more .mtlx documents, or .mxsl files to the session without replacing it',
+                    title: 'Add textures, or more .mtlx documents or .mxsl files to the session without replacing it',
                 },
                 !IN_VSCODE && {
                     label: 'Presets…', icon: 'presets', onSelect: () => setPresetPickerOpen(true),
@@ -8190,10 +8177,9 @@
                             onClose={() => { if (!confirmCloseOpen) setShaderExport(null); }}
                             renderables={shaderExport.renderables}
                             initialIndex={0}
-                            targets={SHADER_EXPORT_TARGETS}
                             generate={({ renderable, label, targetKey }) =>
-                                targetKey === 'mxsl'
-                                    ? generateMxslExportStages()
+                                targetKey === "slx"
+                                    ? generateSlxExportStages()
                                     : generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
                             overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
                         />

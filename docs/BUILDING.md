@@ -56,7 +56,7 @@ The docs view fetches these two JSONs instead of parsing anything live — brows
 
 **`js/materialx/<version>/`** holds the MaterialX WebAssembly modules, obtained from the official MaterialX build and committed manually for the default version (license at `js/materialx/LICENSE.txt`). It predates, and is not managed by, `scripts/vendor.mjs`, but `JsMaterialXGenShader.wasm` is the **single source of truth for the MaterialX version**: the build's `version` step extracts it from the module at build time and every other occurrence in the repo is generated or stamped from that (see the `version` step above).
 
-**`js/mxsl/`** holds the mxslc (ShadingLanguageX compiler) WebAssembly module used by the Graph Editor's File > Open to accept `.mxsl` files, committed manually the same way as `js/materialx/<version>/` — see `js/mxsl/README.md` for provenance, expected contents, and how to reproduce the build. Web-only: excluded from the packaged VS Code extension (`.vscodeignore`) and from the `buildid` source fingerprint (`scripts/lib/build-id.mjs`), for the same reasons as `js/materialx/`.
+**`js/mxslc/`** holds the mxslc (ShadingLanguageX compiler) WebAssembly module used to compile `.mxsl` to `.mtlx` files, committed manually the same way as `js/materialx/<version>/` — see `js/mxslc/README.md` for provenance, expected contents, and how to reproduce the build. Web-only: excluded from the packaged VS Code extension (`.vscodeignore`) and from the `buildid` source fingerprint (`scripts/lib/build-id.mjs`), for the same reasons as `js/materialx/`.
 
 Each version directory holds the complete upstream distribution, all seven files from `MaterialX_JavaScript.zip`, pinned by byte size in `scripts/lib/mtlx-versions.mjs`:
 

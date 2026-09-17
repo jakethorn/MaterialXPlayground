@@ -755,8 +755,8 @@ const copyTextToClipboard = async (text) => {
 // Shader source export dialog. `generate()` (caller-supplied) does the
 // codegen; `runRef` is a monotonic id so a stale generate() resolving
 // after the user switched targets can't clobber the newer result.
-function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, generate, overlayClassName, targets = EXPORT_TARGETS }) {
-    const [targetKey, setTargetKey] = React.useState(() => (targets[0] && targets[0].key) || '');
+function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, generate, overlayClassName }) {
+    const [targetKey, setTargetKey] = React.useState(() => (EXPORT_TARGETS[0] && EXPORT_TARGETS[0].key) || '');
     const [matIndex, setMatIndex] = React.useState(0);
     const [busy, setBusy] = React.useState(false);
     const [error, setError] = React.useState(null);
@@ -777,7 +777,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
     // dialog has no unsaved input to preserve across a stray re-render).
     React.useEffect(() => {
         if (!open) return;
-        setTargetKey((targets[0] && targets[0].key) || '');
+        setTargetKey((EXPORT_TARGETS[0] && EXPORT_TARGETS[0].key) || '');
         setMatIndex(Math.max(0, Math.min(initialIndex, renderables.length - 1)));
         setStages(null);
         setError(null);
@@ -825,7 +825,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
 
     const handleDownload = async () => {
         if (!stages) return;
-        const target = targets.find((t) => t.key === targetKey);
+        const target = EXPORT_TARGETS.find((t) => t.key === targetKey);
         const matName = (renderables[matIndex] && renderables[matIndex].name) || 'material';
         const base = (matName + '_' + targetKey).replace(/[^\w.-]+/g, '_');
         if (stages.length === 1) {
@@ -847,12 +847,6 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
         }
         downloadBlob(blob, base + '.zip');
     };
-
-    // Some targets (e.g. ShadingLanguageX's decompiler) operate on the
-    // whole document rather than one material's subgraph — for those,
-    // showing the Material selector would imply it affects the output
-    // when it doesn't, so it's hidden below via perMaterial === false.
-    const activeTarget = targets.find((t) => t.key === targetKey);
 
     const frame = (
         <DialogFrame
@@ -898,7 +892,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                             <span>Target</span>
                             <MtlxSelect
                                 value={targetKey}
-                                options={targets.map((t) => ({ value: t.key, label: t.label }))}
+                                options={EXPORT_TARGETS.map((t) => ({ value: t.key, label: t.label }))}
                                 onChange={setTargetKey}
                                 defValue={null}
                                 size="md"
@@ -907,7 +901,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                                 className="max-w-full truncate"
                             />
                         </label>
-                        {renderables.length > 1 && (!activeTarget || activeTarget.perMaterial !== false) && (
+                        {renderables.length > 1 && (
                             <label className="flex items-center gap-1.5 text-[11px] text-gray-400">
                                 <span>Material</span>
                                 <MtlxSelect

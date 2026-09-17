@@ -27,10 +27,10 @@ js/materialx/1.39.4/**
 # Graph Editor's session preview never runs in VS Code.
 embed/**
 
-# js/mxsl/ (mxslc WASM bindings for File > Open of .mxsl files) is
+# js/mxslc/ (mxslc WASM bindings for File > Open of .mxsl files) is
 # web-only: graph-app.jsx gates the whole feature behind !IN_VSCODE, so
 # it never loads in the webview.
-js/mxsl/**
+js/mxslc/**
 
 # Test suites and their configs never run inside the extension.
 tests/**

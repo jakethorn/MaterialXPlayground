@@ -1,7 +1,7 @@
-# js/mxsl/
+# js/mxslc/
 
 Holds the mxslc (ShadingLanguageX compiler) WebAssembly module: the compiled
-output of the MXSL project's `mxslc++/javascript/` bindings (`JsMxslc.cpp`). This directory is committed
+output of the ShadingLanguageX project's `mxslc++/javascript/` bindings (`JsMxslc.cpp`). This directory is committed
 manually, the same way `js/materialx/<version>/` is (see
 [docs/BUILDING.md](../../docs/BUILDING.md)) — it predates, and is not
 managed by, `scripts/vendor.mjs`, and it is excluded from the `buildid`
@@ -11,20 +11,20 @@ vendored binary output, not hand-written source.
 ## Expected contents
 
 ```
-js/mxsl/JsMxslc.js     — ES6 module glue (EXPORT_ES6=1, MODULARIZE=1)
-js/mxsl/JsMxslc.wasm   — the compiled WebAssembly binary
-js/mxsl/JsMxslc.data   — preloaded libraries/ folder (mxsl stdlib + node defs)
-js/mxsl/LICENSE.txt    — MXSL's license (Apache-2.0), copied alongside the
+js/mxslc/JsMxslc.js     — ES6 module glue (EXPORT_ES6=1, MODULARIZE=1)
+js/mxslc/JsMxslc.wasm   — the compiled WebAssembly binary
+js/mxslc/JsMxslc.data   — preloaded libraries/ folder (mxslc stdlib + node defs)
+js/mxslc/LICENSE.txt    — ShadingLanguageX's license (Apache-2.0), copied alongside the
                           build, same convention as js/materialx/LICENSE.txt
 ```
 
-`js/mxsl-engine.js` loads `JsMxslc.js` lazily (only once a `.mxsl` file is
+`js/mxslc-engine.js` loads `JsMxslc.js` lazily (only once a `.mxsl` file is
 actually opened) and expects `.wasm`/`.data` to sit right next to it, via
-`locateFile: (path) => './js/mxsl/' + path`.
+`locateFile: (path) => './js/mxslc/' + path`.
 
 ## Producing the build
 
-From the MXSL repo:
+From the ShadingLanguageX repo:
 
 ```sh
 javascript/build_javascript.sh [emsdk_location] [materialx_source]
@@ -50,7 +50,7 @@ where `files` is a plain `{relativePath: text}` object of sibling `.mxsl`/
 `.mtlx` files made available for `#include`/`#library` resolution — see that
 repo's `mxslc++/javascript/README.md` for the binding itself.
 
-`js/mxsl-engine.js`'s `expandMxsl()` uses this to support opening a whole
+`js/mxslc-engine.js`'s `expandMxsl()` uses this to support opening a whole
 `.mxsl` project (e.g. via folder drag-and-drop, or multi-selecting files in
 the Open dialog), not just a single self-contained file: it infers which
 dropped `.mxsl` file is the compile root by scanning every `.mxsl` file's
