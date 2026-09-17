@@ -360,6 +360,21 @@
             return Math.round(hours / 24) + ' days ago';
         }
 
+        // ShaderExportDialog's shared EXPORT_TARGETS (js/mtlx-engine.js) is
+        // MaterialX-ShaderGen-only and is also consumed as-is by
+        // viewer-app.jsx, which has no .mxsl awareness at all — so this
+        // entry is added ONLY to the list this (graph-editor) view passes
+        // to the dialog, never to the shared global. `className`/`isHw`
+        // are unused for this target (its generate() branch below never
+        // calls generateTargetSources); `perMaterial: false` hides the
+        // dialog's Material selector, since mxslc's decompiler always
+        // works on the whole document, not one material's subgraph.
+        const MXSL_EXPORT_TARGET = {
+            key: 'mxsl', label: 'ShadingLanguageX', perMaterial: false,
+            ext: { original: '.mxsl', decompiled: '.mxsl' },
+        };
+        const SHADER_EXPORT_TARGETS = EXPORT_TARGETS.concat([MXSL_EXPORT_TARGET]);
+
         // ---- App ---------------------------------------------------------------
 
         function NodeGraphApp({ active = true } = {}) {
@@ -376,6 +391,14 @@
             const [mtlxPaths, setMtlxPaths] = React.useState([]);
             const [chosenMtlx, setChosenMtlx] = React.useState(null);
             const [parsed, setParsed] = React.useState(null); // { mx, doc, nodegraphs, label }
+            // .mxsl provenance for the file map above: {compiledMtlxKey:
+            // originalMxslSourceText}, populated by expandMxsl() in
+            // ingest() (see mxsl-engine.js). mxslOriginal mirrors it for
+            // whichever path is the CURRENTLY loaded document (set only at
+            // loadDocument()'s choke point) — the "Original" button in the
+            // ShadingLanguageX export target reads that, not the ref.
+            const mxslOriginalsRef = React.useRef({});
+            const [mxslOriginal, setMxslOriginal] = React.useState(null); // { path, source } | null
             const [scope, setScope] = React.useState('');     // '' = document root
             const [flow, setFlow] = React.useState({ nodes: [], edges: [] });
             // Live mirror, so a rebuild triggered from a ref-held handler
@@ -1314,6 +1337,10 @@
                     const p = await parseMtlxDocument(resolved);
                     p.label = path;
                     setParsed(p);
+                    // .mxsl provenance for THIS specific path, if any —
+                    // see mxslOriginalsRef's declaration above.
+                    setMxslOriginal(Object.prototype.hasOwnProperty.call(mxslOriginalsRef.current, path)
+                        ? { path, source: mxslOriginalsRef.current[path] } : null);
                     setScope('');
                     // Same default-target reset as opening a document fresh:
                     // a stale selection/pin from a PREVIOUS document (multi-
@@ -1357,6 +1384,8 @@
                     setMtlxPaths([]);
                     setChosenMtlx(null);
                     setSelectedId(null);
+                    mxslOriginalsRef.current = {};
+                    setMxslOriginal(null);
                     setParsed(p);
                     setScope('');
                     setStatus(null);
@@ -1383,13 +1412,14 @@
             // loading; textures still merge and rebind live previews.
             const ingest = async (map, rootKey, additive) => {
                 setError(null);
+                const mxslOrigins = {}; // populated below, merged into mxslOriginalsRef after the replace/merge decision
                 try {
                     await expandZips(map);
                     // Compile any ShadingLanguageX (.mxsl) files to MaterialX
                     // XML and re-key them as .mtlx, so everything below (root-
                     // document detection, xi:include resolution, texture
                     // binding) treats them exactly like an authored .mtlx.
-                    await expandMxsl(map);
+                    await expandMxsl(map, mxslOrigins);
                 } catch (e) {
                     setError(errMsg(e));
                     return;
@@ -1402,6 +1432,10 @@
                 let merged;
                 if (droppedMtlx.length && hadSession && !additive) {
                     merged = Object.assign({}, map);
+                    // Same replace-not-merge semantics as fileMapRef right
+                    // below: a stale Original from the OLD session must not
+                    // survive into the new one.
+                    mxslOriginalsRef.current = mxslOrigins;
                     setParsed(null);
                     setScope('');
                     setFlow({ nodes: [], edges: [] });
@@ -1416,6 +1450,7 @@
                     }
                 } else {
                     merged = Object.assign({}, fileMapRef.current, map);
+                    mxslOriginalsRef.current = Object.assign({}, mxslOriginalsRef.current, mxslOrigins);
                 }
                 fileMapRef.current = merged;
                 setFileMap(merged);
@@ -3575,6 +3610,24 @@
                     return;
                 }
                 setShaderExport({ renderables: rs });
+            };
+            // ShaderExportDialog's `generate()` for the ShadingLanguageX
+            // target: unlike the shadergen targets, this is whole-document
+            // (no `renderable` scoping — mxslc's decompiler has no concept
+            // of "just this material") and runs against the SEPARATE mxsl
+            // WASM module (js/mxsl-engine.js), never `parsed.mx`. "Original"
+            // is the as-authored .mxsl source IF this document was compiled
+            // from one (mxslOriginal, set in loadDocument()); "Decompiled"
+            // re-decompiles the CURRENT (possibly hand-edited) document via
+            // resolveDocXml(), the same serializer Export/Document XML use.
+            const generateMxslExportStages = async () => {
+                const { xml, error } = await resolveDocXml();
+                if (xml == null) throw new Error('Could not build the document XML: ' + error);
+                const stages = [];
+                if (mxslOriginal) stages.push({ id: 'original', label: 'Original', code: mxslOriginal.source });
+                const decompiled = await decompileMtlxToSlx(xml);
+                stages.push({ id: 'decompiled', label: 'Decompiled', code: decompiled });
+                return { stages };
             };
             // Export dialog's onExport: routes to .mtlx/.zip through the
             // same exportBusyRef-guarded wrappers as the toolbar. Errors
@@ -8137,8 +8190,11 @@
                             onClose={() => { if (!confirmCloseOpen) setShaderExport(null); }}
                             renderables={shaderExport.renderables}
                             initialIndex={0}
+                            targets={SHADER_EXPORT_TARGETS}
                             generate={({ renderable, label, targetKey }) =>
-                                generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
+                                targetKey === 'mxsl'
+                                    ? generateMxslExportStages()
+                                    : generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
                             overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
                         />
                     )}

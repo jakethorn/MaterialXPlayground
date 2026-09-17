@@ -2,13 +2,18 @@
 //
 // Lazily loads the mxslc WebAssembly bindings (js/mxsl/JsMxslc.js, built
 // from the MXSL repo's mxslc++/javascript/ folder — see js/mxsl/README.md
-// for how that build is produced and vendored here) and exposes a single
-// entry point, expandMxsl(), used by graph-app.jsx's ingest() the same way
-// it already uses expandZips() from mtlx-engine.js: given a dropped/opened
-// file map, any .mxsl entries are compiled to MaterialX XML in place and
-// re-keyed with a .mtlx extension, so everything downstream (root-document
-// detection, xi:include resolution, texture binding) treats a compiled
-// .mxsl document exactly like a hand-authored .mtlx one.
+// for how that build is produced and vendored here) and exposes two entry
+// points to graph-app.jsx:
+//
+//   - expandMxsl(), used by ingest() the same way it already uses
+//     expandZips() from mtlx-engine.js: given a dropped/opened file map,
+//     any .mxsl entries are compiled to MaterialX XML in place and re-keyed
+//     with a .mtlx extension, so everything downstream (root-document
+//     detection, xi:include resolution, texture binding) treats a compiled
+//     .mxsl document exactly like a hand-authored .mtlx one.
+//   - decompileMtlxToSlx(), used by the "Export Shader Code…" dialog's
+//     ShadingLanguageX target to turn the CURRENT (possibly hand-edited)
+//     MaterialX document back into SLX source, via mxslc's decompiler.
 //
 // Multi-file projects: the mxslc WASM binding exposes compileProjectToMtlx,
 // which accepts a root source string plus a plain {relativePath: text}
@@ -55,9 +60,10 @@ const loadMxslFactoryViaScript = () => new Promise((resolve, reject) => {
 });
 
 // Cached, lazy: the WASM module is only fetched the first time a .mxsl
-// file is actually opened, not on every page load. A failed load is NOT
-// cached, so a transient network blip doesn't permanently break every
-// subsequent .mxsl open for the rest of the session.
+// file is actually opened (or a ShadingLanguageX export is requested),
+// not on every page load. A failed load is NOT cached, so a transient
+// network blip doesn't permanently break every subsequent attempt for
+// the rest of the session.
 const getMxslModule = () => {
     if (!mxslModulePromise) {
         // Absolute URL for the same reason as mtlx-engine.js's getMxEnv:
@@ -100,6 +106,21 @@ const compileMxslSource = async (source, files, label) => {
     }
 };
 
+// Decompile a MaterialX XML string to ShadingLanguageX source, via the
+// SAME mxslc module compileMxslSource uses (a completely separate WASM
+// module from the main MaterialX engine — see js/mtlx-engine.js — so this
+// never touches `parsed.mx`). Used by the "Export Shader Code…" dialog's
+// ShadingLanguageX target.
+const decompileMtlxToSlx = async (xml) => {
+    const mx = await getMxslModule();
+    try {
+        return mx.decompileMtlxToSlx(xml);
+    } catch (e) {
+        const msg = (e && e.message) || String(e);
+        throw new Error('ShadingLanguageX decompile error:\n' + msg);
+    }
+};
+
 // A #include "..." or #library "..." directive's target, e.g. "colors.mxsl"
 // or "utils.mtlx" — LanguageSpecification.md's File Inclusion section.
 const DIRECTIVE_RE = /#\s*(?:include|library)\s*"([^"]+)"/g;
@@ -123,7 +144,15 @@ const stripCommonFolderPrefix = (keys) => {
 // Expand any .mxsl files in the map into their compiled .mtlx equivalent
 // (in place), mirroring expandZips(map) in mtlx-engine.js. Called AFTER
 // expandZips in ingest(), so a .mxsl shipped inside a .zip is also caught.
-const expandMxsl = async (map) => {
+//
+// `origins`, if given, is a plain object this function populates with
+// {compiledMtlxKey: originalMxslSourceText} for every root it successfully
+// compiles — graph-app.jsx uses this to know, once a specific .mtlx path
+// is actually loaded as the active document, whether it has .mxsl
+// provenance and what its as-authored source looked like (the "Original"
+// button in the ShadingLanguageX export target). Omit it to just expand,
+// same as before this was added.
+const expandMxsl = async (map, origins) => {
     const mxslKeys = Object.keys(map).filter((k) => /\.mxsl$/i.test(k));
     if (!mxslKeys.length) return map;
 
@@ -167,13 +196,14 @@ const expandMxsl = async (map) => {
     const compiled = [];
     for (const rootKey of rootKeys) {
         const rootEk = effectiveKey(rootKey);
+        const rootSource = textByEffectiveKey[rootEk];
         const files = {};
         for (const ek of Object.keys(textByEffectiveKey)) {
             if (ek !== rootEk) files[ek] = textByEffectiveKey[ek];
         }
         try {
-            const xml = await compileMxslSource(textByEffectiveKey[rootEk], files, rootKey);
-            compiled.push({ rootKey, xml });
+            const xml = await compileMxslSource(rootSource, files, rootKey);
+            compiled.push({ rootKey, xml, source: rootSource });
         } catch (e) {
             // Not every root candidate necessarily compiles on its own
             // (e.g. the heuristic above can admit a genuine include as a
@@ -189,12 +219,13 @@ const expandMxsl = async (map) => {
         throw lastError || new Error('No .mxsl file in this drop compiled successfully.');
     }
 
-    for (const { rootKey, xml } of compiled) {
+    for (const { rootKey, xml, source } of compiled) {
         const mtlxKey = rootKey.replace(/\.mxsl$/i, '.mtlx');
         if (Object.prototype.hasOwnProperty.call(map, mtlxKey)) {
             console.warn('expandMxsl: ' + mtlxKey + ' was already present in this drop — overwriting it with the document compiled from ' + rootKey);
         }
         map[mtlxKey] = new Blob([xml], { type: 'application/xml' });
+        if (origins) origins[mtlxKey] = source;
     }
     return map;
 };
@@ -203,5 +234,6 @@ const expandMxsl = async (map) => {
 // at its tail (real ES modules — e.g. a future VS Code webview path — can't
 // see this classic script's top-level bindings otherwise). graph-app.jsx
 // itself is a sibling classic <script type="text/babel">, so it reaches
-// expandMxsl as a bare identifier, exactly like it already does expandZips.
-Object.assign(window, { getMxslModule, compileMxslSource, expandMxsl });
+// expandMxsl/decompileMtlxToSlx as bare identifiers, exactly like it
+// already does expandZips.
+Object.assign(window, { getMxslModule, compileMxslSource, decompileMtlxToSlx, expandMxsl });
