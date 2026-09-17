@@ -146,12 +146,13 @@ const stripCommonFolderPrefix = (keys) => {
 // expandZips in ingest(), so a .mxsl shipped inside a .zip is also caught.
 //
 // `origins`, if given, is a plain object this function populates with
-// {compiledMtlxKey: originalMxslSourceText} for every root it successfully
+// {compiledMtlxKey: {source, filename}} for every root it successfully
 // compiles — graph-app.jsx uses this to know, once a specific .mtlx path
 // is actually loaded as the active document, whether it has .mxsl
-// provenance and what its as-authored source looked like (the "Original"
-// button in the ShadingLanguageX export target). Omit it to just expand,
-// same as before this was added.
+// provenance, what its as-authored source looked like (the "Original"
+// button in the ShadingLanguageX export target) and what it was originally
+// named (rootKey, before it was re-keyed to compiledMtlxKey). Omit it to
+// just expand, same as before this was added.
 const expandMxsl = async (map, origins) => {
     const mxslKeys = Object.keys(map).filter((k) => /\.mxsl$/i.test(k));
     if (!mxslKeys.length) return map;
@@ -225,7 +226,7 @@ const expandMxsl = async (map, origins) => {
             console.warn('expandMxsl: ' + mtlxKey + ' was already present in this drop — overwriting it with the document compiled from ' + rootKey);
         }
         map[mtlxKey] = new Blob([xml], { type: 'application/xml' });
-        if (origins) origins[mtlxKey] = source;
+        if (origins) origins[mtlxKey] = { source, filename: rootKey };
     }
     return map;
 };

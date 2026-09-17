@@ -377,13 +377,15 @@
             const [chosenMtlx, setChosenMtlx] = React.useState(null);
             const [parsed, setParsed] = React.useState(null); // { mx, doc, nodegraphs, label }
             // .mxsl provenance for the file map above: {compiledMtlxKey:
-            // originalMxslSourceText}, populated by expandMxsl() in
-            // ingest() (see mxslc-engine.js). mxslOriginal mirrors it for
-            // whichever path is the CURRENTLY loaded document (set only at
-            // loadDocument()'s choke point) — the "Original" button in the
-            // ShadingLanguageX export target reads that, not the ref.
+            // {source, filename}}, populated by expandMxsl() in
+            // ingest() (see mxslc-engine.js). filename is the as-dropped
+            // .mxsl path (before it was re-keyed to compiledMtlxKey).
+            // mxslOriginal mirrors it for whichever path is the CURRENTLY
+            // loaded document (set only at loadDocument()'s choke point) —
+            // the "Original" button in the ShadingLanguageX export target
+            // reads that, not the ref.
             const mxslOriginalsRef = React.useRef({});
-            const [mxslOriginal, setMxslOriginal] = React.useState(null); // { path, source } | null
+            const [mxslOriginal, setMxslOriginal] = React.useState(null); // { path, source, filename } | null
             const [scope, setScope] = React.useState('');     // '' = document root
             const [flow, setFlow] = React.useState({ nodes: [], edges: [] });
             // Live mirror, so a rebuild triggered from a ref-held handler
@@ -1320,12 +1322,13 @@
                     // matching what VS Code's own tier-2 validator checks.
                     noteDocXml(raw);
                     const p = await parseMtlxDocument(resolved);
-                    p.label = path;
-                    setParsed(p);
                     // .mxsl provenance for THIS specific path, if any —
                     // see mxslOriginalsRef's declaration above.
-                    setMxslOriginal(Object.prototype.hasOwnProperty.call(mxslOriginalsRef.current, path)
-                        ? { path, source: mxslOriginalsRef.current[path] } : null);
+                    const mxslOrigin = Object.prototype.hasOwnProperty.call(mxslOriginalsRef.current, path)
+                        ? { path, ...mxslOriginalsRef.current[path] } : null;
+                    p.label = mxslOrigin ? mxslOrigin.filename : path;
+                    setParsed(p);
+                    setMxslOriginal(mxslOrigin);
                     setScope('');
                     // Same default-target reset as opening a document fresh:
                     // a stale selection/pin from a PREVIOUS document (multi-
