@@ -7,6 +7,10 @@
 // via CSS) so switching back is instant. Embed mode (?embed=1) renders
 // a focused docs-only view for the graph editor's DocsDialog iframe.
 
+// Load-timeline mark: first executed statement of this file (see the
+// matching mark in js/mtlx-engine.js for why localStorage is read directly).
+try { if (localStorage.getItem('mtlxPerfLog')) performance.mark('shell-exec-start'); } catch (e) { /* ignore */ }
+
 // EMBED is set by index.html's <head> bootstrap script when this page is
 // loaded as ?embed=1 inside the graph editor's docs dialog iframe.
 const EMBED = !!window.__MTLX_EMBED;
@@ -269,7 +273,7 @@ const VIEW_DEPS = {
         // vendor/utif/UTIF.js: loadTifTexture (js/mtlx-engine.js) needs it for
         // scene TIF/UDIM tiles, same dependency the viewer route already has.
         // Decodes .ktx2 compressed textures (loadKtx2Texture, js/mtlx-engine.js).
-        scripts: ['vendor/utif/UTIF.js', 'vendor/three/KTX2Loader.js', 'js/usd-scene-runtime.js', 'js/usd-scene-environment.js', 'js/usd-scene-lights.js', 'js/usd-scene-skyvis.js', 'js/usd-scene-post.js', 'js/usd-scene-renderer.js', 'js/shared/gif-encoder.js', 'js/shared/mtlx-turntable.js'],
+        scripts: ['vendor/utif/UTIF.js', 'vendor/three/KTX2Loader.js', 'js/usd-scene-runtime.js', 'js/usd-scene-environment.js', 'js/usd-scene-lights.js', 'js/usd-scene-skyvis.js', 'js/usd-scene-localenv.js', 'js/usd-scene-post.js', 'js/usd-scene-renderer.js', 'js/shared/gif-encoder.js', 'js/shared/mtlx-turntable.js'],
         babelScripts: ['js/shared/mtlx-ui.jsx'],
         app: 'js/usd-scene-app.jsx',
         globalName: 'SceneViewerApp',

@@ -10,7 +10,10 @@
 // Recurring Tailwind button strings, pulled out because the exact same
 // string (verbatim) repeats across files. Near-twin variants elsewhere
 // (different opacity/sizing) are NOT this — leave those inline.
-const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors';
+// disabled:* added so a disabled secondary button (e.g. the Scene Render
+// settings popover's Reset/Cancel) actually looks non-interactive instead
+// of reading as clickable while silently doing nothing.
+const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-50 disabled:text-gray-500 disabled:cursor-not-allowed disabled:pointer-events-none';
 const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors';
 // Graph editor toolbar button style. `whitespace-nowrap shrink-0` matters:
 // js/graph-app.jsx's label-collapse measurement needs buttons that don't
@@ -264,6 +267,7 @@ const RecordGifDialog = ({ open, onClose, viewRef, baseName, transparent }) => {
         const controller = new AbortController();
         abortRef.current = controller;
         try {
+            if (view.whenDisplacementSettled) await view.whenDisplacementSettled();
             const blob = await window.recordTurntableGif(view, {
                 width: outWidth,
                 height: outHeight,
@@ -603,12 +607,74 @@ const fullscreenPortalRoot = () => (document.fullscreenElement || document.body)
 // math below. Height is a safe over-estimate covering the built-in
 // Display + Force Transparency blocks plus one caller-supplied `children`
 // block; the cog sits at the top of the strip so the flip branch effectively never fires.
-const SETTINGS_DIALOG_W = 288, SETTINGS_DIALOG_H = 300;
+const SETTINGS_DIALOG_W = 288, SETTINGS_DIALOG_H = 420;
+
+const DISPLACEMENT_SUBDIV_LABELS = { 0: 'Off', 1: '1', 2: '2', 3: '3' };
+// labelClassName lets callers match the surrounding row style: the
+// SettingsDialog popover uses the default, the Viewer/Compare sidebars
+// pass the same class as their neighbouring View Transform/Force
+// Transparency rows.
+const DisplacementSettingsRows = ({ labelClassName = 'text-gray-200' }) => {
+    const [enabled, setEnabled] = React.useState(() => !!(window.getDisplacementEnabled && window.getDisplacementEnabled()));
+    const [level, setLevel] = React.useState(() => (window.getPreviewSubdivisionLevel ? window.getPreviewSubdivisionLevel() : 2));
+    React.useEffect(() => {
+        const onChanged = (e) => {
+            if (!e.detail) return;
+            if (e.detail.key === 'displacement') setEnabled(!!e.detail.value);
+            else if (e.detail.key === 'previewSubdivision') setLevel(e.detail.value);
+        };
+        window.addEventListener('mtlx-settings-changed', onChanged);
+        return () => window.removeEventListener('mtlx-settings-changed', onChanged);
+    }, []);
+    return (
+        <React.Fragment>
+            <div>
+                <label
+                    className="flex items-center justify-between cursor-pointer"
+                    title={enabled ? 'Disable displacement' : 'Enable displacement'}
+                >
+                    <span className={labelClassName}>Displacement</span>
+                    <Toggle
+                        checked={enabled}
+                        onChange={(next) => {
+                            setEnabled(next);
+                            window.setDisplacementEnabled && window.setDisplacementEnabled(next);
+                        }}
+                    />
+                </label>
+                <div className="mt-1 text-[11px] text-gray-400">
+                    Moves the mesh by the material's displacement; the material itself is unchanged.
+                </div>
+            </div>
+            <div>
+                <div className="flex items-center justify-between gap-2">
+                    <span className={labelClassName}>Subdivision</span>
+                    <MtlxSelect
+                        value={level}
+                        options={[0, 1, 2, 3]}
+                        labels={DISPLACEMENT_SUBDIV_LABELS}
+                        onChange={(v) => {
+                            setLevel(v);
+                            window.setPreviewSubdivisionLevel && window.setPreviewSubdivisionLevel(v);
+                        }}
+                        defValue={2}
+                        title="Applied to preview geometry when the material has displacement; each level is 4x triangles, capped at 1.5M"
+                        size="sm"
+                    />
+                </div>
+                <div className="mt-1 text-[11px] text-gray-400">
+                    Applied to preview geometry when the material has displacement; each level is 4x triangles, capped at 1.5M.
+                </div>
+            </div>
+        </React.Fragment>
+    );
+};
+
 
 // Settings popover (cogwheel button in ViewportControls): mounted once
 // there so it's shared across docs/viewer/graph with zero per-app wiring.
 // Anchored below the cog and edge-clamped, mirroring EnvDialog.
-function SettingsDialog({ anchorRef, open, onClose, children }) {
+function SettingsDialog({ anchorRef, open, onClose, children, hideDisplacementSettings = false }) {
     useEscapeToClose(onClose, open);
     // Re-read from the engine's persisted value on every open (not just
     // mount) — window.getForceTransparency is the single source of truth,
@@ -717,6 +783,7 @@ function SettingsDialog({ anchorRef, open, onClose, children }) {
                         Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
                     </div>
                 </div>
+                {!hideDisplacementSettings && <DisplacementSettingsRows />}
                 {children}
             </div>
         </div>,
@@ -1123,11 +1190,12 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
     const [envAvail, setEnvAvail] = React.useState(false);
     const [viewEpoch, setViewEpoch] = React.useState(0);
     const [isFullscreen, toggleFullscreen] = useFullscreen(viewportRef);
-    const takeScreenshot = () => {
+    const takeScreenshot = async () => {
         const view = viewRef.current;
         // Null/snapshot-less view → silent no-op, reproducing all three
         // pre-refactor call sites' guard.
         if (!view || !view.snapshot) return;
+        if (view.whenDisplacementSettled) await view.whenDisplacementSettled();
         downloadSnapshot(view, getSnapshotBase());
     };
     return {
@@ -1451,7 +1519,9 @@ const EnvDialog = ({
                 <input
                     type="range" min="0" max="360" step="1"
                     value={rotation}
+                    title="Right click to reset"
                     onChange={(e) => onRotationChange(Number(e.target.value))}
+                    onContextMenu={rangeResetOnContextMenu({ defaultValue: 0, min: 0, max: 360, commit: (v) => onRotationChange(Number(v)) })}
                     className="w-full accent-blue-500"
                 />
             </div>
@@ -1463,7 +1533,9 @@ const EnvDialog = ({
                 <input
                     type="range" min={EV_MIN} max={EV_MAX} step={EV_STEP}
                     value={linearToEv(exposure)}
+                    title="Right click to reset"
                     onChange={(e) => onExposureChange(evToLinear(e.target.value))}
+                    onContextMenu={rangeResetOnContextMenu({ defaultValue: 0, min: EV_MIN, max: EV_MAX, commit: (v) => onExposureChange(evToLinear(v)) })}
                     className="w-full accent-blue-500"
                 />
             </div>
@@ -1581,7 +1653,61 @@ function Toggle({ checked, onChange, disabled }) {
 // A range input paired with a small right-aligned number box, both driving
 // the same value. `onSlider`/`onNumber` are separate so a caller can, e.g.,
 // collapse a slider-at-default back to '' without doing that mid-typing.
-function SliderField({ label, unit, value, min, max, step, onSlider, onNumber, placeholder }) {
+// Decimal places implied by a step, when a caller doesn't pass `decimals`
+// explicitly: 1 -> 0, 0.1 -> 1, 0.05/0.025 -> their own digit count.
+const decimalsFromStep = (step) => {
+    const s = Math.abs(Number(step));
+    if (!Number.isFinite(s) || s === 0) return 2;
+    if (s >= 1) return 0;
+    const str = String(s);
+    const dot = str.indexOf('.');
+    return dot === -1 ? 0 : (str.length - dot - 1);
+};
+
+// Formats a number-field value to a fixed precision; '' / null pass
+// through blank (the field's default-sentinel state), non-numeric input
+// is returned as-is rather than turned into "NaN".
+const formatNumberField = (value, decimals) => {
+    if (value === '' || value == null) return '';
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(decimals != null ? decimals : 0) : String(value);
+};
+
+// Chromium's native number-input spin button sits INSIDE the content box
+// on the right (about 1.5em at the field's own font size), not in the
+// padding, so a width sized off text length alone clips the last digit
+// under the arrows. This sizes the input from its real parts instead of
+// a guess: digit content (longest formatted min/max/value) + the spinner
+// reserve + the input's own padding/border. `paddingRem`/`borderPx`
+// default to TEXT_INPUT_CLS's own chrome (px-2.5 = 0.625rem/side, border
+// = 1px/side); pass the real numbers for different input classes, never
+// guess them. Meant to sit on the <input> itself so `ch`/`em` resolve
+// against ITS font-size, not a wrapper's.
+const numberFieldStyle = ({ min, max, value, decimals, paddingRem = 1.25, borderPx = 2 } = {}) => {
+    const longest = Math.max(1, ...[min, max, value].map((v) => formatNumberField(v, decimals).length));
+    return {
+        width: `calc(${longest}ch + 1.5em + 0.5ch + ${paddingRem}rem + ${borderPx}px)`,
+        boxSizing: 'border-box',
+        flex: 'none',
+        fontVariantNumeric: 'tabular-nums',
+    };
+};
+
+// Same right-click-reset behaviour as SliderField, for a bare
+// <input type="range"> that doesn't go through it: returns an
+// onContextMenu handler that commits `defaultValue` (clamped to
+// [min, max]) through `commit`. No-op (native menu stays) when
+// disabled or no default is known.
+const rangeResetOnContextMenu = ({ defaultValue, min, max, commit, disabled }) => (e) => {
+    if (disabled || defaultValue == null || !Number.isFinite(Number(defaultValue))) return;
+    e.preventDefault();
+    let n = Number(defaultValue);
+    if (min != null && n < Number(min)) n = Number(min);
+    if (max != null && n > Number(max)) n = Number(max);
+    commit(String(n));
+};
+
+function SliderField({ label, unit, value, min, max, step, onSlider, onNumber, placeholder, decimals, defaultValue, disabled, title }) {
     // Normalized to a string up front so a caller may pass either a string
     // (builder's existing ''-sentinel fields) or a bare number.
     const raw = value == null ? '' : String(value);
@@ -1589,19 +1715,63 @@ function SliderField({ label, unit, value, min, max, step, onSlider, onNumber, p
     // handle at `placeholder`'s position, not 0 - exposure's default is
     // 1.0, not the bottom of its 0..4 range.
     const sliderVal = raw.trim() !== '' ? (Number(raw) || 0) : (Number(placeholder) || 0);
+    const dec = decimals != null ? decimals : decimalsFromStep(step);
+    // Focused: show exactly what's being typed (never rewritten mid-edit
+    // by a reformatted echo of `value`, which used to fight the caret and
+    // truncate multi-digit entry). Blurred: always the formatted value.
+    const [focused, setFocused] = React.useState(false);
+    const [draft, setDraft] = React.useState(raw);
+    React.useEffect(() => { if (!focused) setDraft(raw); }, [raw, focused]);
+    const clamp = (n) => {
+        let v = n;
+        if (min != null && v < Number(min)) v = Number(min);
+        if (max != null && v > Number(max)) v = Number(max);
+        return v;
+    };
+    const commitDraft = (text) => {
+        if (text.trim() === '') { onNumber(''); return; }
+        let n = Number(text);
+        if (!Number.isFinite(n)) { setDraft(raw); return; }
+        onNumber(String(clamp(n)));
+    };
+    // Right click resets to the caller's known default (a preset level's
+    // value, a stored default const, ...) through the same onSlider/
+    // onNumber path a real change uses, so live handlers, drafts and
+    // dirty dots all react exactly as they would to a typed/dragged value.
+    const hasDefault = defaultValue != null && Number.isFinite(Number(defaultValue));
+    const resetOnContextMenu = (e) => {
+        if (disabled || !hasDefault) return;
+        e.preventDefault();
+        const n = clamp(Number(defaultValue));
+        setDraft(String(n));
+        onSlider(String(n));
+        onNumber(String(n));
+    };
+    const rangeTitle = [title, hasDefault ? 'Right click to reset' : null].filter(Boolean).join(' — ') || undefined;
     return (
         <div>
             <FieldLabel label={label} hint={unit} />
             <div className="flex items-center gap-2.5">
                 <input
                     type="range" min={min} max={max} step={step} value={sliderVal}
+                    disabled={disabled}
+                    title={rangeTitle}
                     onChange={(e) => onSlider(e.target.value)}
+                    onContextMenu={resetOnContextMenu}
                     className="flex-1 accent-blue-500 h-1.5"
                 />
                 <input
-                    type="number" min={min} max={max} step={step} value={raw} placeholder={placeholder}
-                    onChange={(e) => onNumber(e.target.value)}
-                    className={TEXT_INPUT_CLS + ' w-[58px] text-right px-1.5 shrink-0'}
+                    type="number" min={min} max={max} step={step}
+                    disabled={disabled}
+                    value={focused ? draft : formatNumberField(raw, dec)}
+                    placeholder={placeholder}
+                    onFocus={() => { setFocused(true); setDraft(raw); }}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={() => { setFocused(false); commitDraft(draft); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { commitDraft(draft); e.currentTarget.blur(); } }}
+                    onContextMenu={resetOnContextMenu}
+                    style={numberFieldStyle({ min, max, value: raw, decimals: dec })}
+                    className={TEXT_INPUT_CLS + ' text-right'}
                 />
             </div>
         </div>
@@ -1874,6 +2044,10 @@ const ViewportControls = ({
     // Force Transparency block. Node or render prop; docs previewer is
     // the only consumer today.
     settingsChildren,
+    // Hides the built-in Displacement/Subdivision rows in the settings
+    // popover. The docs previewer has no mesh displacement pipeline, so
+    // those rows would be dead controls there.
+    hideDisplacementSettings = false,
     // Hides the settings cog. Additive, like showScreenshot above; the
     // popover it opens (SettingsDialog) already renders null while closed,
     // so hiding just the trigger is enough.
@@ -2139,7 +2313,7 @@ const ViewportControls = ({
     {/* Anchored popover (portaled to the fullscreen root, like EnvDialog)
         rather than a full-screen modal, so it stays visible in native
         fullscreen without exiting it. */}
-    <SettingsDialog anchorRef={settingsBtnRef} open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+    <SettingsDialog anchorRef={settingsBtnRef} open={settingsOpen} onClose={() => setSettingsOpen(false)} hideDisplacementSettings={hideDisplacementSettings}>
         {typeof settingsChildren === 'function' ? settingsChildren() : settingsChildren}
     </SettingsDialog>
     </React.Fragment>
@@ -3109,8 +3283,12 @@ const MtlxSelect = ({
                         style={{ backgroundColor: selected.dot }}
                     />
                 )}
-                <span className="truncate" style={{ color: showPlaceholder ? MXS_MUTED : undefined }}>{triggerLabel}</span>
-                <MtlxIcon name="chevron-down" className={'w-3 h-3 flex-none opacity-70' + (alignLeft ? ' ml-auto' : '')} />
+                <span className="truncate min-w-0" style={{ color: showPlaceholder ? MXS_MUTED : undefined }}>{triggerLabel}</span>
+                {/* Right-stuck regardless of alignLeft: ml-auto pins the
+                    chevron to the field's right edge even when a non-block
+                    trigger's fitStyle minWidth leaves extra room after the
+                    label (the "floats next to the text" bug). */}
+                <MtlxIcon name="chevron-down" className="w-3 h-3 flex-none opacity-70 ml-auto" />
             </button>
             {popover && ReactDOM.createPortal(popover, fullscreenPortalRoot())}
         </React.Fragment>
@@ -3482,10 +3660,11 @@ Object.assign(window, {
     HUD_PILL, HUD_PILL_ACTIVE,
     GROUP_HEADER_CLASS,
     ICON_BTN_SM, ICON_BTN_SM_PRIMARY, ICON_BTN_SM_DANGER,
-    DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
+    DialogFrame, PresetsDialog, SettingsDialog, DisplacementSettingsRows, MTLX_PRESETS, MTLX_PRESETS_BASE,
     RecordGifDialog,
     presetDocUrl, presetKey,
     fetchPresetFiles, fetchRemoteDocumentFiles, copyTextToClipboard, ShaderExportDialog,
     TEXT_INPUT_CLS, FieldLabel, Toggle, SliderField, Chip, SectionCard, GeometryTile, CustomModelTile, FilePickerField,
     EV_MIN, EV_MAX, EV_STEP, evToLinear, linearToEv, formatEv,
+    decimalsFromStep, formatNumberField, numberFieldStyle, rangeResetOnContextMenu,
 });

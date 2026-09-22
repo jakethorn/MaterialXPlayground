@@ -54,6 +54,23 @@ const EmbedControls = ({
         () => !!(window.getForceTransparency && window.getForceTransparency()));
     const [displayTransform, setDisplayTransformState] = React.useState(
         () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb'));
+    const [dispOn, setDispOn] = React.useState(
+        () => !!(window.getDisplacementEnabled && window.getDisplacementEnabled()));
+    const [subdivLevel, setSubdivLevel] = React.useState(
+        () => (window.getPreviewSubdivisionLevel ? window.getPreviewSubdivisionLevel() : 2));
+
+    // Adopts a Displacement/Subdivision change made elsewhere (e.g. this
+    // embed reloaded live-attr driven, see docs/EMBEDDING.md), same
+    // mtlx-settings-changed contract as js/shared/mtlx-ui.jsx's rows.
+    React.useEffect(() => {
+        const onChanged = (e) => {
+            if (!e.detail) return;
+            if (e.detail.key === 'displacement') setDispOn(!!e.detail.value);
+            else if (e.detail.key === 'previewSubdivision') setSubdivLevel(e.detail.value);
+        };
+        window.addEventListener('mtlx-settings-changed', onChanged);
+        return () => window.removeEventListener('mtlx-settings-changed', onChanged);
+    }, []);
 
     // Adopts a display transform change made elsewhere (e.g. this same
     // embed reloaded in another tab sharing localStorage), same event
@@ -100,6 +117,15 @@ const EmbedControls = ({
     const pickDisplayTransform = (mode) => {
         setDisplayTransformState(mode);
         if (window.setDisplayTransform) window.setDisplayTransform(mode);
+    };
+    const toggleDisplacement = () => {
+        const next = !dispOn;
+        setDispOn(next);
+        if (window.setDisplacementEnabled) window.setDisplacementEnabled(next, { persist: false });
+    };
+    const pickSubdivision = (level) => {
+        setSubdivLevel(level);
+        if (window.setPreviewSubdivisionLevel) window.setPreviewSubdivisionLevel(level, { persist: false });
     };
 
     // Reset camera and, if the host provided preset env values, restore
@@ -230,7 +256,9 @@ const EmbedControls = ({
                         <input
                             type="range" min="0" max="360" step="1"
                             value={envRotation}
+                            title="Right click to reset"
                             onChange={(e) => setEnvRotation(Number(e.target.value))}
+                            onContextMenu={rangeResetOnContextMenu({ defaultValue: 0, min: 0, max: 360, commit: (v) => setEnvRotation(Number(v)) })}
                         />
                     </div>
                     <div className="mtlx-ec-panel-row mtlx-ec-panel-row--slider">
@@ -241,7 +269,9 @@ const EmbedControls = ({
                         <input
                             type="range" min={EV_MIN} max={EV_MAX} step={EV_STEP}
                             value={linearToEv(envExposure)}
+                            title="Right click to reset"
                             onChange={(e) => setEnvExposure(evToLinear(e.target.value))}
+                            onContextMenu={rangeResetOnContextMenu({ defaultValue: 0, min: EV_MIN, max: EV_MAX, commit: (v) => setEnvExposure(evToLinear(v)) })}
                         />
                     </div>
                 </div>
@@ -275,6 +305,33 @@ const EmbedControls = ({
                     <div className="mtlx-ec-desc">
                         Render opacity/transmission with real alpha blending. When off, the preview
                         matches the standard MaterialX viewer (opaque).
+                    </div>
+                    <div className="mtlx-ec-panel-row">
+                        <span>Displacement</span>
+                        <button
+                            type="button"
+                            className={'mtlx-ec-toggle' + (dispOn ? ' is-on' : '')}
+                            onClick={toggleDisplacement}
+                            title={dispOn ? 'Disable displacement' : 'Enable displacement'}
+                        >
+                            {dispOn ? 'On' : 'Off'}
+                        </button>
+                    </div>
+                    <div className="mtlx-ec-panel-row">
+                        <span>Subdivision</span>
+                        <select
+                            className="mtlx-ec-select"
+                            value={subdivLevel}
+                            onChange={(e) => pickSubdivision(Number(e.target.value))}
+                            title="Applied to preview geometry when the material has displacement"
+                        >
+                            {[0, 1, 2, 3].map((level) => (
+                                <option key={level} value={level}>{level === 0 ? 'Off' : level}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="mtlx-ec-desc">
+                        Moves the mesh by the material's displacement; never persists for this embed.
                     </div>
                 </div>
             )}

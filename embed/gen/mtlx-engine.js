@@ -4,7 +4,10 @@
 // bind defaults/env/lights -> compile-check -> render loop). Shared by
 // the app shell (index.html) and the VS Code webview.
 // Public API exported onto window at the bottom.
-// ------------------------------------------------------------------
+// Load-timeline mark: first executed statement, i.e. right after
+// babel-standalone finishes fetching + transforming this file. Gated on
+// localStorage directly since window.MTLX_PERF_LOG is not set yet this early.
+try{if(localStorage.getItem('mtlxPerfLog'))performance.mark('mtlx-engine-exec-start');}catch(e){/* ignore */}// ------------------------------------------------------------------
 // MaterialX 3D Preview Component
 // ------------------------------------------------------------------
 // Load ONLY JsMaterialXGenShader.js (superset of JsMaterialXCore.js),
@@ -29,7 +32,25 @@ const LIGHT_SOURCE_KIND_AREA=1;// Slots reserved for lights imported from a USD 
 // vectors, still inside the 224 that GLES 3 guarantees. Raising it buys
 // finer area-light subdivision at the risk of failing to link on a GPU at
 // that floor, and this define lands in EVERY material in both apps.
-const STAGE_LIGHT_SLOTS=16;const mxEnvPromises=new Map();// Classic-<script> fallback for UMD builds (e.g. 1.39.4) that have no
+const STAGE_LIGHT_SLOTS=16;// Rig lights parsed from environment_map.mtlx, recorded here so the
+// light-limit tiers can size one generation without the getMxEnv closure.
+let mxRigLightCount=0;// Light-limit kill switch, default ON. '0' disables it, read per
+// generation (one localStorage hit) so toggling it needs no reload.
+const LIGHT_LIMIT_KEY='mtlx_light_limit';const readLightLimit=()=>{try{return localStorage.getItem(LIGHT_LIMIT_KEY)!=='0';}catch(e){return true;}};// Stage-light slot tiers. MAX_LIGHT_SOURCES is baked into the generated
+// source, so a tool that can never hold a stage light compiles a body per
+// light slot it will never use (17 slots is 8.4s vs 3.7s on a glass shader).
+const STAGE_LIGHT_TIERS=[0,4,8,STAGE_LIGHT_SLOTS];// Viewer, Compare, docs previews, Graph previews and embeds bind the rig
+// plus the environment key light and nothing else (currentLights is called
+// there without stageLights), so their tier can never be exceeded.
+const PREVIEW_STAGE_LIGHT_COUNT=0;// Feature-gated shaders kill switch, default ON. '0' restores the old
+// always-generate behaviour (shadow sampling and the occlusion block in
+// every material of every tool). Read per generation.
+const FEATURE_GATED_KEY='mtlx_feature_gated_shaders';const readFeatureGated=()=>{try{return localStorage.getItem(FEATURE_GATED_KEY)!=='0';}catch(e){return true;}};// Features no preview tool can ever turn on: the Viewer, Compare, docs and
+// Graph previews and the embeds bind white shadow moments and a zero-strength
+// occlusion volume, so generating either costs compile time for a no-op.
+const PREVIEW_FEATURE_OPTIONS={skipShadowMap:true,skipOcclusion:true};// Smallest tier that still covers `count`; anything unknown or over the
+// ceiling falls back to the full reservation.
+const chooseStageLightTier=count=>{const n=Number(count);if(!Number.isFinite(n)||n<0)return STAGE_LIGHT_SLOTS;const tier=STAGE_LIGHT_TIERS.find(t=>t>=n);return tier===undefined?STAGE_LIGHT_SLOTS:tier;};const mxEnvPromises=new Map();// Classic-<script> fallback for UMD builds (e.g. 1.39.4) that have no
 // `export` statement and no `root.MaterialX = ...` global fallback, see
 // getMxEnv's header comment below for why import() can't reach their
 // factory. A classic script makes the build's top-level `var MaterialX =
@@ -55,8 +76,10 @@ reject(new Error('MaterialX engine script loaded but window.MaterialX is not a f
 // Absolute URL on purpose: WebKit resolves import() in a classic
 // script against the script URL, not the document base, so the
 // embeds (served from embed/gen/ under a base tag) 404 in Safari.
-const factoryUrl=new URL('./js/materialx/'+ver+'/JsMaterialXGenShader.js',document.baseURI).href;const factoryPromise=import(factoryUrl).then(mod=>typeof mod.default==='function'?mod.default:loadMxFactoryViaScript(ver));mxEnvPromises.set(ver,factoryPromise.then(factory=>factory({// .wasm and .data live next to the .js.
-locateFile:path=>'./js/materialx/'+ver+'/'+path})).then(mx=>{// Expose the MaterialX library version (from the JS API)
+const factoryUrl=new URL('./js/materialx/'+ver+'/JsMaterialXGenShader.js',document.baseURI).href;// Load-timeline marks (perf-gated, zero cost when off): wasm module
+// fetch/instantiate, then standard libraries + GenContext below.
+const __wasmPerfStart=window.MTLX_PERF_LOG?performance.now():0;const factoryPromise=import(factoryUrl).then(mod=>typeof mod.default==='function'?mod.default:loadMxFactoryViaScript(ver));mxEnvPromises.set(ver,factoryPromise.then(factory=>factory({// .wasm and .data live next to the .js.
+locateFile:path=>'./js/materialx/'+ver+'/'+path})).then(mx=>{if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] wasm instantiate: '+(performance.now()-__wasmPerfStart).toFixed(1)+'ms (target: '+ver+')');}const __stdlibPerfStart=window.MTLX_PERF_LOG?performance.now():0;// Expose the MaterialX library version (from the JS API)
 // for the top-menu badge; broadcast so the UI can update
 // whenever the WASM finishes loading. Only the default
 // version drives the header badge, a non-default pane
@@ -64,7 +87,7 @@ locateFile:path=>'./js/materialx/'+ver+'/'+path})).then(mx=>{// Expose the Mater
 if(ver===MTLX_DEFAULT_VERSION){try{const verStr=mx.getVersionString&&mx.getVersionString()||null;if(verStr){window.__mtlxVersion=verStr;window.dispatchEvent(new CustomEvent('mtlx-version',{detail:verStr}));}}catch(e){/* version is optional */}}// WebGL 2 targets ESSL (GLSL ES 3.00), not the desktop GLSL
 // generator (#version 400 won't compile in-browser).
 // loadStandardLibraries also registers the source-code search path.
-const gen=mx.EsslShaderGenerator.create();const genContext=new mx.GenContext(gen);const stdlib=mx.loadStandardLibraries(genContext);// ldef/rigLights are filled in once the light rig below has
+const gen=mx.EsslShaderGenerator.create();const genContext=new mx.GenContext(gen);const stdlib=mx.loadStandardLibraries(genContext);if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] stdlib+GenContext: '+(performance.now()-__stdlibPerfStart).toFixed(1)+'ms (target: '+ver+')');}// ldef/rigLights are filled in once the light rig below has
 // been fetched and parsed; configureGenContext reads them
 // by closure, so it must be called AFTER that happens.
 let ldef=null;const rigLights=[];// Every GenContext option + light binding this build needs,
@@ -83,6 +106,7 @@ try{ctx.getOptions().fileTextureVerticalFlip=true;}catch(e){/* option absent */}
 // product, which inverts mirrored tangent-space normal maps.
 try{ctx.getOptions().hwImplicitBitangents=false;}catch(e){/* option absent */}// Shadow occlusion from a variance map; safe everywhere since
 // the default u_shadowMap is white and reads as fully lit.
+// generatePreviewSourcesUnlocked rewrites this per generation.
 try{ctx.getOptions().hwShadowMap=true;}catch(e){/* option absent */}// Direct light, like the official viewer's registerLights():
 // binds directional_light (id 1) from any <directional_light>
 // in environment_map.mtlx via DOMParser; no rig means pure IBL.
@@ -92,7 +116,7 @@ try{const HwGen=mx.HwShaderGenerator;if(HwGen&&HwGen.bindLightShader&&ldef){try{
 for(const[name,id]of[['ND_point_light',LIGHT_TYPE_POINT],['ND_spot_light',LIGHT_TYPE_SPOT]]){try{const def=stdlib.getNodeDef?stdlib.getNodeDef(name):null;if(def)HwGen.bindLightShader(def,id,ctx);}catch(e){console.warn('light shader '+name+' unavailable:',e);}}// Capacity covers the rig, the reserved env key-light
 // slot and STAGE_LIGHT_SLOTS for imported USD lights;
 // a bound array's length can never change afterwards.
-const opts=ctx.getOptions();opts.hwMaxActiveLightSources=Math.max(opts.hwMaxActiveLightSources||0,rigLights.length+1+STAGE_LIGHT_SLOTS);}}catch(e){console.warn('direct-light registration unavailable:',e);}};return fetch('./environment_map.mtlx').then(r=>r.ok?r.text():null).catch(()=>null).then(rigXml=>{const lightData=[];try{const HwGen=mx.HwShaderGenerator;ldef=stdlib.getNodeDef?stdlib.getNodeDef('ND_directional_light'):null;if(HwGen&&HwGen.bindLightShader&&ldef){// Parses <directional_light> via DOMParser,
+const opts=ctx.getOptions();mxRigLightCount=rigLights.length;opts.hwMaxActiveLightSources=Math.max(opts.hwMaxActiveLightSources||0,rigLights.length+1+STAGE_LIGHT_SLOTS);}}catch(e){console.warn('direct-light registration unavailable:',e);}};return fetch('./environment_map.mtlx').then(r=>r.ok?r.text():null).catch(()=>null).then(rigXml=>{const lightData=[];try{const HwGen=mx.HwShaderGenerator;ldef=stdlib.getNodeDef?stdlib.getNodeDef('ND_directional_light'):null;if(HwGen&&HwGen.bindLightShader&&ldef){// Parses <directional_light> via DOMParser,
 // which handles self-closing tags unlike
 // regex. Parse failure warns, never throws.
 if(rigXml){try{const rigDoc=new DOMParser().parseFromString(rigXml,'text/xml');const perr=rigDoc.getElementsByTagName('parsererror');if(perr.length){console.warn('direct-light rig: environment_map.mtlx failed to parse as XML, no rig lights loaded.',perr[0].textContent);}else{const v3=(str,fb)=>{if(!str)return fb;const p=str.split(',').map(x=>parseFloat(x.trim()));return p.length===3&&!p.some(isNaN)?p:fb;};const lightEls=rigDoc.getElementsByTagName('directional_light');for(let i=0;i<lightEls.length;i++){const lightEl=lightEls[i];// Scoped to lightEl's own subtree,
@@ -131,7 +155,10 @@ p.then(()=>{mxLockDepth--;},()=>{mxLockDepth--;});return p;}// Tripwire for sync
 const mxWarnIfLocked=name=>{if(mxLockDepth>0&&!mxExclusiveHeldSync){console.warn('[mtlx] '+name+' called while an exclusive wasm operation is in flight, possible heap-detach hazard; route this call through mxExclusive.');}};// Logs generated GLSL + discovered uniforms, fastest way to diagnose a
 // black/non-running shader. Opt in via localStorage 'mtlxDebugShaders'.
 // Read once at module load, mirroring MTLX_PERF_LOG (js/graph/model.jsx).
-const DEBUG_SHADERS=(()=>{try{return!!localStorage.getItem('mtlxDebugShaders');}catch(e){return false;}})();// Gated console.warn for expected/recoverable conditions (e.g. a missing
+const DEBUG_SHADERS=(()=>{try{return!!localStorage.getItem('mtlxDebugShaders');}catch(e){return false;}})();// Publish the perf-log flag here too, so engine [mtlx-perf] logs fire even
+// on views that never load js/graph/model.jsx (#!viewer, #!scene, embeds).
+// Never clobbers an already-true value set by another loader.
+try{if(!window.MTLX_PERF_LOG&&localStorage.getItem('mtlxPerfLog')){window.MTLX_PERF_LOG=true;}}catch(e){/* ignore */}// Gated console.warn for expected/recoverable conditions (e.g. a missing
 // texture) that would otherwise spam every load; real warnings stay
 // ungated. Exported as window.mtlxWarn for consumers loaded after this file.
 const mtlxWarn=(...args)=>{if(DEBUG_SHADERS)console.warn(...args);};// "Force Transparency" (Settings dialog, default off). Off = official-
@@ -150,7 +177,34 @@ LIVE_VIEWS.forEach(view=>{try{view.refreshRenderMode&&view.refreshRenderMode();}
 // blended mode was collapsed into this one flag). renderFrame()/
 // syncMeshMaterialMode() gate the peel graph on FORCE_TRANSPARENCY &&
 // (this material's hwTransparency verdict), see PEEL_LAYERS/getDummyTex.
-// Experimental, opt-in: mx_heighttonormal_vector3 (MaterialX 1.39) derives
+// Accepts the loose boolean spellings the URL query params use (1/0,
+// true/false, on/off, yes/no, any case); returns null when unrecognized
+// so callers can fall back instead of misreading garbage as false.
+const parseBoolFlag=raw=>{const s=String(raw).trim().toLowerCase();if(s==='1'||s==='true'||s==='on'||s==='yes')return true;if(s==='0'||s==='false'||s==='off'||s==='no')return false;return null;};// "Displacement" (Settings dialog, default on). Off skips the CPU-side
+// mesh displacement pass (js/shared/mesh-displacement.js) and previews
+// the undisplaced mesh. Same persist/{persist:false} contract as above.
+let DISPLACEMENT_ENABLED=(()=>{try{const qs=new URLSearchParams(window.location.search);if(qs.has('displacement')){const parsed=parseBoolFlag(qs.get('displacement'));if(parsed!==null)return parsed;}return localStorage.getItem('mtlxDisplacement')!=='0';}catch(e){return true;}})();const getDisplacementEnabled=()=>DISPLACEMENT_ENABLED;const setDisplacementEnabled=(v,{persist=true}={})=>{DISPLACEMENT_ENABLED=!!v;if(persist&&window.self===window.top){try{localStorage.setItem('mtlxDisplacement',DISPLACEMENT_ENABLED?'1':'0');}catch(e){/* best-effort */}}LIVE_VIEWS.forEach(view=>{try{view.refreshDisplacement&&view.refreshDisplacement();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'displacement',value:DISPLACEMENT_ENABLED}}));}catch(e){/* best-effort */}};// Displacement shading-normal mode (Settings/test hook): 'analytic' derives
+// the normal from two extra tangent-offset evaluations of the displacement
+// network per vertex (crisp creases, matches the analytic surface); 'mesh'
+// keeps the older angle-weighted recompute over the displaced triangles.
+let DISPLACEMENT_NORMALS_MODE=(()=>{try{const qs=new URLSearchParams(window.location.search);if(qs.has('displacementnormals')){const v=qs.get('displacementnormals');if(v==='analytic'||v==='mesh')return v;}const raw=localStorage.getItem('mtlxDisplacementNormals');if(raw==='analytic'||raw==='mesh')return raw;// Default to 'mesh' until the analytic path is verified free of the
+// terracing seen on egg_normals (readback precision fix pending
+// verification); 'analytic' stays selectable via query/localStorage.
+return'mesh';}catch(e){return'mesh';}})();const getDisplacementNormalsMode=()=>DISPLACEMENT_NORMALS_MODE;const setDisplacementNormalsMode=(v,{persist=true}={})=>{if(v!=='analytic'&&v!=='mesh')return;DISPLACEMENT_NORMALS_MODE=v;if(persist&&window.self===window.top){try{localStorage.setItem('mtlxDisplacementNormals',DISPLACEMENT_NORMALS_MODE);}catch(e){/* best-effort */}}LIVE_VIEWS.forEach(view=>{try{view.refreshDisplacement&&view.refreshDisplacement();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'displacementNormals',value:DISPLACEMENT_NORMALS_MODE}}));}catch(e){/* best-effort */}};// Preview subdivision level (Settings dialog, default 2, 0..3). Feeds
+// mesh-subdivision.js's Loop subdivision ahead of CPU displacement;
+// pickSubdivisionLevel below caps it per-mesh against a triangle budget.
+let PREVIEW_SUBDIVISION_LEVEL=(()=>{try{const qs=new URLSearchParams(window.location.search);if(qs.has('previewsubdivision')){const n=Number(qs.get('previewsubdivision'));if(Number.isInteger(n)&&n>=0&&n<=3)return n;}const raw=localStorage.getItem('mtlxPreviewSubdivision');if(raw!==null){const stored=Number(raw);if(Number.isInteger(stored)&&stored>=0&&stored<=3)return stored;}return 2;}catch(e){return 2;}})();const getPreviewSubdivisionLevel=()=>PREVIEW_SUBDIVISION_LEVEL;const setPreviewSubdivisionLevel=(level,{persist=true}={})=>{const n=Number(level);if(!Number.isFinite(n))return;// non-numeric input is ignored
+const clamped=Math.min(3,Math.max(0,Math.round(n)));PREVIEW_SUBDIVISION_LEVEL=clamped;if(persist&&window.self===window.top){try{localStorage.setItem('mtlxPreviewSubdivision',String(PREVIEW_SUBDIVISION_LEVEL));}catch(e){/* best-effort */}}LIVE_VIEWS.forEach(view=>{try{view.refreshDisplacement&&view.refreshDisplacement();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'previewSubdivision',value:PREVIEW_SUBDIVISION_LEVEL}}));}catch(e){/* best-effort */}};// Highest triangle count a preview mesh may reach after subdivision,
+// past which the GPU/CPU cost stops being worth the visual gain.
+const PREVIEW_TRIANGLE_BUDGET=1500000;// Highest level <= requestedLevel keeping baseTriangles * 4^level under
+// budget (level 0 always allowed, even if baseTriangles alone exceeds it).
+const pickSubdivisionLevel=(baseTriangles,requestedLevel,budget=PREVIEW_TRIANGLE_BUDGET)=>{let level=0;let triangles=baseTriangles;for(let l=0;l<=requestedLevel;l++){const t=baseTriangles*Math.pow(4,l);if(l===0||t<=budget){level=l;triangles=t;}else{break;}}return{level,capped:level<requestedLevel||triangles>budget,triangles,allowed:triangles<=budget};};// LRU (3 entries) of undisplaced subdivided base geometries, shared by
+// every createMtlxRenderView shell; each view takes a CLONE (see
+// ensureBaseGeometry below), the cache keeps its own.
+const BASE_GEOM_CACHE_LIMIT=3;const BASE_GEOM_CACHE=new Map();// key -> BufferGeometry, insertion order = LRU order
+const baseGeomCacheKey=(geomName,sceneModeKey,level)=>geomName+'|'+(geomName==='custom'?CUSTOM_GEOM.epoch:'0')+'|'+(sceneModeKey||'')+'|'+level;const baseGeomCacheGet=key=>{const hit=BASE_GEOM_CACHE.get(key);if(!hit)return null;// Refresh recency: delete + re-set moves it to the end of the Map's
+// insertion order, which the eviction loop below treats as newest.
+BASE_GEOM_CACHE.delete(key);BASE_GEOM_CACHE.set(key,hit);return hit;};const baseGeomCacheSet=(key,geometry)=>{BASE_GEOM_CACHE.set(key,geometry);while(BASE_GEOM_CACHE.size>BASE_GEOM_CACHE_LIMIT){const oldestKey=BASE_GEOM_CACHE.keys().next().value;const oldest=BASE_GEOM_CACHE.get(oldestKey);BASE_GEOM_CACHE.delete(oldestKey);try{oldest.dispose();}catch(e){/* already disposed/invalid */}}};// Experimental, opt-in: mx_heighttonormal_vector3 (MaterialX 1.39) derives
 // its height gradient from screen-space derivatives divided by the UV
 // Jacobian, so on a high-resolution height texture a single-texel step
 // reads as an enormous per-pixel slope (speckle). When on, call sites
@@ -166,7 +220,16 @@ let HEIGHT_TO_NORMAL_TEXEL=(()=>{try{const qs=new URLSearchParams(window.locatio
 // sampling default, kept for side-by-side comparison; its 16 samples are
 // what put per-pixel white specks on low-roughness surfaces under a map
 // with a small bright sun.
-let SPECULAR_ENV_METHOD=(()=>{try{const qs=new URLSearchParams(window.location.search);if(qs.has('specularEnv'))return qs.get('specularEnv')==='fis'?'fis':'prefilter';return localStorage.getItem('mtlx_specular_env')==='fis'?'fis':'prefilter';}catch(e){return'prefilter';}})();const getSpecularEnvMethod=()=>SPECULAR_ENV_METHOD;const getHeightToNormalTexel=()=>HEIGHT_TO_NORMAL_TEXEL;const setHeightToNormalTexel=(v,{persist=true}={})=>{HEIGHT_TO_NORMAL_TEXEL=!!v;if(persist){try{localStorage.setItem('mtlxHeightToNormalTexel',HEIGHT_TO_NORMAL_TEXEL?'1':'0');}catch(e){/* best-effort */}}// Generation-affecting: existing compiled sources bake in the old
+let SPECULAR_ENV_METHOD=(()=>{try{const qs=new URLSearchParams(window.location.search);if(qs.has('specularEnv'))return qs.get('specularEnv')==='fis'?'fis':'prefilter';return localStorage.getItem('mtlx_specular_env')==='fis'?'fis':'prefilter';}catch(e){return'prefilter';}})();const getSpecularEnvMethod=()=>SPECULAR_ENV_METHOD;// Diffuse environment irradiance method. 'convolve' cosine-convolves the
+// radiance map directly on the GPU into a lat-long irradiance map, accurate
+// under small bright lights where the SH l<=2 reconstruction below loses
+// about 9% of a studio softbox's energy (see
+// scratchpad/displacement-verified/color-parity/direct-scale/direct-scale.md).
+// 'sh' is the original 9-coefficient spherical-harmonic path, kept as the
+// safe-fail target and the one embeds stay pinned to until verified there.
+let DIFFUSE_ENV_METHOD=(()=>{try{if(window.MTLX_DIFFUSE_ENV==='sh'||window.MTLX_DIFFUSE_ENV==='convolve')return window.MTLX_DIFFUSE_ENV;const qs=new URLSearchParams(window.location.search);if(qs.has('diffuseEnv'))return qs.get('diffuseEnv')==='sh'?'sh':'convolve';return localStorage.getItem('mtlx_diffuse_env')==='sh'?'sh':'convolve';}catch(e){return'convolve';}})();const getDiffuseEnvMethod=()=>DIFFUSE_ENV_METHOD;const setDiffuseEnvMethod=(v,{persist=true}={})=>{DIFFUSE_ENV_METHOD=v==='sh'?'sh':'convolve';if(persist){try{localStorage.setItem('mtlx_diffuse_env',DIFFUSE_ENV_METHOD);}catch(e){/* best-effort */}}// Not generation-affecting: same lookup, same uniform, just a rebind,
+// so listeners re-run their environment effect, not a recompile.
+try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'diffuseEnvMethod',value:DIFFUSE_ENV_METHOD}}));}catch(e){/* best-effort */}};const getHeightToNormalTexel=()=>HEIGHT_TO_NORMAL_TEXEL;const setHeightToNormalTexel=(v,{persist=true}={})=>{HEIGHT_TO_NORMAL_TEXEL=!!v;if(persist){try{localStorage.setItem('mtlxHeightToNormalTexel',HEIGHT_TO_NORMAL_TEXEL?'1':'0');}catch(e){/* best-effort */}}// Generation-affecting: existing compiled sources bake in the old
 // rewrite decision, so every live view must recompile its materials,
 // mirroring how forceTransparency's setter above nudges live views.
 try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'heightToNormalTexel',value:HEIGHT_TO_NORMAL_TEXEL}}));}catch(e){/* best-effort */}};// Nearest transparent layers the peel loop resolves before giving up on
@@ -211,13 +274,20 @@ const estimateFragmentUniformVectors=fs=>{const defines=new Map();const defineRe
 // generated version line to avoid a duplicate-directive compile error.
 const stripVersion=src=>src.replace(/^\s*#version[^\n]*\n/,'');// Scrapes `in <type> i_<name>;` vertex attribute declarations from the
 // vertex stage. Returns [{ type, name }, ...].
-const parseVertexInputs=vs=>{const out=[];const re=/^\s*in\s+(\w+)\s+(i_\w+)\s*;/gm;let m;while((m=re.exec(vs))!==null)out.push({type:m[1],name:m[2]});return out;};// ESSL's geompropvalue node names both the vertex input and the vertex-data
+const parseVertexInputs=vs=>{const out=[];const re=/^\s*in\s+(\w+)\s+(i_\w+)\s*;/gm;let m;while((m=re.exec(vs))!==null)out.push({type:m[1],name:m[2]});return out;};// Integer geomprop varyings need GLSL ES 3.00's "flat" qualifier, and every
+// stream this viewer binds is a Float32 attribute, so the vertex ATTRIBUTE
+// side is redeclared as the matching float type and rounded back to int
+// for the varying and any other in-stage use.
+const INT_GEOMPROP_TYPES={int:'float',ivec2:'vec2',ivec3:'vec3',ivec4:'vec4',uint:'float',uvec2:'vec2',uvec3:'vec3',uvec4:'vec4'};const isIntGeompropType=type=>Object.prototype.hasOwnProperty.call(INT_GEOMPROP_TYPES,type);// ESSL's geompropvalue node names both the vertex input and the vertex-data
 // connector "i_geomprop_<name>" (the GLSL generator hides this behind a
 // vd. struct; ESSL emits flat varyings), producing a redefinition of the
 // "out" declaration and an invalid self-assignment connector line. Renames
 // only the connector side to "vd_geomprop_<name>" in both stages. No match
 // is a no-op (fail-soft): shaders without geompropvalue are untouched.
-const patchGeompropVaryings=(vs,fs)=>{const outRe=/^\s*out\s+(\w+)\s+i_geomprop_(\w+)\s*;/gm;const hasOut=outRe.test(vs);const inRe=/^\s*in\s+\w+\s+i_geomprop_\w+\s*;/m;if(!hasOut&&inRe.test(vs)){mtlxWarn('mtlx-engine: found a vertex "in i_geomprop_*" without a matching "out", patchGeompropVaryings skipped.');}const patchedVs=vs.replace(/^\s*out\s+(\w+)\s+i_geomprop_(\w+)\s*;/gm,'out $1 vd_geomprop_$2;').replace(/^(\s*)i_geomprop_(\w+)\s*=\s*i_geomprop_\2\s*;/gm,'$1vd_geomprop_$2 = i_geomprop_$2;');const patchedFs=fs.replace(/\bi_geomprop_(\w+)\b/g,'vd_geomprop_$1');return{vs:patchedVs,fs:patchedFs};};// Finds CALL sites of fnName in GLSL source text (not its definition:
+const patchGeompropVaryings=(vs,fs)=>{const outRe=/^\s*out\s+(\w+)\s+i_geomprop_(\w+)\s*;/gm;const hasOut=outRe.test(vs);const inRe=/^\s*in\s+\w+\s+i_geomprop_\w+\s*;/m;if(!hasOut&&inRe.test(vs)){mtlxWarn('mtlx-engine: found a vertex "in i_geomprop_*" without a matching "out", patchGeompropVaryings skipped.');}// Connector type per geomprop name, gathered before any rewrite.
+const connectorTypes=new Map();outRe.lastIndex=0;let om;while((om=outRe.exec(vs))!==null)connectorTypes.set(om[2],om[1]);const vsLines=vs.split('\n').map(line=>{const declMatch=line.match(/^(\s*)in\s+(\w+)\s+i_geomprop_(\w+)\s*;/);if(declMatch){const[,indent,type,name]=declMatch;const floatType=INT_GEOMPROP_TYPES[type];return floatType?`${indent}in ${floatType} i_geomprop_${name};`:line;}const outMatch=line.match(/^(\s*)out\s+(\w+)\s+i_geomprop_(\w+)\s*;/);if(outMatch){const[,indent,type,name]=outMatch;return`${indent}${isIntGeompropType(type)?'flat ':''}out ${type} vd_geomprop_${name};`;}const connMatch=line.match(/^(\s*)i_geomprop_(\w+)\s*=\s*i_geomprop_\2\s*;/);if(connMatch){const[,indent,name]=connMatch;const type=connectorTypes.get(name);return isIntGeompropType(type)?`${indent}vd_geomprop_${name} = ${type}(round(i_geomprop_${name}));`:`${indent}vd_geomprop_${name} = i_geomprop_${name};`;}// Any other in-stage use of an integer geomprop (e.g. displacement
+// reading it directly) rounds the float attribute back to its int type.
+let out=line;for(const[name,type]of connectorTypes){if(!isIntGeompropType(type))continue;out=out.replace(new RegExp('\\bi_geomprop_'+name+'\\b','g'),`${type}(round(i_geomprop_${name}))`);}return out;});const patchedVs=vsLines.join('\n');const patchedFs=fs.replace(/\bi_geomprop_(\w+)\b/g,'vd_geomprop_$1').replace(/^(\s*)in\s+(\w+)\s+vd_geomprop_(\w+)\s*;/gm,(full,indent,type,name)=>`${indent}${isIntGeompropType(type)?'flat ':''}in ${type} vd_geomprop_${name};`);return{vs:patchedVs,fs:patchedFs};};// Finds CALL sites of fnName in GLSL source text (not its definition:
 // generated fragment sources inline the library function body right
 // above its call sites, and a naive non-greedy ")...;" regex matches
 // INTO that definition's body instead of stopping at its own params).
@@ -351,7 +421,7 @@ const patchScenePhysicalLightFalloff=(src,sceneRgbt=false)=>{if(!sceneRgbt)retur
 // hardware sRGB OETF only, no tone map (hwSrgbEncodeOutput false, GenOptions.h:92).
 const TONE_CURVE_GLSL=(mode,pad)=>{const p=pad||'        ';if(mode==='aces'){// three r128's Hill fit of the ACES RRT+ODT, kept byte-identical to the
 // tonemapping_pars_fragment chunk so the two paths agree exactly.
-return p+'const mat3 _acesIn = mat3(\n'+p+'    vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n'+p+'    vec3(0.04823, 0.01566, 0.83777)\n'+p+');\n'+p+'const mat3 _acesOut = mat3(\n'+p+'    vec3( 1.60475, -0.10208, -0.00327), vec3(-0.53108,  1.10813, -0.07276),\n'+p+'    vec3(-0.07367, -0.00605,  1.07602)\n'+p+');\n'+p+'_c *= (1.0 / 0.6); // three\'s ACES normalisation constant, not an exposure\n'+p+'_c = _acesIn * _c;\n'+p+'vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n'+p+'vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n'+p+'_c = _acesOut * (_aces_a / _aces_b);\n';}if(mode==='neutral'){// Khronos PBR Neutral. Preserves the hue and saturation of in-gamut
+return p+'const mat3 _acesIn = mat3(\n'+p+'    vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383),\n'+p+'    vec3(0.04823, 0.01566, 0.83777)\n'+p+');\n'+p+'const mat3 _acesOut = mat3(\n'+p+'    vec3( 1.60475, -0.10208, -0.00327), vec3(-0.53108,  1.10813, -0.07276),\n'+p+'    vec3(-0.07367, -0.00605,  1.07602)\n'+p+');\n'+p+'_c = _acesIn * _c;\n'+p+'vec3 _aces_a = _c * (_c + vec3(0.0245786)) - vec3(0.000090537);\n'+p+'vec3 _aces_b = _c * (0.983729 * _c + vec3(0.4329510)) + vec3(0.238081);\n'+p+'_c = _acesOut * (_aces_a / _aces_b);\n';}if(mode==='neutral'){// Khronos PBR Neutral. Preserves the hue and saturation of in-gamut
 // colour and rolls only the highlights toward white, where the ACES fit
 // skews saturated hues badly (see studioInverseAcesSrgbGlsl's own note).
 // Written as a block rather than the reference function's early returns
@@ -463,10 +533,14 @@ let out=fs.replace(call,'occlusion = 1.0;');// Caches shadow visibility per reso
 const lightLoop='        // Light loop\n';const transmitCacheInit=skipTransmittance?'':'        vec3 mx_shadowTransmit['+SHADOW_FACE_SLOTS+'];\n'+'        for (int mx_transmitIndex = 0; mx_transmitIndex < '+SHADOW_FACE_SLOTS+'; ++mx_transmitIndex) {\n'+'            mx_shadowTransmit[mx_transmitIndex] = vec3(-1.0);\n'+'        }\n';const cacheDecl='        float mx_shadowVisibility['+SHADOW_FACE_SLOTS+'];\n'+'        for (int mx_shadowIndex = 0; mx_shadowIndex < '+SHADOW_FACE_SLOTS+'; ++mx_shadowIndex) {\n'+'            mx_shadowVisibility[mx_shadowIndex] = -1.0;\n'+'        }\n'+transmitCacheInit+'        vec3 mx_shadowNormal = '+shadowNormalExpr+';\n\n';if(out.indexOf(lightLoop)!==-1&&out.indexOf('mx_shadowVisibility[')===-1){out=out.replace(lightLoop,cacheDecl+lightLoop);}const shadowPerCaster=out.indexOf('mx_shadowVisibility[')!==-1?'\n                if (mx_face < 0) {'+'\n                    occlusion = 1.0;'+'\n                } else if (mx_shadowVisibility[mx_face] < -0.5) {'+'\n                    mx_shadowVisibility[mx_face] = mx_shadow_atlas(mx_face, positionWorld, mx_shadowNormal);'+'\n                    occlusion = mx_shadowVisibility[mx_face];'+'\n                } else {'+'\n                    occlusion = mx_shadowVisibility[mx_face];'+'\n                }':'\n                occlusion = mx_shadow_atlas(mx_face, positionWorld, '+shadowNormalExpr+');';// Resolves a light slot to an atlas face: faceCount 1 maps straight
 // through, faceCount >= 2 (an omni/area cube group) expresses the
 // shaded point in the group's basis and picks the face by major axis.
-out=out.replace(site,site+'\n            {'+'\n                int mx_slotFace = u_shadowSlotFace[activeLightIndex];'+'\n                int mx_slotCount = u_shadowSlotFaceCount[activeLightIndex];'+'\n                int mx_face = -1;'+'\n                if (mx_slotFace >= 0) {'+'\n                    if (mx_slotCount >= 2) {'+'\n                        vec3 mx_faceVec = positionWorld - u_shadowFaceOrigin[mx_slotFace];'+'\n                        vec3 mx_faceLocal = vec3('+'\n                            dot(mx_faceVec, u_shadowFaceBasisX[mx_slotFace]),'+'\n                            dot(mx_faceVec, u_shadowFaceBasisY[mx_slotFace]),'+'\n                            dot(mx_faceVec, u_shadowFaceBasisZ[mx_slotFace]));'+'\n                        vec3 mx_faceAbs = abs(mx_faceLocal);'+'\n                        int mx_axis;'+'\n                        if (mx_faceAbs.x >= mx_faceAbs.y && mx_faceAbs.x >= mx_faceAbs.z) mx_axis = mx_faceLocal.x >= 0.0 ? 0 : 1;'+'\n                        else if (mx_faceAbs.y >= mx_faceAbs.x && mx_faceAbs.y >= mx_faceAbs.z) mx_axis = mx_faceLocal.y >= 0.0 ? 2 : 3;'+'\n                        else mx_axis = mx_faceLocal.z >= 0.0 ? 4 : 5;'+'\n                        mx_face = mx_slotFace + mx_axis;'+'\n                        if (u_shadowFaceValid[mx_face] < 0.5) mx_face = -1;'+'\n                    } else {'+'\n                        mx_face = mx_slotFace;'+'\n                    }'+'\n                }'+shadowPerCaster// Thin translucent and subsurface closures ignore ClosureData.occlusion,
-// so scale the source radiance once and clear the closure term: every
-// direct closure then sees exactly one factor of visibility.
-+(skipTransmittance?'':'\n                vec3 mx_transmit = vec3(1.0);'+'\n                if (mx_face < 0) {'+'\n                    mx_transmit = vec3(1.0);'+'\n                } else if (mx_shadowTransmit[mx_face].x < -0.5) {'+'\n                    mx_shadowTransmit[mx_face] = mx_shadow_transmittance(mx_face, positionWorld, mx_shadowNormal);'+'\n                    mx_transmit = mx_shadowTransmit[mx_face];'+'\n                } else {'+'\n                    mx_transmit = mx_shadowTransmit[mx_face];'+'\n                }')+'\n                lightShader.intensity *= occlusion * '+(skipTransmittance?'':'mx_transmit * ')+'u_shadowDiagnosticVisibilityScale;'+'\n                occlusion = 1.0;'+'\n            }');if(out.indexOf('uniform sampler2D u_shadowAtlas;')!==-1)return out;const decl=['uniform sampler2D u_shadowAtlas;','uniform mat4 u_shadowMatrices['+SHADOW_FACE_SLOTS+'];',// xy = tile origin in atlas UV, zw = tile size.
+out=out.replace(site,site+'\n            {'+'\n                int mx_slotFace = u_shadowSlotFace[activeLightIndex];'+'\n                int mx_slotCount = u_shadowSlotFaceCount[activeLightIndex];'+'\n                int mx_face = -1;'+'\n                if (mx_slotFace >= 0) {'+'\n                    if (mx_slotCount >= 2) {'+'\n                        vec3 mx_faceVec = positionWorld - u_shadowFaceOrigin[mx_slotFace];'+'\n                        vec3 mx_faceLocal = vec3('+'\n                            dot(mx_faceVec, u_shadowFaceBasisX[mx_slotFace]),'+'\n                            dot(mx_faceVec, u_shadowFaceBasisY[mx_slotFace]),'+'\n                            dot(mx_faceVec, u_shadowFaceBasisZ[mx_slotFace]));'+'\n                        vec3 mx_faceAbs = abs(mx_faceLocal);'+'\n                        int mx_axis;'+'\n                        if (mx_faceAbs.x >= mx_faceAbs.y && mx_faceAbs.x >= mx_faceAbs.z) mx_axis = mx_faceLocal.x >= 0.0 ? 0 : 1;'+'\n                        else if (mx_faceAbs.y >= mx_faceAbs.x && mx_faceAbs.y >= mx_faceAbs.z) mx_axis = mx_faceLocal.y >= 0.0 ? 2 : 3;'+'\n                        else mx_axis = mx_faceLocal.z >= 0.0 ? 4 : 5;'+'\n                        mx_face = mx_slotFace + mx_axis;'+'\n                        if (u_shadowFaceValid[mx_face] < 0.5) mx_face = -1;'+'\n                    } else {'+'\n                        mx_face = mx_slotFace;'+'\n                    }'+'\n                }'+shadowPerCaster// Keep scalar shadow visibility in ClosureData.occlusion. MaterialX
+// closures intentionally consume it differently: ordinary reflection
+// uses the full factor, subsurface softens it toward grazing angles,
+// and the bundled translucent transmission closure ignores it. Do not
+// replace those per-closure rules with a global intensity mask. Colored
+// transmittance still scales source radiance because ClosureData can
+// carry only a scalar visibility term.
++(skipTransmittance?'':'\n                vec3 mx_transmit = vec3(1.0);'+'\n                if (mx_face < 0) {'+'\n                    mx_transmit = vec3(1.0);'+'\n                } else if (mx_shadowTransmit[mx_face].x < -0.5) {'+'\n                    mx_shadowTransmit[mx_face] = mx_shadow_transmittance(mx_face, positionWorld, mx_shadowNormal);'+'\n                    mx_transmit = mx_shadowTransmit[mx_face];'+'\n                } else {'+'\n                    mx_transmit = mx_shadowTransmit[mx_face];'+'\n                }')+'\n                lightShader.intensity *= '+(skipTransmittance?'':'mx_transmit * ')+'u_shadowDiagnosticVisibilityScale;'+'\n            }');if(out.indexOf('uniform sampler2D u_shadowAtlas;')!==-1)return out;const decl=['uniform sampler2D u_shadowAtlas;','uniform mat4 u_shadowMatrices['+SHADOW_FACE_SLOTS+'];',// xy = tile origin in atlas UV, zw = tile size.
 'uniform vec4 u_shadowTiles['+SHADOW_FACE_SLOTS+'];',// Normalized positive light-view Z plane for linear moments.
 'uniform vec4 u_shadowDepthPlanes['+SHADOW_FACE_SLOTS+'];',// x = near, y = far - near, in the same world units used by the
 // authored emitter radius. Kept separate because the normalized
@@ -537,7 +611,59 @@ const patchLightSourceKindStruct=fs=>{const match=fs.match(/struct\s+LightData\s
 // sampleLightSource(), so dot(direction, -L) is the source-side cosine at the
 // current shaded point. The injected sourceKind member avoids overloading the
 // MaterialX light type, which still selects point versus spot attenuation.
-const patchAreaLightSourceCosine=fs=>{const site='L = lightShader.direction;';if(fs.indexOf(site)===-1||fs.indexOf('u_lightData')===-1||fs.indexOf('sourceKind')===-1)return fs;let out=fs.replace(site,site+'\n            if (u_lightData[activeLightIndex].sourceKind == '+LIGHT_SOURCE_KIND_AREA+') {'+'\n                lightShader.intensity *= max(dot(u_lightData[activeLightIndex].direction, -L), 0.0);'+'\n            }');return out;};// Feeds a screen-space ambient occlusion factor into the slot MaterialX
+const patchAreaLightSourceCosine=fs=>{const site='L = lightShader.direction;';if(fs.indexOf(site)===-1||fs.indexOf('u_lightData')===-1||fs.indexOf('sourceKind')===-1)return fs;let out=fs.replace(site,site+'\n            if (u_lightData[activeLightIndex].sourceKind == '+LIGHT_SOURCE_KIND_AREA+') {'+'\n                lightShader.intensity *= max(dot(u_lightData[activeLightIndex].direction, -L), 0.0);'+'\n            }');return out;};// Geometric specular anti-aliasing. standard_surface's generated GLSL
+// evaluates the anisotropic GGX lobe at whatever roughness the shading
+// point's alpha pair carries, one sample per fragment. When that alpha
+// comes from a fine procedural noise network (a fractal3d chain feeding
+// specular_roughness at high object-space frequency, as in
+// egg_brushed_steel), it can vary faster than the pixel footprint, and a
+// single-sample rasterizer turns that into isolated bright specular
+// fireflies a multi-sample path tracer (Karma at 32 spp) integrates away.
+// See scratchpad/displacement-verified/brushed-steel/report.md section 3-4.
+//
+// Widens the alpha pair by the screen-space variance of the shading
+// normal AND of the roughness input that feeds mx_roughness_anisotropy,
+// both taken from dFdx/dFdy (core in GLSL ES 3.00 fragment shaders, no
+// extension needed). A flat normal and a constant roughness leave both
+// variance terms at (near) zero, so smooth, non-noisy materials are left
+// essentially unchanged (verified on the gray sphere, see
+// specular-aa/implementation.md).
+//
+// Insertion anchor: immediately after mx_roughness_anisotropy's MAIN call
+// (not the coat or transmission ones), whose argument/output names are
+// fixed by the standard_surface impl graph across every material using it
+// (not user-authored, same kind of structural name patchDiffuseBounceAdd
+// relies on for base_color_nonnegative_out). Patching after this call
+// widens exactly the alpha pair the generated closures read for both
+// direct and indirect specular, without touching stdlib GLSL.
+//
+// Idempotent: checks for its own marker function name. Safe-fail: no
+// anchor match (a shader shape without this exact standard_surface
+// anisotropy call) leaves the shader untouched.
+const patchSpecularAA=(fs,{specularAA=false}={})=>{if(!specularAA)return fs;if(fs.indexOf('mx_specular_aa_widen')!==-1)return fs;const anchor=/mx_roughness_anisotropy\(coat_affected_roughness_out,\s*specular_anisotropy,\s*main_roughness_out\);/;if(!anchor.test(fs))return fs;let out=fs.replace(anchor,m=>m+'\n    main_roughness_out = mx_specular_aa_widen(main_roughness_out, normal, coat_affected_roughness_out);');const decl=[// sigma2 in variance space: normal-slope variance plus roughness-
+// input variance, both from screen-space derivatives, summed and
+// clamped before being added to alpha^2 (variance-space widening,
+// not a linear roughness add, so a near-zero base alpha does not
+// get disproportionately blown out).
+//
+// Both constants are far below the textbook geometric-specular-AA
+// values (Filament's "specularAntiAliasingVariance"/"...Threshold"
+// defaults, 0.15/0.18): measured on the real engine
+// (specular-aa/implementation.md), the textbook scale saturated the
+// threshold almost everywhere on egg_brushed_steel's egg, not just
+// at the aliasing pixels, because the material's fractal3d
+// roughness noise is fine-grained across essentially the WHOLE
+// surface (it is at the aliasing frequency by design, not merely at
+// isolated outliers), and the analytic-displacement shading normal
+// is likewise a fine per-vertex signal rather than ordinary
+// curvature. Two prior attempts (1.0/1.0 and 0.15/0.18) both made
+// the measured speckle metric WORSE than specularAA off, not
+// better; the smaller scale here is the one that stays a true
+// localized correction instead of a blanket roughening.
+'const float MX_SPECULAR_AA_NORMAL_SCALE = 0.002;','const float MX_SPECULAR_AA_ROUGHNESS_SCALE = 0.005;','const float MX_SPECULAR_AA_THRESHOLD = 0.01;','vec2 mx_specular_aa_widen(vec2 alpha, vec3 aaNormal, float aaRoughness) {','    vec3 dNx = dFdx(aaNormal);','    vec3 dNy = dFdy(aaNormal);','    float dRx = dFdx(aaRoughness);','    float dRy = dFdy(aaRoughness);','    float normalVariance = dot(dNx, dNx) + dot(dNy, dNy);','    float roughnessVariance = dRx * dRx + dRy * dRy;','    float kernelRoughness = min(MX_SPECULAR_AA_NORMAL_SCALE * normalVariance + MX_SPECULAR_AA_ROUGHNESS_SCALE * roughnessVariance, MX_SPECULAR_AA_THRESHOLD);','    vec2 alpha2 = clamp(alpha * alpha + vec2(kernelRoughness), 0.0, 1.0);','    return sqrt(alpha2);','}',''].join('\n');// Same "before the first function definition" anchor as the other
+// fragment patches: the call site lives inside a function that
+// precedes main(), so the helper must be declared earlier still.
+const firstFn=out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);const at=firstFn!==-1?firstFn:out.indexOf('void main(');if(at===-1)return fs;return out.slice(0,at)+decl+out.slice(at);};// Feeds a screen-space ambient occlusion factor into the slot MaterialX
 // already reserves for it. The generator emits, verbatim:
 //
 //     // Ambient occlusion
@@ -555,14 +681,38 @@ const patchAreaLightSourceCosine=fs=>{const site='L = lightShader.direction;';if
 //
 // Fail-soft: no anchor means no AO, and the default 1x1 white map with
 // strength 0 makes the injected code an exact no-op until a pass binds one.
-const patchAmbientOcclusion=(fs,{skipSkyVis=false,skipAoVolume=false}={})=>{const anchor=/(\/\/ Ambient occlusion\s*\n\s*)occlusion = 1\.0;/;if(!anchor.test(fs))return fs;// Sky visibility needs the world position; without that varying only the
+// A file-scope float mirroring the `occlusion` scalar, defaulting to 1.0 so
+// a shader that never runs this patch still compiles and reads as an exact
+// no-op. patchLocalEnvironmentRadiance no longer reads this (see its own
+// comment: `occlusion` only reaches ClosureData.occlusion, which the
+// generated closures read in their direct-light branches, never in
+// CLOSURE_TYPE_INDIRECT, so it was never applied to the local reflection
+// term in the first place). Idempotent: checks for the DECLARATION, not the
+// bare identifier, so an already-inserted assignment (which also contains
+// the identifier text) never fools this into skipping the declaration.
+const ensureEnvOcclusionGlobal=src=>{if(/\bfloat\s+mx_envOcclusionValue\b/.test(src))return src;const decl='float mx_envOcclusionValue = 1.0;\nfloat mx_env_occlusion_value() { return mx_envOcclusionValue; }\n';// Same anchor as patchAmbientOcclusion's own uniform decls below: must
+// land before the FIRST function definition (not just before main()),
+// since the generator can emit the AO/environment-radiance slots inside
+// a surface evaluation function that precedes main.
+const firstFn=src.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);const at=firstFn!==-1?firstFn:src.indexOf('void main(');if(at===-1)return src;return src.slice(0,at)+decl+src.slice(at);};const patchAmbientOcclusion=(fs,{skipSkyVis=false,skipAoVolume=false}={})=>{const anchor=/(\/\/ Ambient occlusion\s*\n\s*)occlusion = 1\.0;/;if(!anchor.test(fs))return fs;// Sky visibility needs the world position; without that varying only the
 // screen space term is available and the volume lookup is skipped.
 // skipSkyVis is the sampler-budget drop: forces the ssao-only path so
 // u_skyVisMap (a sampler3D) is never declared.
 const hasWorldPos=!skipSkyVis&&/\bin\s+vec3\s+positionWorld\s*;/.test(fs)&&/\bin\s+vec3\s+normalWorld\s*;/.test(fs);// The baked occlusion VOLUME (js/usd-scene-skyvis.js's AO bake) is a
 // separate sampler-budget drop from sky visibility; skipAoVolume falls
 // back to the sky-times-ssao combination without it.
-const useVolume=hasWorldPos&&!skipAoVolume;const assignment=!hasWorldPos?'occlusion = mx_ssao_occlusion();':useVolume?'occlusion = mx_sky_visibility() * min(mx_volume_occlusion(), mx_ssao_occlusion());':'occlusion = mx_ssao_occlusion() * mx_sky_visibility();';const out=fs.replace(anchor,'$1'+assignment);const skyDecls=!hasWorldPos?[]:[// Baked coarse visibility of the environment (js/usd-scene-skyvis.js).
+const useVolume=hasWorldPos&&!skipAoVolume;// Mirrors the computed occlusion into a file-scope float (currently
+// unread; kept for diagnostics and any future direct-light consumer).
+// patchLocalEnvironmentRadiance does NOT read this: `occlusion` only
+// reaches ClosureData.occlusion, which the generated conductor/
+// dielectric/generalized_schlick/diffuse closures apply in their
+// CLOSURE_TYPE_REFLECTION (direct light) branches only, never in
+// CLOSURE_TYPE_INDIRECT, so it never darkened the environment radiance
+// Li in the first place. An earlier revision divided the local
+// reflection term by this value to "undo" that non-existent darkening,
+// which amplified it by up to 20x instead (see
+// scratchpad/displacement-verified/reflections/overshoot.md).
+const assignment=!hasWorldPos?'occlusion = mx_ssao_occlusion(); mx_envOcclusionValue = occlusion;':useVolume?'occlusion = mx_sky_visibility() * min(mx_volume_occlusion(), mx_ssao_occlusion()); mx_envOcclusionValue = occlusion;':'occlusion = mx_ssao_occlusion() * mx_sky_visibility(); mx_envOcclusionValue = occlusion;';let out=fs.replace(anchor,'$1'+assignment);out=ensureEnvOcclusionGlobal(out);const skyDecls=!hasWorldPos?[]:[// Baked coarse visibility of the environment (js/usd-scene-skyvis.js).
 // MaterialX's IBL has no visibility term at all, so an interior lit by
 // a dome sees full sky on every surface including ones facing a wall.
 // Screen space AO cannot reach that scale; this can, and the two
@@ -596,7 +746,94 @@ const volumeDecls=!useVolume?[]:['uniform highp sampler3D u_aoVolumeMap;','unifo
 // Only builtins are referenced here, so the top of the function section
 // is always a legal home for it.
 const firstFn=out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);const at=firstFn!==-1?firstFn:out.indexOf('void main(');if(at===-1)return fs;// nothing recognisable: leave the shader untouched
-return out.slice(0,at)+decls+out.slice(at);};// Scene-only correction for the generated OpenPBR thin-wall contract.
+return out.slice(0,at)+decls+out.slice(at);};// Diffuse bounce v3: a REAL one-bounce irradiance estimate, baked per cell
+// from the blockers' own outgoing radiance (js/usd-scene-skyvis.js's
+// bakeBounceGeometry/shadeBounce), not a whole-scene mean. See
+// scratchpad/displacement-verified/color-parity/bounce/v3-design.md for the
+// derivation this replaces (v2's computeBounceERef/marchBounce, which used
+// a global mean and double-counted 1/pi).
+//
+// This is an ADDITIVE term on the shaded colour, not a multiplier on
+// `occlusion`: canonical.md (2026-09-20) found that at a typical Scene
+// shading point the analytic key light (a directional light extracted from
+// the dome's brightest cluster, see extractKeyLight) supplies most of the
+// diffuse irradiance and is evaluated in the ordinary light loop, entirely
+// outside the `occlusion` scalar's reach.
+//
+// Units: the engine's stored irradiance (env.irradianceConvolvedData, see
+// ensureConvolvedIrradiance) is ALREADY divided by pi, matching
+// mx_environment_irradiance's plain map lookup. The bake (shadeBounce) works
+// entirely in that same stored-unit convention, so this shader term applies
+// NO further 1/pi anywhere -- unlike v2's MX_BOUNCE_PI_INV, which divided a
+// term that was already in stored units a second time.
+//
+// The baked volume stores a scalar SH1 (R = L0 mean, GBA = signed L1
+// moment), reconstructed the same way mx_sky_visibility reconstructs its
+// moments, plus two globals: u_bounceScale (the bake's own maximum, so the
+// UNORM8 encoding spans the real range) and u_bounceTint (the blockers'
+// albedo-weighted mean chroma, normalized to luminance 1).
+//
+// Reusing `base_color_nonnegative_out`, standard_surface's own generated
+// albedo variable, keeps this literally the same material albedo
+// standard_surface itself diffuses with, so re-lighting, layering and the
+// ACES display path downstream all see one more ordinary linear-colour
+// contribution, nothing bespoke. Requires `base_color_nonnegative_out` to
+// exist textually (every MaterialEggs asset is standard_surface-based);
+// safe-fails (no injection, shader unchanged) on any other node graph shape.
+//
+// The near-field term is additionally gated by min(mx_volume_occlusion(),
+// mx_ssao_occlusion()) when those helpers are compiled in (patchAmbientOcclusion
+// runs first): a concave corner with almost no local AO should not ALSO gain
+// a full one-bounce lift on top of its shadow deficit (see v3-design.md
+// section 9's "shadow corner" acceptance-criterion note). When the AO volume
+// itself has been dropped from the sampler budget, mx_volume_occlusion is
+// never declared, so this falls back to mx_ssao_occlusion alone rather than
+// referencing an undeclared function.
+const patchDiffuseBounceAdd=(fs,{skipSkyVis=false,skipBounce=false}={})=>{// No trailing `;` in the capture: the addition must land INSIDE this
+// statement, before the semicolon, not appended after it (appending
+// after would split one statement into two, the second being a bare
+// `+ mx_diffuse_bounce_add(...);` expression-statement -- syntactically
+// dubious enough that it hung the ANGLE/D3D11 shader compiler solid on
+// this asset's standard_surface network instead of failing loudly).
+const anchor=/shader_constructor_out\.color \+= occlusion \* (\w+)\.response;/;const match=fs.match(anchor);if(!match)return fs;const hasWorldPos=!skipSkyVis&&!skipBounce&&/\bin\s+vec3\s+positionWorld\s*;/.test(fs)&&/\bin\s+vec3\s+normalWorld\s*;/.test(fs);if(!hasWorldPos)return fs;// Needs the surface's own diffuse albedo in scope at the injection
+// point; standard_surface's generated indirect block always computes
+// this before combining layers. Anything else (a bespoke node graph, a
+// future codegen contract change) safe-fails to no injection.
+if(!/\bvec3\s+base_color_nonnegative_out\b/.test(fs))return fs;// base_color_nonnegative_out is a LOCAL variable inside the function
+// that contains this statement, not reachable from a separately
+// declared global function; pass it as an argument at the call site
+// instead, where it is still in scope.
+const out=fs.replace(anchor,'shader_constructor_out.color += occlusion * $1.response + mx_diffuse_bounce_add(base_color_nonnegative_out);');// patchAmbientOcclusion runs before this function (see the call site),
+// but its own anchor can fail to match (a shader shape with no "//
+// Ambient occlusion" slot at all), in which case NEITHER
+// mx_volume_occlusion NOR mx_ssao_occlusion is declared even though
+// this function's own anchor still matches. Referencing either
+// unconditionally is a real compile-time regression (caught only by a
+// headed render, not by a source-text check): fall back one more step,
+// to no near-field gating at all, when even mx_ssao_occlusion is
+// missing.
+const hasVolumeOcclusion=/float\s+mx_volume_occlusion\s*\(\s*\)\s*\{/.test(out);const hasSsaoOcclusion=/float\s+mx_ssao_occlusion\s*\(\s*\)\s*\{/.test(out);const decls=[// Baked one-bounce irradiance volume (js/usd-scene-skyvis.js's
+// bakeBounceGeometry/shadeBounce), scalar SH1 encoded exactly like
+// mx_sky_visibility's moments.
+'uniform highp sampler3D u_skyBounceMap;','uniform vec3 u_skyBounceMin;','uniform vec3 u_skyBounceSize;','uniform float u_skyBounceCell;','uniform float u_skyBounceStrength;',// The bake's own maximum reconstructed value (denormalizes the
+// UNORM8 encoding) and the blockers' mean chroma (the encoding
+// itself is a single scalar; colour is reintroduced here). Both
+// default to a value that makes the term an exact no-op: scale 0.
+'uniform float u_bounceScale;','uniform vec3 u_bounceTint;','vec3 mx_diffuse_bounce_add(vec3 albedo) {','    if (u_skyBounceStrength <= 0.0 || u_bounceScale <= 0.0) return vec3(0.0);','    vec3 n = normalize(normalWorld);','    if (!gl_FrontFacing) n = -n;','    vec3 uvw = (positionWorld + n * (1.5 * u_skyBounceCell) - u_skyBounceMin) / max(u_skyBounceSize, vec3(1e-6));','    if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) return vec3(0.0);','    vec4 m = texture(u_skyBounceMap, uvw);','    vec3 d = (m.gba * 255.0 - vec3(128.0)) / 127.0;','    float e = u_bounceScale * clamp(m.r + dot(d, n), 0.0, 1.0);','    float near = '+(hasVolumeOcclusion&&hasSsaoOcclusion?'min(mx_volume_occlusion(), mx_ssao_occlusion())':hasSsaoOcclusion?'mx_ssao_occlusion()':'1.0')+';','    return clamp(u_skyBounceStrength, 0.0, 1.0) * near * e * u_bounceTint * albedo;','}',''].join('\n');// Same "before the first function definition" anchor patchAmbientOcclusion
+// uses: the assignment this patches lives inside a function that precedes
+// main(), so the helper has to be declared before that function starts.
+//
+// EXCLUDES mx_ssao_occlusion/mx_sky_visibility/mx_volume_occlusion by
+// name: patchAmbientOcclusion (which always runs first, see the call
+// site) may have already inserted ITS OWN function definitions earlier
+// in the string, and a plain "first function" search would then land
+// INSIDE that block, before those functions are declared -- exactly the
+// GLSL "no matching overloaded function found" a headed embed run
+// caught, because mx_diffuse_bounce_add's own body calls
+// mx_ssao_occlusion()/mx_volume_occlusion() and needs them declared
+// first. Skipping past them here finds the true ORIGINAL first
+// function instead, landing this block right after AO's.
+const firstFn=out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+(?!mx_ssao_occlusion\b|mx_sky_visibility\b|mx_volume_occlusion\b)\w+\s*\(/m);const at=firstFn!==-1?firstFn:out.indexOf('void main(');if(at===-1)return fs;return out.slice(0,at)+decls+out.slice(at);};// Scene-only correction for the generated OpenPBR thin-wall contract.
 // A sheet has no macroscopic interior: its transmission_color is a surface
 // tint regardless of the authored transmission_depth. MaterialX 1.39.5's
 // generated graph only uses geometry_thin_walled for subsurface scattering;
@@ -684,7 +921,49 @@ declIfAbsent('uniform sampler2D u_opaqueColor;')+declIfAbsent('uniform float u_o
 '    vec3 dirOut = refract(dirIn, N, 1.0 / eta);\n'+'    if (dot(dirOut, dirOut) == 0.0) dirOut = dirIn;\n'+// TIR on exit: bounded, no internal bounce
 '    vec3 Ps = Pexit + dirOut * reach;\n'+'    vec4 sampleClip = u_viewProjectionMatrix * vec4(Ps, 1.0);\n'+'    if (sampleClip.w <= 0.0) { mx_sceneRefractionMiss = true; return envTerm; }\n'+'    vec2 uvS = (sampleClip.xy / sampleClip.w) * 0.5 + 0.5;\n'+'    if (uvS.x < 0.0 || uvS.x > 1.0 || uvS.y < 0.0 || uvS.y > 1.0) { mx_sceneRefractionMiss = true; return envTerm; }\n'+// Disocclusion: a nearer opaque sample than this fragment's own
 // depth is a foreground object, not the true background.
-'    float zS = texture(u_opaqueDepth, uvS).r;\n'+'    if (zS < gl_FragCoord.z) { mx_sceneRefractionMiss = true; return envTerm; }\n'+'    float lod = clamp(alpha.x * u_opaqueColorLevels, 0.0, u_opaqueColorLevels);\n'+'    return textureLod(u_opaqueColor, uvS, lod).rgb * tint;\n'+'}\n';gatedReturn='if (u_peelMode != 0) {\n'+'        vec3 envTerm = mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint * '+PEEL_REFRACTION_SCALE+';\n'+'        if (u_peelRefractsScene == 0) return envTerm;\n'+'        return mx_scene_refraction(N, V, alpha, fd, tint, envTerm);\n'+'    }\n    '+returnAnchor;}else{gatedReturn='if (u_peelMode != 0) {\n'+'        return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint * '+PEEL_REFRACTION_SCALE+';\n'+'    }\n    '+returnAnchor;}out=out.slice(0,returnIdx)+gatedReturn+out.slice(returnIdx+returnAnchor.length);out=out.slice(0,transFnIdx)+refractionDecls+'uniform int u_peelMode;\n'+out.slice(transFnIdx);return out;};// Screen-space reflections: reprojects a scene-linear colour buffer along the
+'    float zS = texture(u_opaqueDepth, uvS).r;\n'+'    if (zS < gl_FragCoord.z) { mx_sceneRefractionMiss = true; return envTerm; }\n'+'    float lod = clamp(alpha.x * u_opaqueColorLevels, 0.0, u_opaqueColorLevels);\n'+'    return textureLod(u_opaqueColor, uvS, lod).rgb * tint;\n'+'}\n';gatedReturn='if (u_peelMode != 0) {\n'+'        vec3 envTerm = mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint * '+PEEL_REFRACTION_SCALE+';\n'+'        if (u_peelRefractsScene == 0) return envTerm;\n'+'        return mx_scene_refraction(N, V, alpha, fd, tint, envTerm);\n'+'    }\n    '+returnAnchor;}else{gatedReturn='if (u_peelMode != 0) {\n'+'        return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint * '+PEEL_REFRACTION_SCALE+';\n'+'    }\n    '+returnAnchor;}out=out.slice(0,returnIdx)+gatedReturn+out.slice(returnIdx+returnAnchor.length);out=out.slice(0,transFnIdx)+refractionDecls+'uniform int u_peelMode;\n'+out.slice(transFnIdx);return out;};// Local environment reflections: substitutes a static per-stage cubemap
+// capture (js/usd-scene-localenv.js) into the generated prefilter's `Li`
+// lookup, so a reflective surface sees the studio set it sits in (floor,
+// cyc wall) rather than only the dome. See
+// scratchpad/displacement-verified/reflections/design.md section 5.5.
+//
+// Sits at `Li` INSIDE the function patchScreenSpaceReflection renames to
+// mx_environment_radiance_ibl, so FG, fd.refraction and u_envLightIntensity
+// are all inherited unchanged: the local term is weighted by exactly the
+// same directional albedo the dome term is. This function therefore MUST
+// run before patchScreenSpaceReflection in the call chain (see the call
+// site in generatePreviewSourcesUnlocked); the two patches then compose
+// without either knowing about the other.
+const patchLocalEnvironmentRadiance=(fs,{skipLocalEnv=false,notices=null}={})=>{if(fs.indexOf('mx_local_env_mix')!==-1)return fs;// The generator's own prefilter body (mx_environment_prefilter.glsl),
+// matched verbatim; FIS (no single `Li` assignment) and any shader
+// shape the generator changes underneath us both safe-fail here.
+const anchor='vec3 Li = mx_latlong_map_lookup(L, u_envMatrix, mx_latlong_alpha_to_lod(avgAlpha), u_envRadiance);';const anchorIdx=fs.indexOf(anchor);const usable=anchorIdx!==-1&&/\bin\s+vec3\s+positionWorld\s*;/.test(fs)&&/\bvec2\s+mx_latlong_projection\s*\(/.test(fs);if(skipLocalEnv||!usable){if(anchorIdx!==-1&&!skipLocalEnv&&notices){notices.push('local reflections: shader anchor unusable (missing positionWorld or mx_latlong_projection); reflections stay image based');}return fs;}let out=fs.slice(0,anchorIdx)+anchor+'\n    Li = mx_local_env_mix(Li, positionWorld, L, mx_latlong_alpha_to_lod(avgAlpha));'+fs.slice(anchorIdx+anchor.length);const declIfAbsent=line=>out.indexOf(line)===-1?line+'\n':'';const decls=declIfAbsent('uniform sampler2D u_localEnvRadiance;')+declIfAbsent('uniform float u_localEnvMips;')+declIfAbsent('uniform float u_localEnvStrength;')+declIfAbsent('uniform vec3 u_localEnvProbe;')+declIfAbsent('uniform vec3 u_localEnvBoxMin;')+declIfAbsent('uniform vec3 u_localEnvBoxMax;')+declIfAbsent('uniform int u_localEnvParallax;');const helpers=// P is positionWorld, R is the same L the generated body already
+// computed, so no second reflect.
+'vec3 mx_local_env_direction(vec3 P, vec3 R)\n'+'{\n'+'    if (u_localEnvParallax == 0) return R;\n'+'    vec3 invR = 1.0 / max(abs(R), vec3(1e-6)) * sign(R + vec3(1e-9));\n'+'    vec3 tMax = (u_localEnvBoxMax - P) * invR;\n'+'    vec3 tMin = (u_localEnvBoxMin - P) * invR;\n'+'    vec3 tFar = max(tMax, tMin);\n'+'    float t = min(min(tFar.x, tFar.y), tFar.z);\n'+'    if (!(t > 0.0)) return R;\n'+'    return normalize((P + R * t) - u_localEnvProbe);\n'+'}\n'+// RGB is premultiplied by A (coverage) in the capture; un-multiply
+// here. No occlusion compensation: patchAmbientOcclusion's
+// `occlusion` scalar is wired into ClosureData.occlusion, which the
+// generated closures (mx_conductor_bsdf.glsl etc.) only read in
+// their CLOSURE_TYPE_REFLECTION (direct light) branches, never in
+// CLOSURE_TYPE_INDIRECT, so it never darkens mx_environment_radiance
+// or this substituted Li in the first place. An earlier revision
+// divided by it here to "undo" a darkening that does not happen,
+// amplifying the local term by up to 20x (see
+// scratchpad/displacement-verified/reflections/overshoot.md).
+'vec3 mx_local_env_mix(vec3 domeLi, vec3 P, vec3 R, float lod)\n'+'{\n'+'    if (u_localEnvStrength <= 0.0) return domeLi;\n'+'    vec3 D = mx_local_env_direction(P, R);\n'+'    vec2 uv = mx_latlong_projection(D);\n'+'    vec4 s = textureLod(u_localEnvRadiance, uv, clamp(lod, 0.0, u_localEnvMips - 1.0));\n'+'    float cov = clamp(s.a, 0.0, 1.0);\n'+'    if (cov <= 0.0) return domeLi;\n'+'    vec3 local = s.rgb / max(s.a, 1e-4);\n'+'    return mix(domeLi, local, cov * clamp(u_localEnvStrength, 0.0, 1.0));\n'+'}\n';// Land just above whichever function signature's BODY actually contains
+// the Li anchor: ordinarily that is mx_environment_radiance itself, but
+// if patchScreenSpaceReflection already ran first (not reachable today,
+// skipSsr is hardcoded true, but kept correct for when it is unparked),
+// that function was renamed to mx_environment_radiance_ibl and a NEW
+// mx_environment_radiance wrapper now exists further down, near main;
+// matching by name alone would find that wrapper instead. Take the last
+// signature match that still precedes the anchor.
+const fnAnchorRe=/vec3 mx_environment_radiance(?:_ibl)?\(vec3 N, vec3 V, vec3 X, vec2 alpha, int distribution, FresnelData fd\)[ \t]*\r?\n[ \t]*\{/g;let insertAt=-1;let fnMatch;while(fnMatch=fnAnchorRe.exec(out)){if(fnMatch.index>=anchorIdx)break;insertAt=fnMatch.index;}if(insertAt===-1)insertAt=out.indexOf('void main(');if(insertAt===-1)return fs;// nothing recognisable: leave the shader untouched
+out=out.slice(0,insertAt)+decls+helpers+out.slice(insertAt);// mx_local_env_mix no longer reads mx_env_occlusion_value() (see its own
+// comment), but patchAmbientOcclusion's own writer still needs the
+// mx_envOcclusionValue declaration to exist before its assignment runs.
+// Keep calling it here so whichever patch runs first still gets the
+// declaration in, regardless of order.
+out=ensureEnvOcclusionGlobal(out);return out;};// Screen-space reflections: reprojects a scene-linear colour buffer along the
 // reflection ray for opaque surfaces (history frame) and peel layers (current
 // frame, see mtlx-engine.js's RGB-T per-pass binding). Wraps the generated
 // mx_environment_radiance so every existing IBL call site gains SSR for free.
@@ -783,7 +1062,35 @@ const vecToArray=v=>{if(!v)return[];if(Array.isArray(v))return v;// this vendore
 if(typeof v.size==='function'){const out=[];for(let i=0;i<v.size();i++)out.push(v.get(i));// embind-owned heap vector; materialized elements are independent
 // shared_ptr handles, so free the wrapper. Audited: no caller
 // retains the raw vector (js/ and scripts/ checked).
-if(typeof v.delete==='function'){try{v.delete();}catch(e){/* already freed */}}return out;}return[];};const mxSafe=(fn,fb)=>{try{const v=fn();return v==null?fb:v;}catch(e){return fb;}};const mxElCat=el=>mxSafe(()=>el.getCategory(),'');const mxElType=el=>mxSafe(()=>String(el.getType()),'');const mxElName=el=>mxSafe(()=>el.getName(),'');const mxElAttr=(el,name)=>mxSafe(()=>el.getAttribute(name),'');const mxElHasAttr=(el,name)=>mxSafe(()=>el.hasAttribute(name),false);// Exception-safe single-attribute writes, the wasm binding can throw on
+if(typeof v.delete==='function'){try{v.delete();}catch(e){/* already freed */}}return out;}return[];};const mxSafe=(fn,fb)=>{try{const v=fn();return v==null?fb:v;}catch(e){return fb;}};const mxElCat=el=>mxSafe(()=>el.getCategory(),'');const mxElType=el=>mxSafe(()=>String(el.getType()),'');const mxElName=el=>mxSafe(()=>el.getName(),'');const mxElAttr=(el,name)=>mxSafe(()=>el.getAttribute(name),'');// GLSL leaves pow(x, y) undefined for x < 0, even when y is an exact integer.
+// MaterialX power nodes commonly raise signed procedural noise for bump maps,
+// where that undefined result becomes a NaN normal and erases the whole BSDF
+// layer. Keep library pow calls untouched and route only authored power-node
+// assignments through a real-domain, sign-preserving extension: negative bases
+// with non-integer exponents return -pow(-base, exponent), matching the Karma
+// reference band spacing measured on egg_normals while staying finite.
+const materialPowerNodeNames=doc=>{if(!doc)return[];const nodes=[];try{nodes.push(...vecToArray(doc.getNodes?doc.getNodes():null));}catch(e){/* empty */}try{for(const graph of vecToArray(doc.getNodeGraphs?doc.getNodeGraphs():null)){nodes.push(...vecToArray(graph.getNodes?graph.getNodes():null));}}catch(e){/* empty */}return Array.from(new Set(nodes.filter(node=>mxElCat(node)==='power').map(node=>mxElName(node)).filter(Boolean)));};const materialGeompropDefaults=doc=>{const defaults=new Map();if(!doc)return defaults;const nodes=[];nodes.push(...vecToArray(mxSafe(()=>doc.getNodes?doc.getNodes():null,[])));for(const graph of vecToArray(mxSafe(()=>doc.getNodeGraphs?doc.getNodeGraphs():null,[]))){nodes.push(...vecToArray(mxSafe(()=>graph.getNodes?graph.getNodes():null,[])));}for(const node of nodes){if(mxElCat(node)!=='geompropvalue')continue;let propName='';let value='';for(const input of vecToArray(mxSafe(()=>node.getInputs(),[]))){const inputName=mxSafe(()=>String(input.getName()),'');const inputValue=mxElAttr(input,'value');if(inputName==='geomprop')propName=String(inputValue||'');else if(inputName==='default')value=String(inputValue||'');}if(!propName||!value)continue;const parts=value.split(',').map(part=>Number(part.trim())).filter(Number.isFinite);if(parts.length)defaults.set(propName,parts);}return defaults;};const POWER_NODE_REAL_GLSL=`
+float mx_preview_power_real(float base, float exponent)
+{
+    if (base >= 0.0) return pow(base, exponent);
+    float nearest = floor(exponent);
+    if (exponent != nearest) return -pow(-base, exponent);
+    float magnitude = pow(-base, exponent);
+    return mod(abs(nearest), 2.0) < 0.5 ? magnitude : -magnitude;
+}
+vec2 mx_preview_power_real(vec2 base, vec2 exponent)
+{
+    return vec2(mx_preview_power_real(base.x, exponent.x), mx_preview_power_real(base.y, exponent.y));
+}
+vec3 mx_preview_power_real(vec3 base, vec3 exponent)
+{
+    return vec3(mx_preview_power_real(base.x, exponent.x), mx_preview_power_real(base.y, exponent.y), mx_preview_power_real(base.z, exponent.z));
+}
+vec4 mx_preview_power_real(vec4 base, vec4 exponent)
+{
+    return vec4(mx_preview_power_real(base.x, exponent.x), mx_preview_power_real(base.y, exponent.y), mx_preview_power_real(base.z, exponent.z), mx_preview_power_real(base.w, exponent.w));
+}
+`;const patchMaterialPowerNodes=(fs,nodeNames)=>{if(!fs||!nodeNames||!nodeNames.length)return fs;let patched=fs;let replacements=0;for(const name of nodeNames){const escaped=String(name).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');const assignment=new RegExp('(\\b'+escaped+'_out\\s*=\\s*)pow\\s*\\(','g');patched=patched.replace(assignment,(match,prefix)=>{replacements++;return prefix+'mx_preview_power_real(';});}if(!replacements||patched.includes('float mx_preview_power_real('))return patched;const firstFunction=patched.search(/\bvoid\s+\w+\s*\(/);return firstFunction>=0?patched.slice(0,firstFunction)+POWER_NODE_REAL_GLSL+'\n'+patched.slice(firstFunction):POWER_NODE_REAL_GLSL+'\n'+patched;};const mxElHasAttr=(el,name)=>mxSafe(()=>el.hasAttribute(name),false);// Exception-safe single-attribute writes, the wasm binding can throw on
 // a detached/invalid element, which mxSafe swallows into a `false` return.
 const mxSetAttr=(el,name,value)=>mxSafe(()=>{el.setAttribute(name,value);return true;},false);const mxRemoveAttr=(el,name)=>mxSafe(()=>{el.removeAttribute(name);return true;},false);// Tag an element's colorspace, preferring the typed setColorSpace()
 // binding when present and falling back to the raw attribute otherwise,
@@ -809,7 +1116,33 @@ for(const attr of['uimin','uimax','uisoftmin','uisoftmax','uistep','uiname','uif
 // copy only supplies defaults/metadata.
 if(inp&&wantedType&&mxElType(inp)!==wantedType){mxSafe(()=>{if(typeof inp.setType==='function')inp.setType(wantedType);else inp.setAttribute('type',wantedType);return true;},false);if(mxElType(inp)!==wantedType){mxSetAttr(inp,'type',wantedType);}// A copied default VALUE is malformed for the corrected type,
 // drop it; callers connect or re-value anyway.
-mxRemoveAttr(inp,'value');}if(inp&&wantedType&&mxElType(inp)!==wantedType){mtlxWarn('ensureTypedInput: "'+inputName+'" is "'+mxElType(inp)+'" (wanted "'+wantedType+'"), path='+how);}return inp;};// Sweep run before every writeToXmlString call, fixing two attributes
+mxRemoveAttr(inp,'value');}if(inp&&wantedType&&mxElType(inp)!==wantedType){mtlxWarn('ensureTypedInput: "'+inputName+'" is "'+mxElType(inp)+'" (wanted "'+wantedType+'"), path='+how);}return inp;};// Const-inputs kill switch, default ON. '0' disables it. Read per
+// generation.
+const CONST_INPUTS_KEY='mtlx_const_inputs';const readConstInputs=()=>{try{return localStorage.getItem(CONST_INPUTS_KEY)!=='0';}catch(e){return true;}};// MaterialX input names whose value multiplies compile time: a uniform
+// thin-film thickness keeps the mx_fresnel_airy branch alive and a uniform
+// selector keeps every arm of its if-chain alive, in every closure context.
+const CONST_INPUT_NAMES=['thin_film_thickness','thin_film_ior','thin_film_IOR','thinfilm_thickness','thinfilm_ior','distribution','scatter_mode','retroreflective','energy_compensation','mode'];// Names the Scene's thin-wall / light-transport patches and uniform builders
+// match on by declaration or function signature; never rewrite these.
+const CONST_INPUT_DENY=new Set(['thin_walled','geometry_thin_walled','transmission_weight','transmission_color','transmission_depth','geometry_opacity']);const CONST_INPUT_GLSL_TYPES={float:'float',integer:'int',boolean:'bool'};// The standalone displacement program takes these on top: unifiednoise3d
+// evaluates perlin, cellnoise, worley AND fractal and then switches on
+// `type`, and `style` picks the worley distance metric. Displacement-only,
+// since nothing edits a displacement input live (a change regenerates).
+// `octaves` is deliberately absent: folding the fractal loop bound unrolls
+// it and measured 5 to 12 percent SLOWER to compile.
+const DISPLACEMENT_CONST_INPUT_NAMES=CONST_INPUT_NAMES.concat(['type','style','clampoutput']);const DISPLACEMENT_CONST_INPUTS_KEY='mtlx_displacement_const_inputs';const readDisplacementConstInputs=()=>{try{return localStorage.getItem(DISPLACEMENT_CONST_INPUTS_KEY)!=='0';}catch(e){return true;}};// Deterministic GLSL literal for one introspected default; floats always
+// carry a decimal point (or an exponent). Returns null when unusable.
+const constInputLiteral=(type,data)=>{if(type==='boolean')return data?'true':'false';const n=Number(data);if(!Number.isFinite(n))return null;if(type==='integer')return String(n|0);const s=String(n);return /[.eE]/.test(s)?s:s+'.0';};// Which targeted input an introspected uniform is, or null. Prefers the
+// MaterialX path's last segment; the flattened uniform name is the fallback.
+const constInputKey=(u,names=CONST_INPUT_NAMES)=>{const name=String(u&&u.name||'');if(!name||name.indexOf('u_')===0)return null;// engine/private uniform
+const seg=u.path?String(u.path).split('/').pop():'';if(seg&&names.indexOf(seg)>=0)return seg;for(const n of names){if(name===n||name.endsWith('_'+n))return n;}return null;};// Rewrites `uniform T name;` into `const T name = <literal>;` for the
+// targeted inputs, so the driver can fold their branches away. Only a
+// scalar float/int/bool with exactly one declaration is touched; everything
+// else is left alone. Returns the rewritten sources plus the pruned
+// introspection list, so nothing tries to bind a uniform that is now gone.
+const SELECTOR_CONST_INPUTS=new Set(['mode','type','style']);const constifyInputUniforms=(vs,fs,introspected,names=CONST_INPUT_NAMES)=>{const constInputs=[];const kept=[];let outVs=vs;let outFs=fs;for(const u of introspected){const glslType=CONST_INPUT_GLSL_TYPES[u.type];const key=glslType?constInputKey(u,names):null;// `mode`, `type` and `style` are generic names: only take them when
+// the generator typed them as an enum selector (integer), never a
+// float or boolean input.
+if(!key||CONST_INPUT_DENY.has(String(u.name))||SELECTOR_CONST_INPUTS.has(key)&&u.type!=='integer'){kept.push(u);continue;}const literal=u.data==null?null:constInputLiteral(u.type,u.data);if(literal==null){kept.push(u);continue;}const escaped=String(u.name).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');const declRe=new RegExp('(^|\\n)([ \\t]*)uniform[ \\t]+(?:(?:low|medium|high)p[ \\t]+)?'+glslType+'[ \\t]+'+escaped+'[ \\t]*;','g');const hits=(outVs.match(declRe)||[]).length+(outFs.match(declRe)||[]).length;if(hits!==1){kept.push(u);continue;}const replacement='$1$2const '+glslType+' '+u.name+' = '+literal+';';outVs=outVs.replace(declRe,replacement);outFs=outFs.replace(declRe,replacement);constInputs.push({name:u.name,path:u.path||null,value:u.data});}return{vs:outVs,fs:outFs,introspected:kept,constInputs};};// Sweep run before every writeToXmlString call, fixing two attributes
 // MaterialX's validator rejects: a leftover `value` on a connected
 // input, and `defaultgeomprop` on a node-instance input. Depth-capped walk.
 const stripValuesFromConnectedInputs=(doc,maxDepth)=>{mxWarnIfLocked('stripValuesFromConnectedInputs');// exported doc-mutating helper, see mxWarnIfLocked's header comment
@@ -852,7 +1185,36 @@ const category=COLORSPACE_TO_WORKING_NODE[cs];if(!category){unsupported.add(cs);
 // keep whatever `output` they already named. A nodegraph's own
 // <output> element carries nodename directly rather than through
 // an input, so redirect the element itself as well.
-const redirect=el=>{if(mxElAttr(el,'nodename')!==nodeName)return;if(mxSetAttr(el,'nodename',cmName)){restores.push(()=>mxSetAttr(el,'nodename',nodeName));}};for(const sibling of children){if(sibling===node||sibling===cm)continue;redirect(sibling);for(const input of vecToArray(mxSafe(()=>sibling.getInputs(),[])))redirect(input);}mxRemoveAttr(fileInput,'colorspace');restores.push(()=>mxSetAttr(fileInput,'colorspace',cs));restores.push(()=>mxSafe(()=>parent.removeChild(cmName),null));converted.set(cs,(converted.get(cs)||0)+1);visit(node,depth+1);}};visit(doc,0);const restore=()=>{for(let i=restores.length-1;i>=0;i--)restores[i]();};return{restore,converted,unsupported};};// Doc-level renderable scan: returns [{ name, node }], one entry per
+const redirect=el=>{if(mxElAttr(el,'nodename')!==nodeName)return;if(mxSetAttr(el,'nodename',cmName)){restores.push(()=>mxSetAttr(el,'nodename',nodeName));}};for(const sibling of children){if(sibling===node||sibling===cm)continue;redirect(sibling);for(const input of vecToArray(mxSafe(()=>sibling.getInputs(),[])))redirect(input);}mxRemoveAttr(fileInput,'colorspace');restores.push(()=>mxSetAttr(fileInput,'colorspace',cs));restores.push(()=>mxSafe(()=>parent.removeChild(cmName),null));converted.set(cs,(converted.get(cs)||0)+1);visit(node,depth+1);}};visit(doc,0);const restore=()=>{for(let i=restores.length-1;i>=0;i--)restores[i]();};return{restore,converted,unsupported};};// Scene "Material working space" setting: when the authored network works in
+// ACEScg (Houdini/Karma's default scene-linear space) rather than our own
+// linear Rec.709, every untagged colour NUMBER in the network reads too
+// saturated once compared byte-for-byte with Karma. This inserts the same
+// cmlib conversion applyColorspaceTransforms inserts for tagged textures,
+// but for two things that mechanism never touches: literal color3/color4
+// input VALUES (constants, interface defaults, USD overrides already baked
+// into a value attribute) and colour geomprops (displayColor and friends),
+// whose primvar stream carries no colorspace metadata at all.
+//
+// Only ever called for the Scene, and only when the setting is "acescg";
+// the Viewer/Compare/Builder/Graph previews and every embed never pass the
+// option that enables this. Runs on the LIVE document, so the caller MUST
+// call restore() in a finally.
+const applyMaterialWorkspaceTransforms=(doc,maxDepth)=>{mxWarnIfLocked('applyMaterialWorkspaceTransforms');// exported doc-mutating helper, see mxWarnIfLocked's header comment
+const cap=typeof maxDepth==='number'?maxDepth:10;const restores=[];let converted=0;// Same working-space guard as applyColorspaceTransforms: cmlib's
+// acescg_to_lin_rec709 node converts INTO lin_rec709 only.
+const docSpace=mxElAttr(doc,'colorspace');if(docSpace&&docSpace!=='lin_rec709'){return{restore:()=>{},converted:0,unsupported:new Set(['(document works in "'+docSpace+'", not lin_rec709)'])};}let serial=0;// Wraps `nodeName`'s output (already a color3/color4 node in `parent`)
+// in an acescg_to_lin_rec709 node and redirects every other reference
+// to it, the same redirect-by-attribute technique applyColorspaceTransforms
+// uses for a converted image. Returns true on success.
+const wrapNodeOutput=(parent,children,node,nodeName,type)=>{const cmName='__mtlx_ws_'+serial++ +'_'+nodeName;const cm=mxSafe(()=>parent.addNode('acescg_to_lin_rec709',cmName,type),null);if(!cm)return false;const cmIn=mxSafe(()=>cm.addInput('in',type),null);if(!cmIn||!mxSetAttr(cmIn,'nodename',nodeName)){mxSafe(()=>parent.removeChild(cmName),null);return false;}const redirect=el=>{if(mxElAttr(el,'nodename')!==nodeName)return;if(mxSetAttr(el,'nodename',cmName))restores.push(()=>mxSetAttr(el,'nodename',nodeName));};for(const sibling of children){if(sibling===node||sibling===cm)continue;redirect(sibling);for(const input of vecToArray(mxSafe(()=>sibling.getInputs(),[])))redirect(input);}restores.push(()=>mxSafe(()=>parent.removeChild(cmName),null));return true;};const visit=(parent,depth)=>{if(!parent||depth>cap)return;const children=vecToArray(mxSafe(()=>parent.getChildren(),[]));const nodes=children.filter(c=>mxSafe(()=>typeof c.getInputs==='function'&&typeof c.getCategory==='function',false));for(const node of nodes){const category=mxSafe(()=>node.getCategory(),'');const nodeType=mxSafe(()=>String(node.getType()),'');// geompropvalue's OUTPUT carries the primvar's colour (displayColor
+// and friends): no attribute on it is ever a "value", so it's
+// converted the same way a tagged image's output is, not as a
+// literal input below.
+if(category==='geompropvalue'&&(nodeType==='color3'||nodeType==='color4')&&!mxElHasAttr(node,'colorspace')){const nodeName=mxSafe(()=>node.getName(),null);if(nodeName&&wrapNodeOutput(parent,children,node,nodeName,nodeType))converted+=1;}const inputs=vecToArray(mxSafe(()=>node.getInputs(),[]));for(const inp of inputs){const type=mxSafe(()=>String(inp.getType()),'');if(type!=='color3'&&type!=='color4')continue;// vector3 and float values carry data, never colour
+if(mxElHasAttr(inp,'colorspace'))continue;// explicit tag: caller already knows its space
+if(mxElHasAttr(inp,'nodename')||mxElHasAttr(inp,'nodegraph')||mxElHasAttr(inp,'interfacename')||mxElHasAttr(inp,'output'))continue;// a connection, not a literal value
+const value=mxSafe(()=>inp.getValueString(),null);if(value==null||value==='')continue;const inputName=mxSafe(()=>inp.getName(),null);const nodeName=mxSafe(()=>node.getName(),null);if(!inputName||!nodeName)continue;const cmName='__mtlx_ws_'+serial++ +'_'+nodeName+'_'+inputName;const cm=mxSafe(()=>parent.addNode('acescg_to_lin_rec709',cmName,type),null);if(!cm)continue;const cmIn=mxSafe(()=>cm.addInput('in',type),null);if(!cmIn||!mxSetAttr(cmIn,'value',value)){mxSafe(()=>parent.removeChild(cmName),null);continue;}if(!mxSetAttr(inp,'nodename',cmName)){mxSafe(()=>parent.removeChild(cmName),null);continue;}mxRemoveAttr(inp,'value');restores.push(()=>{mxRemoveAttr(inp,'nodename');mxSetAttr(inp,'value',value);});restores.push(()=>mxSafe(()=>parent.removeChild(cmName),null));converted+=1;}visit(node,depth+1);// nested nodegraphs/compound instances
+}};visit(doc,0);const restore=()=>{for(let i=restores.length-1;i>=0;i--)restores[i]();};return{restore,converted};};// Doc-level renderable scan: returns [{ name, node }], one entry per
 // renderable surface, by TYPE rather than getMaterialNodes(). Live-doc
 // callers need mxExclusive; opts.synthesizeDefinitions adds a third pass.
 const listDocRenderables=(doc,opts)=>{mxWarnIfLocked('listDocRenderables');// exported doc-reading helper, see mxWarnIfLocked's header comment
@@ -931,7 +1293,13 @@ const used=new Uint8Array(src.tokens.length);match.forEach(i=>{if(i>=0)used[i]=1
 // same dropped file after a view rebuild reuses the decoded THREE.Texture
 // instead of a fresh async load, which let the default color flash.
 const TEXTURE_CACHE=new Map();const textureCacheKey=(blob,fallback)=>{if(blob&&blob.name!=null&&blob.size!=null&&blob.lastModified!=null){return blob.name+'|'+blob.size+'|'+blob.lastModified;}return fallback;// e.g. the fileMap key, when identity fields are missing
-};// Parses a dropped .exr Blob via THREE.EXRLoader (pinned to three@0.147.0,
+};// MaterialX image nodes carry sampler address modes independently of the
+// image file. Keep the authored spelling on uniform metadata so one source
+// image can be bound with different wrapping by different nodes.
+const normalizeSamplerAddressMode=value=>{const mode=String(value==null?'':value).trim().toLowerCase();return mode==='clamp'||mode==='mirror'||mode==='periodic'?mode:'periodic';};const readMxInputValue=input=>{if(!input)return'';const attr=mxElAttr(input,'value');if(attr!=null&&String(attr)!=='')return String(attr);return mxSafe(()=>input.getValueString&&input.getValueString(),'');};const collectImageSamplerModes=doc=>{// Qualified paths prevent same-named image nodes in separate nodegraphs
+// from sharing sampler state. A leaf fallback is retained only when its
+// name is unique in the document.
+const modes=new Map();const leafModes=new Map();const leafCounts=new Map();if(!doc)return modes;const visit=(el,depth,parentPath)=>{if(!el||depth>32)return;const name=mxElName(el);const currentPath=name?parentPath.concat(String(name)):parentPath;if(mxElCat(el)==='image'){if(name){const u=mxSafe(()=>el.getInput('uaddressmode'),null);const v=mxSafe(()=>el.getInput('vaddressmode'),null);const samplerModes={u:normalizeSamplerAddressMode(readMxInputValue(u)),v:normalizeSamplerAddressMode(readMxInputValue(v))};modes.set(currentPath.join('/'),samplerModes);leafModes.set(String(name),samplerModes);leafCounts.set(String(name),(leafCounts.get(String(name))||0)+1);}}let children=vecToArray(mxSafe(()=>el.getChildren(),[]));if(el===doc&&!children.length){children=children.concat(vecToArray(mxSafe(()=>doc.getNodes&&doc.getNodes(),[])));children=children.concat(vecToArray(mxSafe(()=>doc.getNodeGraphs&&doc.getNodeGraphs(),[])));}for(const child of children)visit(child,depth+1,currentPath);};visit(doc,0,[]);const uniqueLeaves=new Map();for(const[name,samplerModes]of leafModes){if(leafCounts.get(name)===1)uniqueLeaves.set(name,samplerModes);}modes.uniqueLeaves=uniqueLeaves;return modes;};const samplerCacheKey=(baseKey,samplerModes)=>{const modes=samplerModes||{u:'periodic',v:'periodic'};return String(baseKey)+'|uaddressmode='+normalizeSamplerAddressMode(modes.u)+'|vaddressmode='+normalizeSamplerAddressMode(modes.v);};// Parses a dropped .exr Blob via THREE.EXRLoader (pinned to three@0.147.0,
 // see index.html). setDataType(FloatType) is explicit: 0.147.0 defaults to
 // HalfFloatType, silently swapping d.data to a Uint16Array otherwise.
 const loadExrTexture=async blob=>{if(typeof THREE.EXRLoader==='undefined'){console.warn('mtlx-engine: THREE.EXRLoader unavailable (script blocked/offline); .exr textures keep the node default color.');return null;}try{const buf=await blob.arrayBuffer();const d=new THREE.EXRLoader().setDataType(THREE.FloatType).parse(buf);if(!d||!d.data)return null;// EXRLoader.parse writes scanlines bottom-up (row 0 = image bottom);
@@ -968,11 +1336,31 @@ const loadTifTexture=async(blob,path)=>{if(typeof UTIF==='undefined'){console.wa
 UTIF.decodeImage(buf,ifd);const rgba=UTIF.toRGBA8(ifd);if(!UTIF_SUPPORTED_COMPRESSION.has(compression)&&compression!==32946){throw new Error('TIF decode unsupported (compression '+compression+') for '+label);}let allZero=true;for(let i=0;i<rgba.length-2&&allZero;i+=97){if(rgba[i]!==0||rgba[i+1]!==0||rgba[i+2]!==0)allZero=false;}if(allZero)throw new Error('TIF decode unsupported (compression '+compression+') for '+label);const tex=new THREE.DataTexture(new Uint8Array(rgba),ifd.width,ifd.height,THREE.RGBAFormat,THREE.UnsignedByteType);tex.minFilter=tex.magFilter=THREE.LinearFilter;return tex;};// Loads the original (non-.ktx2) source for a resolved hit, used when a
 // .ktx2 sibling is rejected (e.g. an invalid base level) after having
 // already been preferred over this file.
-const loadTextureForHit=async(hit,blob,view)=>{const ext=(hit.key.split('.').pop()||'').toLowerCase();if(ext==='exr')return loadExrTexture(blob);if(ext==='hdr')return loadHdrTexture(blob);if(ext==='tif'||ext==='tiff')return loadTifTexture(blob,hit.key);if(view&&view.maxTextureSize&&typeof createImageBitmap==='function'){return loadBoundedBitmapTexture(blob,Number(view.maxTextureSize));}return new Promise(resolve=>{const url=URL.createObjectURL(blob);new THREE.TextureLoader().load(url,tex=>{URL.revokeObjectURL(url);resolve(tex);},undefined,()=>{URL.revokeObjectURL(url);resolve(null);});});};// Scene snapshots can contain many UDIM tiles.  When a caller supplies a
+const loadTextureForHit=async(hit,blob,view,samplerModes)=>{const ext=(hit.key.split('.').pop()||'').toLowerCase();if(ext==='exr')return loadExrTexture(blob);if(ext==='hdr')return loadHdrTexture(blob);if(ext==='tif'||ext==='tiff')return loadTifTexture(blob,hit.key);if(view&&view.maxTextureSize&&typeof createImageBitmap==='function'){return loadBoundedBitmapTexture(blob,Number(view.maxTextureSize),samplerModes);}return new Promise(resolve=>{const url=URL.createObjectURL(blob);new THREE.TextureLoader().load(url,tex=>{URL.revokeObjectURL(url);resolve(tex);},undefined,()=>{URL.revokeObjectURL(url);resolve(null);});});};// Perf-only decode/resize/upload split for the Scene texture phase, gated by
+// window.MTLX_PERF_LOG; zero cost when off. usd-scene-renderer.js resets this
+// once per scene load and folds it into scenePerf when the load finishes.
+const resetTexturePerf=()=>{window.__mtlxTexturePerf={decodeMs:0,resizeMs:0,uploadMs:0,count:0};};const addTexturePerf=(key,ms)=>{if(!window.MTLX_PERF_LOG)return;const p=window.__mtlxTexturePerf||(window.__mtlxTexturePerf={decodeMs:0,resizeMs:0,uploadMs:0,count:0});p[key]+=ms;};// localStorage switch for the fast Scene texture decode path below; off only
+// when explicitly set to '0' (default on).
+const sceneTextureFastPathEnabled=()=>{try{return localStorage.getItem('mtlx_scene_texture_fast')!=='0';}catch(e){return true;}};// .exr/.hdr/.tif decode on the main thread and allocate large float buffers,
+// unlike the bounded-bitmap path above which is already pooled per view. This
+// pool is shared by every caller of bindDroppedTextures (Viewer, Compare,
+// preview, Scene) so a drop with many HDR-ish textures never decodes them all
+// at once. mtlx_texture_decode_limit=0 disables it (old fully-parallel start).
+const HEAVY_TEXTURE_DECODE_CONCURRENCY=2;const heavyTextureDecodeLimitEnabled=()=>{try{return localStorage.getItem('mtlx_texture_decode_limit')!=='0';}catch(e){return true;}};const heavyTextureDecodeSlots=Array.from({length:HEAVY_TEXTURE_DECODE_CONCURRENCY},()=>Promise.resolve());let heavyTextureDecodeNext=0;const runHeavyTextureDecode=startDecode=>{if(!heavyTextureDecodeLimitEnabled())return startDecode();const slot=heavyTextureDecodeNext%heavyTextureDecodeSlots.length;heavyTextureDecodeNext+=1;const chained=heavyTextureDecodeSlots[slot].catch(()=>{}).then(startDecode);heavyTextureDecodeSlots[slot]=chained.catch(()=>{});return chained;};// Scene snapshots can contain many UDIM tiles.  When a caller supplies a
 // preview limit, decode/upload a bounded ImageBitmap while retaining the
 // source image's color and alpha semantics.  The normal viewer path does not
 // pass this option and keeps its existing TextureLoader behavior.
-const loadBoundedBitmapTexture=async(blob,maxSize)=>{if(typeof createImageBitmap!=='function')throw new Error('createImageBitmap is unavailable for bounded scene texture preview');const opts={colorSpaceConversion:'none',premultiplyAlpha:'none'};let source;try{source=await createImageBitmap(blob,opts);}catch(error){throw new Error('The source image could not be decoded for bounded scene preview.');}let image=source;if(maxSize>0&&Math.max(source.width,source.height)>maxSize){const scale=maxSize/Math.max(source.width,source.height);const resizeOpts=Object.assign({},opts,{resizeWidth:Math.max(1,Math.round(source.width*scale)),resizeHeight:Math.max(1,Math.round(source.height*scale)),resizeQuality:'high'});try{image=await createImageBitmap(blob,resizeOpts);}catch(error){if(source.close)source.close();throw error;}if(source.close)source.close();}const texture=new THREE.Texture(image);configureLoadedTexture(texture);return texture;};// Reads pixel dimensions straight out of an encoded image blob's header,
+//
+// Fast path (mtlx_scene_texture_fast, default on): reads the source
+// dimensions from the file header (no pixel decode) and asks
+// createImageBitmap to decode straight to the planned tier in one browser
+// -native, off-main-thread call, instead of decoding at full size first just
+// to learn the dimensions and then decoding again to resize. Same
+// colorSpaceConversion/premultiplyAlpha/resizeQuality semantics as before;
+// falls back to the old two-decode path if the header can't be read.
+const loadBoundedBitmapTexture=async(blob,maxSize,samplerModes)=>{if(typeof createImageBitmap!=='function')throw new Error('createImageBitmap is unavailable for bounded scene texture preview');addTexturePerf('count',1);const opts={colorSpaceConversion:'none',premultiplyAlpha:'none'};if(sceneTextureFastPathEnabled()){let dims=null;try{dims=await readImageDimensions(blob);}catch(e){dims=null;}if(dims&&dims.width>0&&dims.height>0){const needsResize=maxSize>0&&Math.max(dims.width,dims.height)>maxSize;const decodeOpts=!needsResize?opts:Object.assign({},opts,{resizeWidth:Math.max(1,Math.round(dims.width*(maxSize/Math.max(dims.width,dims.height)))),resizeHeight:Math.max(1,Math.round(dims.height*(maxSize/Math.max(dims.width,dims.height)))),resizeQuality:'high'});const t0=performance.now();let image=null;try{image=await createImageBitmap(blob,decodeOpts);}catch(e){image=null;}if(image){addTexturePerf(needsResize?'resizeMs':'decodeMs',performance.now()-t0);const texture=new THREE.Texture(image);configureLoadedTexture(texture);return texture;}// Header parsed but the sized decode failed; fall through to the
+// slow path below rather than fail the whole texture.
+}}const t0=performance.now();let source;try{source=await createImageBitmap(blob,opts);}catch(error){throw new Error('The source image could not be decoded for bounded scene preview.');}addTexturePerf('decodeMs',performance.now()-t0);let image=source;if(maxSize>0&&Math.max(source.width,source.height)>maxSize){const scale=maxSize/Math.max(source.width,source.height);const resizeOpts=Object.assign({},opts,{resizeWidth:Math.max(1,Math.round(source.width*scale)),resizeHeight:Math.max(1,Math.round(source.height*scale)),resizeQuality:'high'});const t1=performance.now();try{image=await createImageBitmap(blob,resizeOpts);}catch(error){if(source.close)source.close();throw error;}addTexturePerf('resizeMs',performance.now()-t1);if(source.close)source.close();}const texture=new THREE.Texture(image);configureLoadedTexture(texture,samplerModes);return texture;};// Reads pixel dimensions straight out of an encoded image blob's header,
 // without decoding the pixels. Returns { width, height } or null when the
 // format/box cannot be parsed; callers then assume a conservative 4096
 // square. Covers PNG, JPEG (SOF0/1/2, skipping APPn/COM segments), TIFF
@@ -1010,11 +1398,17 @@ try{const src=document.createElement('canvas');src.width=w;src.height=h;src.getC
 const factor=Math.max(1,Math.round(longest/maxSize));const outW=Math.max(1,Math.floor(w/factor));const outH=Math.max(1,Math.floor(h/factor));const src=tex.image.data;const channels=4;const out=new Float32Array(outW*outH*channels);for(let oy=0;oy<outH;oy+=1){for(let ox=0;ox<outW;ox+=1){const acc=[0,0,0,0];let n=0;for(let fy=0;fy<factor;fy+=1){const sy=oy*factor+fy;if(sy>=h)continue;for(let fx=0;fx<factor;fx+=1){const sx=ox*factor+fx;if(sx>=w)continue;const si=(sy*w+sx)*channels;acc[0]+=src[si];acc[1]+=src[si+1];acc[2]+=src[si+2];acc[3]+=src[si+3];n+=1;}}const di=(oy*outW+ox)*channels;out[di]=acc[0]/n;out[di+1]=acc[1]/n;out[di+2]=acc[2]/n;out[di+3]=acc[3]/n;}}const next=new THREE.DataTexture(out,outW,outH,tex.format,tex.type);next.minFilter=next.magFilter=THREE.LinearFilter;tex.dispose&&tex.dispose();return next;};// Binds dropped textures onto the shader's filename sampler uniforms.
 // Cache hits assign synchronously; misses load async (TextureLoader, or
 // the .exr/.hdr parsers above). `onBound` fires per texture that lands.
-const bindDroppedTextures=(view,fileMap,onBound)=>{const bound=[],missing=[],udimFirstTile=[];const pending=[];const cache=view.textureCache||TEXTURE_CACHE;const isAlive=()=>typeof view.isAlive!=='function'||view.isAlive();let ktx2Substituted=0;for(const u of view.introspected){if(u.type!=='filename')continue;let ref='';try{if(typeof u.data==='string')ref=u.data;else if(u.data!=null)ref=String(u.data);}catch(e){ref='';}if(!ref)continue;// no file reference recorded
+const bindDroppedTextures=(view,fileMap,onBound)=>{if(view&&typeof view.onDisplacementFileMap==='function')view.onDisplacementFileMap(fileMap);const bound=[],missing=[],udimFirstTile=[];const pending=[];const cache=view.textureCache||TEXTURE_CACHE;const isAlive=()=>typeof view.isAlive!=='function'||view.isAlive();let ktx2Substituted=0;for(const u of view.introspected){if(u.type!=='filename')continue;let ref='';try{if(typeof u.data==='string')ref=u.data;else if(u.data!=null)ref=String(u.data);}catch(e){ref='';}if(!ref)continue;// no file reference recorded
 let hit=findFileForRef(fileMap,ref);// A UDIM set has no single file; the shaderball's UVs live in the
 // first tile, so bind the lowest-numbered tile instead of nothing.
-if(!hit&&/<UDIM>/i.test(ref)){const tiles=findFilesForRef(fileMap,ref).sort((a,b)=>a.ref.localeCompare(b.ref));if(tiles.length){hit={key:tiles[0].key,how:'udim-first-tile'};udimFirstTile.push(ref);}}if(!hit){missing.push(ref);continue;}const originalHit=hit;hit=preferKtx2Sibling(fileMap,hit);if(hit.substituted)ktx2Substituted+=1;const blob=fileMap[hit.key];const cacheKey=textureCacheKey(blob,hit.key);const cached=cache.get(cacheKey);if(cached){if(isAlive()){if(view.uniforms[u.name])view.uniforms[u.name].value=cached;if(onBound)onBound();}}else{const ext=(hit.key.split('.').pop()||ref.split('.').pop()||'').toLowerCase();if(ext==='ktx2'){const bindTex=tex=>{if(!tex)return;configureLoadedTexture(tex);if(!isAlive()){tex.dispose&&tex.dispose();return;}cache.set(cacheKey,tex);if(view.uniforms[u.name])view.uniforms[u.name].value=tex;if(onBound)onBound();};const pendingLoad=loadKtx2Texture(blob,view,hit.key).then(bindTex,error=>{if(error&&error.ktx2InvalidBaseLevel&&originalHit.key!==hit.key){const notice=`KTX2 texture ${hit.key} is not a multiple of 4; falling back to ${originalHit.key}`;if(view.notices)view.notices.push(notice);return loadTextureForHit(originalHit,fileMap[originalHit.key],view).then(bindTex,e2=>({error:e2}));}return{error};});pending.push(pendingLoad);}else if(ext==='exr'||ext==='hdr'||ext==='tif'||ext==='tiff'){const parsePromise=ext==='exr'?loadExrTexture(blob):ext==='hdr'?loadHdrTexture(blob):loadTifTexture(blob,hit.key);const pendingLoad=parsePromise.then(tex=>{if(!tex)return;// unsupported/corrupt, the node default color stands
-configureLoadedTexture(tex);if(!isAlive()){tex.dispose&&tex.dispose();return;}cache.set(cacheKey,tex);if(view.uniforms[u.name])view.uniforms[u.name].value=tex;if(onBound)onBound();},error=>{console.warn('mtlx-engine: texture decode failed for '+hit.key+', keeping the node default color:',error);missing.push(ref);return{error};});pending.push(pendingLoad);}else if(view.maxTextureSize){const startBoundedLoad=()=>{if(!isAlive())return Promise.resolve(null);return typeof createImageBitmap==='function'?loadBoundedBitmapTexture(blob,Number(view.maxTextureSize)):Promise.reject(new Error('createImageBitmap is unavailable for bounded scene texture preview'));};let boundedLoad;if(view.textureQueue&&view.textureQueue.tail){const previous=view.textureQueue.tail;boundedLoad=previous.catch(()=>{}).then(startBoundedLoad);view.textureQueue.tail=boundedLoad;}else boundedLoad=startBoundedLoad();pending.push(boundedLoad.then(tex=>{if(!tex)return;if(!isAlive()){tex.dispose&&tex.dispose();if(tex.image&&tex.image.close)tex.image.close();return;}cache.set(cacheKey,tex);if(view.uniforms[u.name])view.uniforms[u.name].value=tex;if(onBound)onBound();},error=>({error})));}else{const url=URL.createObjectURL(blob);pending.push(new Promise(resolve=>{new THREE.TextureLoader().load(url,tex=>{configureLoadedTexture(tex);if(!isAlive()){tex.dispose&&tex.dispose();URL.revokeObjectURL(url);resolve();return;}cache.set(cacheKey,tex);if(view.uniforms[u.name])view.uniforms[u.name].value=tex;URL.revokeObjectURL(url);if(onBound)onBound();resolve();},undefined,error=>{URL.revokeObjectURL(url);resolve({error});});}));}}bound.push(ref+'  →  '+hit.key);}if(ktx2Substituted>0)console.info('bindDroppedTextures: '+ktx2Substituted+' texture(s) loaded from .ktx2 sibling(s)');if(udimFirstTile.length)console.info('bindDroppedTextures: '+udimFirstTile.length+' UDIM reference(s) bound to their first tile for the preview');return{bound,missing,pending,ktx2Substituted,udimFirstTile};};// Extracts a plain JS array from a real array or an embind vector-like
+if(!hit&&/<UDIM>/i.test(ref)){const tiles=findFilesForRef(fileMap,ref).sort((a,b)=>a.ref.localeCompare(b.ref));if(tiles.length){hit={key:tiles[0].key,how:'udim-first-tile'};udimFirstTile.push(ref);}}if(!hit){missing.push(ref);continue;}const originalHit=hit;hit=preferKtx2Sibling(fileMap,hit);if(hit.substituted)ktx2Substituted+=1;const blob=fileMap[hit.key];const samplerModes=u.samplerModes||null;const cacheKey=samplerCacheKey(textureCacheKey(blob,hit.key),samplerModes);const cached=cache.get(cacheKey);if(cached){if(isAlive()){if(view.uniforms[u.name])view.uniforms[u.name].value=cached;if(onBound)onBound();}}else{const ext=(hit.key.split('.').pop()||ref.split('.').pop()||'').toLowerCase();if(ext==='ktx2'){const bindTex=tex=>{if(!tex)return;configureLoadedTexture(tex,samplerModes);if(!isAlive()){tex.dispose&&tex.dispose();return;}cache.set(cacheKey,tex);if(view.uniforms[u.name])view.uniforms[u.name].value=tex;if(onBound)onBound();};const pendingLoad=loadKtx2Texture(blob,view,hit.key).then(bindTex,error=>{if(error&&error.ktx2InvalidBaseLevel&&originalHit.key!==hit.key){const notice=`KTX2 texture ${hit.key} is not a multiple of 4; falling back to ${originalHit.key}`;if(view.notices)view.notices.push(notice);return loadTextureForHit(originalHit,fileMap[originalHit.key],view,samplerModes).then(bindTex,e2=>({error:e2}));}return{error};});pending.push(pendingLoad);}else if(ext==='exr'||ext==='hdr'||ext==='tif'||ext==='tiff'){const startDecode=()=>ext==='exr'?loadExrTexture(blob):ext==='hdr'?loadHdrTexture(blob):loadTifTexture(blob,hit.key);const parsePromise=runHeavyTextureDecode(startDecode);const pendingLoad=parsePromise.then(tex=>{if(!tex)return;// unsupported/corrupt, the node default color stands
+configureLoadedTexture(tex,samplerModes);if(!isAlive()){tex.dispose&&tex.dispose();return;}cache.set(cacheKey,tex);if(view.uniforms[u.name])view.uniforms[u.name].value=tex;if(onBound)onBound();},error=>{console.warn('mtlx-engine: texture decode failed for '+hit.key+', keeping the node default color:',error);missing.push(ref);return{error};});pending.push(pendingLoad);}else if(view.maxTextureSize){const startBoundedLoad=()=>{if(!isAlive())return Promise.resolve(null);return typeof createImageBitmap==='function'?loadBoundedBitmapTexture(blob,Number(view.maxTextureSize),samplerModes):Promise.reject(new Error('createImageBitmap is unavailable for bounded scene texture preview'));};let boundedLoad;// The queue is a small round-robin set of chains (one chain
+// per slot) instead of one, so up to that many decodes run
+// concurrently; each chain still serializes its own slot so
+// memory stays bounded (never more than slot-count bitmaps
+// decoding at once). A plain {tail} queue (or none) keeps the
+// old fully-serial behaviour.
+if(view.textureQueue&&Array.isArray(view.textureQueue.tails)){const q=view.textureQueue;const slot=q.next%q.tails.length;q.next+=1;const previous=q.tails[slot];boundedLoad=previous.catch(()=>{}).then(startBoundedLoad);q.tails[slot]=boundedLoad;}else if(view.textureQueue&&view.textureQueue.tail){const previous=view.textureQueue.tail;boundedLoad=previous.catch(()=>{}).then(startBoundedLoad);view.textureQueue.tail=boundedLoad;}else boundedLoad=startBoundedLoad();pending.push(boundedLoad.then(tex=>{if(!tex)return;if(!isAlive()){tex.dispose&&tex.dispose();if(tex.image&&tex.image.close)tex.image.close();return;}cache.set(cacheKey,tex);if(view.uniforms[u.name])view.uniforms[u.name].value=tex;if(onBound)onBound();},error=>({error})));}else{const url=URL.createObjectURL(blob);pending.push(new Promise(resolve=>{new THREE.TextureLoader().load(url,tex=>{configureLoadedTexture(tex,samplerModes);if(!isAlive()){tex.dispose&&tex.dispose();URL.revokeObjectURL(url);resolve();return;}cache.set(cacheKey,tex);if(view.uniforms[u.name])view.uniforms[u.name].value=tex;URL.revokeObjectURL(url);if(onBound)onBound();resolve();},undefined,error=>{URL.revokeObjectURL(url);resolve({error});});}));}}bound.push(ref+'  →  '+hit.key);}if(ktx2Substituted>0)console.info('bindDroppedTextures: '+ktx2Substituted+' texture(s) loaded from .ktx2 sibling(s)');if(udimFirstTile.length)console.info('bindDroppedTextures: '+udimFirstTile.length+' UDIM reference(s) bound to their first tile for the preview');return{bound,missing,pending,ktx2Substituted,udimFirstTile};};// Extracts a plain JS array from a real array or an embind vector-like
 // value ({size(),get(i)} or {data()}). plainizeMxUniformData relies on
 // this to detach heap-backed views before the mxExclusive lock releases.
 const mxDataToPlainArray=d=>{if(Array.isArray(d))return d;if(d&&typeof d.data==='function'){try{return Array.from(d.data());}catch(e){/* not iterable */}}if(d&&typeof d.size==='function'){const o=[];for(let i=0;i<d.size();i++)o.push(d.get(i));return o;}return null;};// Enumerate a ShaderStage's uniforms via MaterialX introspection. `data`
@@ -1033,7 +1427,9 @@ let path=null;try{path=v.getPath&&v.getPath()||null;}catch(e){/* absent */}out.p
 const VECTOR_MX_TYPES=new Set(['vector2','vector3','vector4','color3','color4','matrix33','matrix44']);// Converts ONE collectMxUniforms() entry's `data` to plain JS, must run
 // before the mxExclusive lock (see the caution on collectMxUniforms
 // above) releases. Returns a new entry object; never mutates the input.
-const plainizeMxUniformData=u=>{if(u.data==null||!VECTOR_MX_TYPES.has(u.type))return u;return Object.assign({},u,{data:mxDataToPlainArray(u.data)});};// Converts a MaterialX default value into a three.js uniform. Returns
+const plainizeMxUniformData=u=>{if(u.data==null||!VECTOR_MX_TYPES.has(u.type))return u;return Object.assign({},u,{data:mxDataToPlainArray(u.data)});};const annotateFilenameSamplerModes=(introspected,doc)=>{const modes=collectImageSamplerModes(doc);if(!modes.size)return introspected;const uniqueLeaves=modes.uniqueLeaves||new Map();return introspected.map(u=>{if(!u||u.type!=='filename')return u;const pathParts=u.path?String(u.path).split(/[/\.:]/).filter(Boolean):[];// Prefer the longest qualified suffix from the introspected path.
+// The leading document/material prefix can differ between bindings.
+for(let start=0;start<pathParts.length;start+=1){for(let end=pathParts.length;end>start;end-=1){const candidate=pathParts.slice(start,end).join('/');const samplerModes=modes.get(candidate);if(samplerModes)return Object.assign({},u,{samplerModes});}}const leaf=u.name?String(u.name).replace(/_file(?:_.*)?$/,''):'';const samplerModes=uniqueLeaves.get(leaf);return samplerModes?Object.assign({},u,{samplerModes}):u;});};// Converts a MaterialX default value into a three.js uniform. Returns
 // null for types that can't be a plain default (filename/sampler/string).
 // `data` should be plain JS already; a live wasm vector is tolerated too.
 const mxValueToThreeUniform=(type,data)=>{const arr=mxDataToPlainArray;switch(type){case'float':{const n=Number(data);return{value:isNaN(n)?0:n};}case'integer':{const n=Number(data);return{value:isNaN(n)?0:n|0};}case'boolean':return{value:!!data};case'vector2':{const a=arr(data)||[0,0];return{value:new THREE.Vector2(a[0],a[1])};}case'color3':case'vector3':{const a=arr(data)||[0,0,0];return{value:new THREE.Vector3(a[0],a[1],a[2])};}case'color4':case'vector4':{const a=arr(data)||[0,0,0,0];return{value:new THREE.Vector4(a[0],a[1],a[2],a[3])};}case'matrix33':{const a=arr(data);const m=new THREE.Matrix3();if(a&&a.length===9)m.fromArray(a);return{value:m};}case'matrix44':{const a=arr(data);const m=new THREE.Matrix4();if(a&&a.length===16)m.fromArray(a);return{value:m};}default:return null;}};// The parameter UI's color picker speaks LINEAR, like MaterialX itself:
@@ -1058,7 +1454,7 @@ const samplerHoldsDefault=slot=>!!slot&&(!slot.value||isFilenameDefaultTexture(s
 const rebindFilenameDefault=(uniforms,defaultUniformName,type,value)=>{const m=/^(.*)_default(?:_cm_in)?$/.exec(defaultUniformName||'');if(!m)return false;const slot=uniforms?uniforms[m[1]+'_file']:null;if(!samplerHoldsDefault(slot))return false;const rgba=defaultValueToRgba(type,value);if(!rgba)return false;slot.value=defaultValueTexture(rgba);return true;};// Configure a user-loaded texture the way the generated shaders expect
 // to sample a `filename` input: repeat wrapping, no flipY, anisotropic
 // filtering (three clamps to the device max at upload).
-const configureLoadedTexture=t=>{t.wrapS=t.wrapT=THREE.RepeatWrapping;t.flipY=false;t.anisotropy=8;t.needsUpdate=true;return t;};// ---- Preview geometry ----
+const configureLoadedTexture=(t,samplerModes)=>{const modes=samplerModes||{u:'periodic',v:'periodic'};const wrap=mode=>{switch(normalizeSamplerAddressMode(mode)){case'clamp':return THREE.ClampToEdgeWrapping;case'mirror':return THREE.MirroredRepeatWrapping;default:return THREE.RepeatWrapping;}};t.wrapS=wrap(modes.u);t.wrapT=wrap(modes.v);t.flipY=false;t.anisotropy=8;t.needsUpdate=true;return t;};// ---- Preview geometry ----
 // Aliases three's attributes to MaterialX vertex-shader names, providing
 // tangents (real when computable, constant +X fallback otherwise).
 // Conventional UV geomprop names aliased to the "uv" attribute so
@@ -1085,13 +1481,17 @@ if(t){const tri=new Float32Array(t.count*3);const signs=new Float32Array(t.count
 const nrm=geometry.getAttribute('normal');let repaired=0;for(let i=0;i<t.count;i++){const x=tri[i*3],y=tri[i*3+1],z=tri[i*3+2];if(x*x+y*y+z*z<1e-10){const nx=nrm.getX(i),ny=nrm.getY(i),nz=nrm.getZ(i);const ax=Math.abs(nx)<0.9?1:0,ay=ax?0:1;let cx=-nz*ay,cy=nz*ax,cz=nx*ay-ny*ax;const len=Math.sqrt(cx*cx+cy*cy+cz*cz)||1;tri[i*3]=cx/len;tri[i*3+1]=cy/len;tri[i*3+2]=cz/len;repaired++;}}if(repaired)console.warn('[mtlx] repaired '+repaired+' degenerate tangents (zero-UV-area triangles) on geometry');const bitri=new Float32Array(t.count*3);for(let i=0;i<t.count;i++)writeFrame(i,tri[i*3],tri[i*3+1],tri[i*3+2],signs[i],tri,bitri);iTangent=new THREE.BufferAttribute(tri,3);iBitangent=new THREE.BufferAttribute(bitri,3);}}catch(e){/* fall through to constant tangent */}}// Three's computeTangents requires an index. For non-indexed USD meshes,
 // derive a frame directly per triangle so normal maps remain useful and
 // preserve mirrored-UV orientation instead of silently using +X.
-if(!iTangent&&!geometry.getIndex()&&position.count>=3){const uv=geometry.getAttribute('uv');const tangents=new Float32Array(position.count*3);const bitangents=new Float32Array(position.count*3);for(let base=0;base+2<position.count;base+=3){const ax=position.getX(base+1)-position.getX(base);const ay=position.getY(base+1)-position.getY(base);const az=position.getZ(base+1)-position.getZ(base);const bx=position.getX(base+2)-position.getX(base);const by=position.getY(base+2)-position.getY(base);const bz=position.getZ(base+2)-position.getZ(base);const du1=uv.getX(base+1)-uv.getX(base),dv1=uv.getY(base+1)-uv.getY(base);const du2=uv.getX(base+2)-uv.getX(base),dv2=uv.getY(base+2)-uv.getY(base);const det=du1*dv2-du2*dv1;if(Math.abs(det)<1e-10)continue;const inv=1/det;const tx=(ax*dv2-bx*dv1)*inv;const ty=(ay*dv2-by*dv1)*inv;const tz=(az*dv2-bz*dv1)*inv;const cx=(bx*du1-ax*du2)*inv;const cy=(by*du1-ay*du2)*inv;const cz=(bz*du1-az*du2)*inv;for(let j=0;j<3;j++){const i=base+j;tangents[i*3]=tx;tangents[i*3+1]=ty;tangents[i*3+2]=tz;bitangents[i*3]=cx;bitangents[i*3+1]=cy;bitangents[i*3+2]=cz;}}for(let i=0;i<position.count;i++){const tx=tangents[i*3],ty=tangents[i*3+1],tz=tangents[i*3+2];const nx=normal.getX(i),ny=normal.getY(i),nz=normal.getZ(i);const bx=ny*tz-nz*ty,by=nz*tx-nx*tz,bz=nx*ty-ny*tx;const sign=bx*bitangents[i*3]+by*bitangents[i*3+1]+bz*bitangents[i*3+2]<0?-1:1;writeFrame(i,tx,ty,tz,sign,tangents,bitangents);}iTangent=new THREE.BufferAttribute(tangents,3);iBitangent=new THREE.BufferAttribute(bitangents,3);}if(!iTangent){const vcount=position.count;const tangents=new Float32Array(vcount*3);const bitangents=new Float32Array(vcount*3);for(let i=0;i<vcount;i++){writeFrame(i,1,0,0,1,tangents,bitangents);}iTangent=new THREE.BufferAttribute(tangents,3);iBitangent=new THREE.BufferAttribute(bitangents,3);}geometry.setAttribute('i_tangent',iTangent);geometry.setAttribute('i_bitangent',iBitangent);return geometry;};// Sizes for the geomprop types this viewer can zero-fill (int types read
-// zero already at the GL default and are skipped, only noted).
+if(!iTangent&&!geometry.getIndex()&&position.count>=3){const uv=geometry.getAttribute('uv');const tangents=new Float32Array(position.count*3);const bitangents=new Float32Array(position.count*3);for(let base=0;base+2<position.count;base+=3){const ax=position.getX(base+1)-position.getX(base);const ay=position.getY(base+1)-position.getY(base);const az=position.getZ(base+1)-position.getZ(base);const bx=position.getX(base+2)-position.getX(base);const by=position.getY(base+2)-position.getY(base);const bz=position.getZ(base+2)-position.getZ(base);const du1=uv.getX(base+1)-uv.getX(base),dv1=uv.getY(base+1)-uv.getY(base);const du2=uv.getX(base+2)-uv.getX(base),dv2=uv.getY(base+2)-uv.getY(base);const det=du1*dv2-du2*dv1;if(Math.abs(det)<1e-10)continue;const inv=1/det;const tx=(ax*dv2-bx*dv1)*inv;const ty=(ay*dv2-by*dv1)*inv;const tz=(az*dv2-bz*dv1)*inv;const cx=(bx*du1-ax*du2)*inv;const cy=(by*du1-ay*du2)*inv;const cz=(bz*du1-az*du2)*inv;for(let j=0;j<3;j++){const i=base+j;tangents[i*3]=tx;tangents[i*3+1]=ty;tangents[i*3+2]=tz;bitangents[i*3]=cx;bitangents[i*3+1]=cy;bitangents[i*3+2]=cz;}}for(let i=0;i<position.count;i++){const tx=tangents[i*3],ty=tangents[i*3+1],tz=tangents[i*3+2];const nx=normal.getX(i),ny=normal.getY(i),nz=normal.getZ(i);const bx=ny*tz-nz*ty,by=nz*tx-nx*tz,bz=nx*ty-ny*tx;const sign=bx*bitangents[i*3]+by*bitangents[i*3+1]+bz*bitangents[i*3+2]<0?-1:1;writeFrame(i,tx,ty,tz,sign,tangents,bitangents);}iTangent=new THREE.BufferAttribute(tangents,3);iBitangent=new THREE.BufferAttribute(bitangents,3);}if(!iTangent){const vcount=position.count;const tangents=new Float32Array(vcount*3);const bitangents=new Float32Array(vcount*3);for(let i=0;i<vcount;i++){writeFrame(i,1,0,0,1,tangents,bitangents);}iTangent=new THREE.BufferAttribute(tangents,3);iBitangent=new THREE.BufferAttribute(bitangents,3);}geometry.setAttribute('i_tangent',iTangent);geometry.setAttribute('i_bitangent',iBitangent);return geometry;};// Sizes for the geomprop types this viewer can zero-fill. patchGeompropVaryings
+// redeclares integer geomprop attributes as float/vecN (rounded back to int
+// in the vertex shader), so they land here too and fill like any other stream.
 const GEOMPROP_ITEM_SIZE={float:1,vec2:2,vec3:3,vec4:4};// Binds each declared geompropvalue vertex input that the geometry does not
-// already carry: vec2 aliases "uv", other float types get a zero-filled
-// attribute, integer types are skipped. `notify(text)` receives one notice
-// per unbound geomprop; callers dedupe and surface it to the user.
-const bindGeompropAttributes=(geometry,geomprops,notify)=>{if(!geometry||!geomprops||!geomprops.length)return geometry;const uv=geometry.getAttribute('uv');for(const{name,type}of geomprops){const attrName='i_geomprop_'+name;if(geometry.getAttribute(attrName))continue;if(type==='vec2'&&uv){geometry.setAttribute(attrName,uv);continue;}const itemSize=GEOMPROP_ITEM_SIZE[type];if(itemSize){const count=geometry.getAttribute('position')?geometry.getAttribute('position').count:0;geometry.setAttribute(attrName,new THREE.BufferAttribute(new Float32Array(count*itemSize),itemSize));}if(typeof notify==='function'){notify(`geompropvalue "${name}" (${type}) has no geometry stream in this viewer and reads zeros`);}}return geometry;};// Center a geometry at the origin and scale it to bounding radius 1
+// already carry: vec2 aliases "uv", every other type (including integer
+// geomprops, now reported as float/vecN) gets a zero- or default-filled
+// attribute. `notify(text)` receives one notice per unbound geomprop;
+// callers dedupe and surface it to the user.
+const bindGeompropAttributes=(geometry,geomprops,notify,constants=null)=>{if(!geometry||!geomprops||!geomprops.length)return geometry;const uv=geometry.getAttribute('uv');for(const{name,type,defaultValue}of geomprops){const attrName='i_geomprop_'+name;if(geometry.getAttribute(attrName))continue;if(type==='vec2'&&uv){geometry.setAttribute(attrName,uv);continue;}const itemSize=GEOMPROP_ITEM_SIZE[type];// A constant the stage supplied wins, then the node's authored
+// default; only a stream we know nothing about stays at zero.
+const constant=constants&&constants[name];const fill=Array.isArray(constant)?constant:Array.isArray(defaultValue)?defaultValue:null;let filled='';if(itemSize){const count=geometry.getAttribute('position')?geometry.getAttribute('position').count:0;const data=new Float32Array(count*itemSize);if(fill&&fill.length){for(let i=0;i<count;i+=1){for(let c=0;c<itemSize;c+=1)data[i*itemSize+c]=Number(fill[Math.min(c,fill.length-1)])||0;}filled=fill.slice(0,itemSize).join(', ');}geometry.setAttribute(attrName,new THREE.BufferAttribute(data,itemSize));}if(typeof notify==='function'){notify(filled?`geompropvalue "${name}" (${type}) has no geometry stream in this viewer and reads ${filled}`:`geompropvalue "${name}" (${type}) has no geometry stream in this viewer and reads zeros, so this material will not look as authored`);}}return geometry;};// Center a geometry at the origin and scale it to bounding radius 1
 // so all preview shapes frame identically.
 const normalizeGeometry=geometry=>{geometry.computeBoundingSphere();const bs=geometry.boundingSphere;if(bs&&bs.radius>0){geometry.translate(-bs.center.x,-bs.center.y,-bs.center.z);const s=1/bs.radius;geometry.scale(s,s,s);}return geometry;};// ---- Custom preview geometry (experimental) ----
 // Session-wide registry shared by the docs previewer and graph preview, in-memory only.
@@ -1392,13 +1792,15 @@ const makeLightEntry=over=>Object.assign({type:0,position:new THREE.Vector3(),di
 // mean), so it has to carry the same gain as the map it came from; without it
 // the sun and the sky drift apart by exactly the dome's intensity whenever
 // that is not 1, which reads as one blown highlight over a correct scene.
-const currentLights=(rigLights,keyLight,rotRad,stageLights,envScale,lightScales=null)=>{const rig=rigLights||[];const stage=(stageLights||[]).slice(0,STAGE_LIGHT_SLOTS);const out=rig.map(l=>makeLightEntry({type:l.type,direction:l.direction.clone(),color:l.color.clone(),intensity:l.intensity}));if(keyLight){out.push(makeLightEntry({type:LIGHT_TYPE_DIRECTIONAL,direction:keyLight.direction.clone().applyMatrix4(keyLightRotationMatrix(rotRad||0)),color:new THREE.Vector3(keyLight.color[0],keyLight.color[1],keyLight.color[2]),intensity:keyLight.intensity*(Number.isFinite(envScale)?envScale:1)}));}else{out.push(makeLightEntry({type:LIGHT_TYPE_DIRECTIONAL}));}for(const l of stage)out.push(makeLightEntry(l));// The array length must equal MAX_LIGHT_SOURCES exactly; three walks
+// maxLights is the material's own MAX_LIGHT_SOURCES (see the light-limit
+// tiers); absent, the full rig + key + stage reservation applies.
+const currentLights=(rigLights,keyLight,rotRad,stageLights,envScale,lightScales=null,maxLights=null)=>{const rig=rigLights||[];const total=Number.isFinite(maxLights)&&maxLights>rig.length?maxLights:rig.length+1+STAGE_LIGHT_SLOTS;const stage=(stageLights||[]).slice(0,Math.max(0,total-rig.length-1));const out=rig.map(l=>makeLightEntry({type:l.type,direction:l.direction.clone(),color:l.color.clone(),intensity:l.intensity}));if(keyLight){out.push(makeLightEntry({type:LIGHT_TYPE_DIRECTIONAL,direction:keyLight.direction.clone().applyMatrix4(keyLightRotationMatrix(rotRad||0)),color:new THREE.Vector3(keyLight.color[0],keyLight.color[1],keyLight.color[2]),intensity:keyLight.intensity*(Number.isFinite(envScale)?envScale:1)}));}else{out.push(makeLightEntry({type:LIGHT_TYPE_DIRECTIONAL}));}for(const l of stage)out.push(makeLightEntry(l));// The array length must equal MAX_LIGHT_SOURCES exactly; three walks
 // every declared index and an absent element throws.
-while(out.length<rig.length+1+STAGE_LIGHT_SLOTS)out.push(makeLightEntry());// Scene diagnostics may isolate one direct source without changing the
+while(out.length<total)out.push(makeLightEntry());// Scene diagnostics may isolate one direct source without changing the
 // fixed slot layout. Absent scales preserve the ordinary lighting path.
 if(lightScales){for(let i=0;i<out.length;i++){const scale=Number(lightScales[i]);out[i].intensity*=Number.isFinite(scale)?Math.max(0,scale):1;}}return out;};// Slots actually evaluated. Stage lights sit past the key slot, so reaching
 // them means counting it too; an unused key slot is inert (intensity 0).
-const activeLightCount=(rigLights,keyLight,stageLights)=>{const rigCount=(rigLights||[]).length;const stageCount=Math.min((stageLights||[]).length,STAGE_LIGHT_SLOTS);if(stageCount)return rigCount+1+stageCount;return rigCount+(keyLight?1:0);};// Live-updates ONLY the key-light slot (last entry) of an already-bound
+const activeLightCount=(rigLights,keyLight,stageLights,maxLights=null)=>{const rigCount=(rigLights||[]).length;const slots=Number.isFinite(maxLights)&&maxLights>rigCount?maxLights-rigCount-1:STAGE_LIGHT_SLOTS;const stageCount=Math.min((stageLights||[]).length,Math.max(0,slots));if(stageCount)return rigCount+1+stageCount;return rigCount+(keyLight?1:0);};// Live-updates ONLY the key-light slot (last entry) of an already-bound
 // u_lightData array in place, mutates values, never replaces the
 // array/uniform object (three r128 caches the struct-array layout).
 const updateKeyLightUniformEntry=(uniforms,rigCount,keyLight,rotRad,envScale)=>{const entry=uniforms&&uniforms.u_lightData&&uniforms.u_lightData.value&&uniforms.u_lightData.value[rigCount];if(!entry)return;if(keyLight){entry.direction.copy(keyLight.direction).applyMatrix4(keyLightRotationMatrix(rotRad||0));entry.color.set(keyLight.color[0],keyLight.color[1],keyLight.color[2]);entry.intensity=keyLight.intensity*(Number.isFinite(envScale)?envScale:1);}else{entry.direction.set(0,-1,0);entry.color.set(0,0,0);entry.intensity=0;}if(uniforms.u_numActiveLightSources)uniforms.u_numActiveLightSources.value=rigCount+(keyLight?1:0);};// Builds the full { radiance, irradiance, mips, background,
@@ -1425,7 +1827,11 @@ const PREFILTER_SAMPLES=1024;const PREFILTER_GLSL=['precision highp float;','con
 // DataTexture whose `mipmaps` array three uploads level by level.
 // Fail-soft: any problem leaves the flag set and the FIS chain in place, so
 // shading still works, just noisier.
-const ensurePrefilteredEnv=(renderer,env)=>{if(!env||!env.radiance||env.prefilterTried)return env;env.prefilterTried=true;if(getSpecularEnvMethod()!=='prefilter')return env;if(!renderer||!renderer.capabilities||!renderer.capabilities.isWebGL2)return env;// Float targets are the only type readRenderTargetPixels can be relied
+// A caller with no renderer yet (materials that compile ahead of the
+// renderer, e.g. the Scene's first pass) must not latch prefilterTried: that
+// would permanently skip the prefiltered chain for the rest of the session.
+// mtlx_scene_prefilter_fix=0 restores that old (buggy) latch-on-null behaviour.
+const legacyPrefilterLatch=(()=>{try{return localStorage.getItem('mtlx_scene_prefilter_fix')==='0';}catch(e){return false;}})();const ensurePrefilteredEnv=(renderer,env)=>{if(!env||!env.radiance||env.prefilterTried)return env;if(!renderer&&!legacyPrefilterLatch)return env;if(legacyPrefilterLatch)env.prefilterTried=true;if(getSpecularEnvMethod()!=='prefilter')return env;if(!renderer||!renderer.capabilities||!renderer.capabilities.isWebGL2)return env;env.prefilterTried=true;// Float targets are the only type readRenderTargetPixels can be relied
 // on to return here; without them the chain cannot be read back.
 if(!renderer.extensions.get('EXT_color_buffer_float')){mtlxWarn('mtlx-engine: EXT_color_buffer_float missing, keeping the FIS specular environment.');return env;}const src=env.radiance;const w=src.image&&src.image.width,h=src.image&&src.image.height;if(!w||!h)return env;const levels=env.mips||Math.trunc(Math.log2(Math.max(w,h)))+1;const t0=performance.now();const previousTarget=renderer.getRenderTarget();const material=new THREE.RawShaderMaterial({glslVersion:THREE.GLSL3,vertexShader:'in vec3 position;\nvoid main() { gl_Position = vec4(position, 1.0); }',fragmentShader:PREFILTER_GLSL,uniforms:{uSource:{value:src},uMip:{value:0},uMaxMip:{value:Math.max(1,levels-1)},uTargetSize:{value:new THREE.Vector2(w,h)}},depthTest:false,depthWrite:false});const scene=new THREE.Scene();scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),material));const camera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);const mipmaps=[];let failed=false;try{for(let level=0;level<levels;level++){const lw=Math.max(1,w>>level),lh=Math.max(1,h>>level);const target=new THREE.WebGLRenderTarget(lw,lh,{minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,format:THREE.RGBAFormat,type:THREE.FloatType,depthBuffer:false,stencilBuffer:false,generateMipmaps:false});material.uniforms.uMip.value=level;material.uniforms.uTargetSize.value.set(lw,lh);renderer.setRenderTarget(target);renderer.render(scene,camera);const pixels=new Float32Array(lw*lh*4);renderer.readRenderTargetPixels(target,0,0,lw,lh,pixels);target.dispose();// Half float keeps the chain linear-filterable in core WebGL2
 // (full float filtering needs OES_texture_float_linear) and
@@ -1439,7 +1845,39 @@ tex.mipmaps=mipmaps;tex.generateMipmaps=false;tex.needsUpdate=true;env.radianceP
 // probe and the key-light extraction all keep using env.radiance: only the
 // specular lookup wants the prefiltered chain, and only when the shader was
 // generated for it.
-const envRadianceForShading=env=>{if(!env)return null;if(getSpecularEnvMethod()==='prefilter'&&env.radiancePrefiltered)return env.radiancePrefiltered;return env.radiance;};const buildEnvFromParsedTexture=raw=>{// Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
+const envRadianceForShading=env=>{if(!env)return null;if(getSpecularEnvMethod()==='prefilter'&&env.radiancePrefiltered)return env.radiancePrefiltered;return env.radiance;};// GPU cosine-convolved diffuse irradiance map: replaces the SH l<=2
+// reconstruction above with a direct hemispherical integral baked into a
+// 64x32 RGBA half-float lat-long map, same shape/lookup contract as
+// shIrradianceFromEquirect's output (mx_environment_irradiance never
+// changes). Reuses the GGX prefilter's render-target/readback pipeline and
+// its +0.5 longitude convention (mx_latlong_map_projection_inverse is NOT
+// the inverse of mx_latlong_projection; see PREFILTER_GLSL's comment above).
+const IRRADIANCE_CONV_W=128;const IRRADIANCE_CONV_H=64;const IRRADIANCE_OUT_W=64;const IRRADIANCE_OUT_H=32;const IRRADIANCE_GLSL=['precision highp float;','const float M_PI = 3.1415926535897932;','const float M_PI_INV = 0.31830988618379067;','uniform sampler2D uSource;','uniform float uSrcLod;','uniform vec2 uTargetSize;','out vec4 fragColor;','vec3 mx_latlong_map_projection_inverse(vec2 uv) {','    float latitude = (uv.y - 0.5) * M_PI;','    float longitude = (uv.x - 0.5) * M_PI * 2.0;','    float x = -cos(latitude) * sin(longitude);','    float y = -sin(latitude);','    float z = cos(latitude) * cos(longitude);','    return vec3(x, y, z);','}','void main() {','    vec2 uv = gl_FragCoord.xy / uTargetSize;',// Same +0.5 longitude rule as PREFILTER_GLSL: texel uv holds the
+// value for this direction, which is what mx_latlong_projection
+// reads back.
+'    vec3 N = normalize(mx_latlong_map_projection_inverse(vec2(uv.x + 0.5, uv.y)));','    const int CW = '+IRRADIANCE_CONV_W+';','    const int CH = '+IRRADIANCE_CONV_H+';','    float dPhi = 2.0 * M_PI / float(CW);','    float dTheta = M_PI / float(CH);','    vec3 E = vec3(0.0);','    for (int j = 0; j < CH; j++) {','        float sv = (float(j) + 0.5) / float(CH);','        for (int i = 0; i < CW; i++) {','            float su = (float(i) + 0.5) / float(CW);','            vec3 L = normalize(mx_latlong_map_projection_inverse(vec2(su + 0.5, sv)));','            float NdotL = dot(N, L);','            if (NdotL <= 0.0) continue;',// Lat-long solid angle: sin(polar) = cos(latitude) = sqrt(1 - L.y*L.y).
+'            float sinT = sqrt(max(0.0, 1.0 - L.y * L.y));','            vec3 Li = textureLod(uSource, vec2(su, sv), uSrcLod).rgb;','            E += Li * NdotL * sinT * dPhi * dTheta;','        }','    }',// The 1/PI matches mx_environment_irradiance's units, the same scale
+// shIrradianceFromEquirect's Pass 2 applies above.
+'    fragColor = vec4(max(E * M_PI_INV, vec3(0.0)), 1.0);','}'].join('\n');// Builds env.irradianceConvolved once per environment, on the first view
+// that has a WebGL2 renderer with a float color-buffer extension. Fail-soft
+// at every step: env.irradiance (the SH map) is never touched here, so any
+// guard failure or thrown error leaves diffuse shading exactly as it was.
+const ensureConvolvedIrradiance=(renderer,env)=>{if(!env||!env.radiance||env.irradianceTried)return env;if(getDiffuseEnvMethod()!=='convolve')return env;if(!renderer||!renderer.capabilities||!renderer.capabilities.isWebGL2)return env;env.irradianceTried=true;if(!renderer.extensions.get('EXT_color_buffer_float')){mtlxWarn('mtlx-engine: EXT_color_buffer_float missing, keeping the SH irradiance.');return env;}const src=env.radiance;const srcW=src.image&&src.image.width||IRRADIANCE_CONV_W;const srcH=src.image&&src.image.height||IRRADIANCE_CONV_H;const t0=performance.now();const previousTarget=renderer.getRenderTarget();let material=null,scene=null,target=null;try{material=new THREE.RawShaderMaterial({glslVersion:THREE.GLSL3,vertexShader:'in vec3 position;\nvoid main() { gl_Position = vec4(position, 1.0); }',fragmentShader:IRRADIANCE_GLSL,uniforms:{uSource:{value:src},uSrcLod:{value:Math.max(0,Math.log2(srcW/IRRADIANCE_CONV_W))},uTargetSize:{value:new THREE.Vector2(IRRADIANCE_OUT_W,IRRADIANCE_OUT_H)}},depthTest:false,depthWrite:false});scene=new THREE.Scene();scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),material));const camera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);target=new THREE.WebGLRenderTarget(IRRADIANCE_OUT_W,IRRADIANCE_OUT_H,{minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,format:THREE.RGBAFormat,type:THREE.FloatType,depthBuffer:false,stencilBuffer:false,generateMipmaps:false});renderer.setRenderTarget(target);renderer.render(scene,camera);const pixels=new Float32Array(IRRADIANCE_OUT_W*IRRADIANCE_OUT_H*4);renderer.readRenderTargetPixels(target,0,0,IRRADIANCE_OUT_W,IRRADIANCE_OUT_H,pixels);// Retained verbatim for the diffuse bounce v3 bake
+// (js/usd-scene-renderer.js's makeEStoredSampler): the SAME texel
+// data the shader samples through env.irradianceConvolved, so the
+// bake can evaluate the engine's own convolved irradiance at any
+// blocker normal by transliterating mx_latlong_projection and
+// bilinearly fetching this array, rather than approximating it with
+// a whole-sphere mean (see v3-design.md section 1/2 for why the
+// mean under-estimated the blockers by roughly 2x). 32 KB, no new
+// GPU work: this is the readback ensureConvolvedIrradiance already
+// performs for the half-float texture below.
+env.irradianceConvolvedData=pixels;env.irradianceConvolvedSize=[IRRADIANCE_OUT_W,IRRADIANCE_OUT_H];const half=new Uint16Array(pixels.length);for(let i=0;i<half.length;i++)half[i]=floatToHalf(pixels[i]);const tex=new THREE.DataTexture(half,IRRADIANCE_OUT_W,IRRADIANCE_OUT_H,THREE.RGBAFormat,THREE.HalfFloatType);tex.mapping=THREE.EquirectangularReflectionMapping;tex.wrapS=THREE.RepeatWrapping;tex.wrapT=THREE.ClampToEdgeWrapping;tex.minFilter=THREE.LinearFilter;tex.magFilter=THREE.LinearFilter;tex.generateMipmaps=false;// Framebuffer space, same reasoning as ensurePrefilteredEnv's tex.
+tex.flipY=false;tex.encoding=THREE.LinearEncoding;tex.needsUpdate=true;env.irradianceConvolved=tex;if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] env irradiance convolve: '+(performance.now()-t0).toFixed(1)+'ms ('+srcW+'x'+srcH+' -> '+IRRADIANCE_OUT_W+'x'+IRRADIANCE_OUT_H+')');}}catch(error){mtlxWarn('mtlx-engine: irradiance convolution failed, keeping the SH map: '+(error&&error.message||error));}renderer.setRenderTarget(previousTarget);if(target)target.dispose();if(material)material.dispose();if(scene&&scene.children[0])scene.children[0].geometry.dispose();return env;};// The irradiance sampler the SHADING path binds. env.irradiance (the SH
+// map) always exists and is the fallback; env.irradianceConvolved only
+// exists once ensureConvolvedIrradiance has succeeded on a WebGL2 renderer
+// with the 'convolve' switch active.
+const envIrradianceForShading=env=>{if(!env)return null;if(getDiffuseEnvMethod()==='convolve'&&env.irradianceConvolved)return env.irradianceConvolved;return env.irradiance;};const buildEnvFromParsedTexture=raw=>{// Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
 // background are built below, so it disappears from all three,
 // matching official "split" env assets.
 const keyLight=keyLightEnabled?extractKeyLight(raw):null;// extractKeyLight only mutates raw on a SUCCESSFUL extraction (both
@@ -1447,7 +1885,7 @@ const keyLight=keyLightEnabled?extractKeyLight(raw):null;// extractKeyLight only
 // pristine here whenever the soft fallback is actually needed.
 const softKeyDir=keyLight?null:extractSoftKeyDir(raw);const radiance=prepareEnv(raw);const irrSrc=shIrradianceFromEquirect(raw);const irradiance=irrSrc?prepareEnv(irrSrc):radiance;const img=radiance.image;const mips=Math.trunc(Math.log2(Math.max(img.width,img.height)))+1;// Correctly-oriented copy for the visible skybox mesh, see
 // makeBackgroundTexture and the env-prep header above.
-const background=makeBackgroundTexture(radiance);return{radiance,irradiance,mips,background,prefilteredIrr:false,keyLight,softKeyDir};};const getEnvironment=()=>{if(!envPromise){// fetch() -> ArrayBuffer -> parseEnvBuffer, mirroring
+const background=makeBackgroundTexture(radiance);return{radiance,irradiance,irradianceConvolved:null,mips,background,prefilteredIrr:false,keyLight,softKeyDir};};const getEnvironment=()=>{if(!envPromise){// fetch() -> ArrayBuffer -> parseEnvBuffer, mirroring
 // loadEnvironmentFromFile's path (same helper, different byte
 // source). Any failure resolves null; this promise never rejects.
 const ext=ENV_MAP_URL.slice(ENV_MAP_URL.lastIndexOf('.')).toLowerCase();envPromise=fetch(ENV_MAP_URL).then(r=>r.ok?r.arrayBuffer():null).catch(()=>null).then(buf=>{if(!buf)return null;// no file / fetch failed → synthesized sky
@@ -1495,9 +1933,12 @@ const MTLX_WARMED_SOURCES=new Set();// Deliberately no size gate: standard_surfa
 const warmKey=(vs,fs)=>{let h=5381;const s=vs+' '+fs;for(let i=0;i<s.length;i++)h=(h*33^s.charCodeAt(i))>>>0;return s.length+':'+h;};// Pre-compiles vs/fs on the hidden warm context; never throws. The
 // submitted source must match byte-for-byte what three.js's WebGLProgram
 // submits for display, or the driver cache misses (harmless, no speed win).
-const prewarmShaderCompile=async({vs,fs,isMounted,label})=>{const ctx=getWarmContext();if(!ctx)return'skipped';const key=warmKey(vs,fs);if(MTLX_WARMED_SOURCES.has(key)){if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL prewarm skipped, source already warmed this session (target: '+label+')');}return'skipped';}const{gl,ext}=ctx;const __warmPerfStart=window.MTLX_PERF_LOG?performance.now():0;let warmProgram=null,warmVShader=null,warmFShader=null;try{warmVShader=gl.createShader(gl.VERTEX_SHADER);gl.shaderSource(warmVShader,'#version 300 es\n'+vs);gl.compileShader(warmVShader);warmFShader=gl.createShader(gl.FRAGMENT_SHADER);gl.shaderSource(warmFShader,'#version 300 es\n'+fs);gl.compileShader(warmFShader);warmProgram=gl.createProgram();gl.attachShader(warmProgram,warmVShader);gl.attachShader(warmProgram,warmFShader);gl.linkProgram(warmProgram);}catch(e){// Defensive only: any failure here just skips the warm-up, falls
+// timeoutMs overrides WAIT_TIMEOUT_MS for one call: the Scene's parallel
+// compile mode (mtlx_scene_parallel_compile) stretches this per submission
+// so a driver busy with many queued programs is not mistaken for a stall.
+const prewarmShaderCompile=async({vs,fs,isMounted,label,timeoutMs})=>{const ctx=getWarmContext();if(!ctx)return'skipped';const key=warmKey(vs,fs);if(MTLX_WARMED_SOURCES.has(key)){if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL prewarm skipped, source already warmed this session (target: '+label+')');}return'skipped';}const{gl,ext}=ctx;const __warmPerfStart=window.MTLX_PERF_LOG?performance.now():0;let warmProgram=null,warmVShader=null,warmFShader=null;try{warmVShader=gl.createShader(gl.VERTEX_SHADER);gl.shaderSource(warmVShader,'#version 300 es\n'+vs);gl.compileShader(warmVShader);warmFShader=gl.createShader(gl.FRAGMENT_SHADER);gl.shaderSource(warmFShader,'#version 300 es\n'+fs);gl.compileShader(warmFShader);warmProgram=gl.createProgram();gl.attachShader(warmProgram,warmVShader);gl.attachShader(warmProgram,warmFShader);gl.linkProgram(warmProgram);}catch(e){// Defensive only: any failure here just skips the warm-up, falls
 // through to today's (unwarmed) compile behavior.
-try{if(warmProgram)gl.deleteProgram(warmProgram);}catch(e2){/* context lost etc. */}try{if(warmVShader)gl.deleteShader(warmVShader);}catch(e2){/* ditto */}try{if(warmFShader)gl.deleteShader(warmFShader);}catch(e2){/* ditto */}return'skipped';}if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL compile submit: '+(performance.now()-__warmPerfStart).toFixed(1)+'ms (target: '+label+')');}const cleanup=()=>{try{if(warmProgram)gl.deleteProgram(warmProgram);}catch(e){/* context lost etc. */}try{if(warmVShader)gl.deleteShader(warmVShader);}catch(e){/* ditto */}try{if(warmFShader)gl.deleteShader(warmFShader);}catch(e){/* ditto */}};const WAIT_POLL_MS=50,WAIT_POLL_FAST_MS=16,WAIT_POLL_FAST_TICKS=6,WAIT_TIMEOUT_MS=15000;const __waitStart=performance.now();let timedOut=false;// isProgram() is the silent validity check: false for a
+try{if(warmProgram)gl.deleteProgram(warmProgram);}catch(e2){/* context lost etc. */}try{if(warmVShader)gl.deleteShader(warmVShader);}catch(e2){/* ditto */}try{if(warmFShader)gl.deleteShader(warmFShader);}catch(e2){/* ditto */}return'skipped';}if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL compile submit: '+(performance.now()-__warmPerfStart).toFixed(1)+'ms (target: '+label+')');}const cleanup=()=>{try{if(warmProgram)gl.deleteProgram(warmProgram);}catch(e){/* context lost etc. */}try{if(warmVShader)gl.deleteShader(warmVShader);}catch(e){/* ditto */}try{if(warmFShader)gl.deleteShader(warmFShader);}catch(e){/* ditto */}};const WAIT_POLL_MS=50,WAIT_POLL_FAST_MS=16,WAIT_POLL_FAST_TICKS=6;const WAIT_TIMEOUT_MS=typeof timeoutMs==='number'&&timeoutMs>0?timeoutMs:15000;const __waitStart=performance.now();let timedOut=false;// isProgram() is the silent validity check: false for a
 // deleted/invalid handle WITHOUT a GL error (unlike getProgramParameter,
 // which logs "GL_INVALID_VALUE" once per pre-warm on Chrome).
 const isWarmDone=()=>{try{if(gl.isContextLost())return true;if(!gl.isProgram(warmProgram))return true;const v=gl.getProgramParameter(warmProgram,ext.COMPLETION_STATUS_KHR);// A GL error (invalid/deleted program) returns null WITHOUT
@@ -1515,13 +1956,17 @@ if(performance.now()-__waitStart>WAIT_TIMEOUT_MS){timedOut=true;break;}// Escala
 // matters for multi-second compiles.
 const pollMs=tick<WAIT_POLL_FAST_TICKS?WAIT_POLL_FAST_MS:WAIT_POLL_MS;tick++;await new Promise(resolve=>setTimeout(resolve,pollMs));// Lifecycle bail: a superseded build must stop and clean up rather
 // than keep polling GL objects for a view nobody wants.
-if(!isMounted()){cleanup();return'bailed';}}if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL compile wait: '+(performance.now()-__waitStart).toFixed(1)+'ms (target: '+label+')');}if(!timedOut)MTLX_WARMED_SOURCES.add(key);cleanup();return'done';};// Background driver pre-warm for an off-screen preview target, builds,
+if(!isMounted()){cleanup();return'bailed';}}if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL compile wait: '+(performance.now()-__waitStart).toFixed(1)+'ms (target: '+label+')');}if(!timedOut)MTLX_WARMED_SOURCES.add(key);cleanup();return'done';};// Submits a generated standalone displacement program to the warm context
+// WITHOUT awaiting it, so its compile overlaps the surface compile instead
+// of blocking the first evaluateDisplacement. Kill switch
+// mtlx_displacement_prewarm=0. Returns the promise (or null).
+const DISPLACEMENT_PREWARM_KEY='mtlx_displacement_prewarm';const readDisplacementPrewarm=()=>{try{return localStorage.getItem(DISPLACEMENT_PREWARM_KEY)!=='0';}catch(e){return true;}};const prewarmDisplacementSources=(srcs,isMounted,label)=>{const disp=srcs&&srcs.displacement;if(!disp||!disp.vs||!disp.fs||!readDisplacementPrewarm())return null;const promise=prewarmShaderCompile({vs:disp.vs,fs:disp.fs,isMounted,label:label+' (displacement)'});disp.prewarmPromise=promise;return promise;};// Background driver pre-warm for an off-screen preview target, builds,
 // generates, and pre-compiles inside ONE mxExclusive hold (so a transient
 // __pv_* wrapper is never observable by a concurrent op). NEVER call from
 // inside an existing mxExclusive (deadlock).
 const prewarmPreviewTarget=async({mx,gen,genContext,buildRenderable,label,isMounted=()=>true})=>{// No warm context (no WebGL2 / no KHR_parallel_shader_compile) means
 // generating sources here would only be thrown away, skip the work.
-if(!getWarmContext())return'skipped';let srcs=null;try{srcs=await mxExclusive(()=>{const built=buildRenderable();if(!built||!built.renderable)return null;try{return generatePreviewSourcesUnlocked({mx,gen,genContext,renderable:built.renderable,label,isMounted});}finally{// Best-effort, ALWAYS: the transient __pv_* wrappers must
+if(!getWarmContext())return'skipped';let srcs=null;try{srcs=await mxExclusive(()=>{const built=buildRenderable();if(!built||!built.renderable)return null;try{return generatePreviewSourcesUnlocked({mx,gen,genContext,renderable:built.renderable,label,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS});}finally{// Best-effort, ALWAYS: the transient __pv_* wrappers must
 // never survive past this hold (same single-hold rule),
 // including when generation itself threw.
 try{built.cleanup();}catch(e){/* best-effort */}}});}catch(e){// Silent by design (see the doc comment above): a generation
@@ -1555,10 +2000,16 @@ const unresolvedNodesText=found=>found.map(u=>u.known?`Node "${u.name}" (type "$
 // letting tryRefreshRenderView diff sources without a full rebuild.
 // Frees mxShader before returning, so nothing holds a live wasm handle.
 // ------------------------------------------------------------------
-const generatePreviewSourcesUnlocked=({mx,gen,genContext,renderable,label,isMounted=()=>true,document:documentArg=null,sceneRgbt=false,lightTransport=false,sceneFeatureOptions=null})=>{// Sampler-budget drops, requested only by compileMtlxSceneMaterial's
+const generatePreviewSourcesUnlocked=({mx,gen,genContext,renderable,label,materialName=null,isMounted=()=>true,document:documentArg=null,sceneRgbt=false,lightTransport=false,sceneFeatureOptions=null,stageLightCount=null,allowConstInputs=true})=>{// Sampler-budget drops, requested only by compileMtlxSceneMaterial's
 // recompile loop; every other caller keeps the full feature set.
-const skipSkyVis=!!(sceneFeatureOptions&&sceneFeatureOptions.skipSkyVis);const skipAoVolume=!!(sceneFeatureOptions&&sceneFeatureOptions.skipAoVolume);const dropThicknessMap=!!(sceneFeatureOptions&&sceneFeatureOptions.dropThicknessMap);const skipTransmittance=!!(sceneFeatureOptions&&sceneFeatureOptions.skipTransmittance);const skipRefraction=!!(sceneFeatureOptions&&sceneFeatureOptions.skipRefraction);// Screen-space reflections are parked (see SCENE_SSR_PARKED in the renderer): skip the patch.
-const skipSsr=true||!!(sceneFeatureOptions&&sceneFeatureOptions.skipSsr);// OFFICIAL PARITY: per-material generation options on SHARED
+const skipSkyVis=!!(sceneFeatureOptions&&sceneFeatureOptions.skipSkyVis);const skipAoVolume=!!(sceneFeatureOptions&&sceneFeatureOptions.skipAoVolume);const skipBounce=!!(sceneFeatureOptions&&sceneFeatureOptions.skipBounce);const dropThicknessMap=!!(sceneFeatureOptions&&sceneFeatureOptions.dropThicknessMap);const skipTransmittance=!!(sceneFeatureOptions&&sceneFeatureOptions.skipTransmittance);const skipRefraction=!!(sceneFeatureOptions&&sceneFeatureOptions.skipRefraction);// Feature gating: a feature that is off, or impossible in this tool, is
+// never generated. The kill switch forces both back to "generate".
+const featureGated=readFeatureGated();const skipShadowMap=featureGated&&!!(sceneFeatureOptions&&sceneFeatureOptions.skipShadowMap);const skipOcclusion=featureGated&&!!(sceneFeatureOptions&&sceneFeatureOptions.skipOcclusion);// Screen-space reflections are parked (see SCENE_SSR_PARKED in the renderer): skip the patch.
+const skipSsr=true||!!(sceneFeatureOptions&&sceneFeatureOptions.skipSsr);const skipLocalEnv=!!(sceneFeatureOptions&&sceneFeatureOptions.skipLocalEnv);// Off by default (Viewer/Compare/Builder/Graph previews and every
+// embed leave sceneFeatureOptions.specularAA unset); the Scene's own
+// compile path (compileMtlxSceneMaterial) is the only caller that
+// sets it explicitly, defaulting to true there.
+const specularAA=!!(sceneFeatureOptions&&sceneFeatureOptions.specularAA);// OFFICIAL PARITY: per-material generation options on SHARED
 // module-scope genContext. hwTransparency is reset FIRST,
 // unconditionally, else a failed detection leaks A's stale value onto B.
 let transparent=false;try{genContext.getOptions().hwTransparency=false;}catch(e){/* option absent */}try{if(typeof mx.isTransparentSurface==='function'){const t=!!mx.isTransparentSurface(renderable,gen.getTarget());genContext.getOptions().hwTransparency=t;transparent=t;// set only after the option write succeeded
@@ -1571,36 +2022,53 @@ try{genContext.getOptions().premultipliedBsdfAdd=false;}catch(e){/* option absen
 // not an integer: assigning 0/1/2 is silently ignored, which is what
 // made this look unsettable before. Verified by generating both ways
 // and checking for mx_latlong_alpha_to_lod in the output.
-try{const methods=mx.HwSpecularEnvironmentMethod;const wanted=getSpecularEnvMethod()==='fis'?methods.SPECULAR_ENVIRONMENT_FIS:methods.SPECULAR_ENVIRONMENT_PREFILTER;if(wanted)genContext.getOptions().hwSpecularEnvironmentMethod=wanted;}catch(e){/* enum absent in older bindings, keep the generator default */}// Bail before the ~expensive shader-generation call if this
+try{const methods=mx.HwSpecularEnvironmentMethod;const wanted=getSpecularEnvMethod()==='fis'?methods.SPECULAR_ENVIRONMENT_FIS:methods.SPECULAR_ENVIRONMENT_PREFILTER;if(wanted)genContext.getOptions().hwSpecularEnvironmentMethod=wanted;}catch(e){/* enum absent in older bindings, keep the generator default */}// Shadow-map sampling is a generator option, so a tool or a scene with
+// shadows off never compiles it. Written on EVERY generation, both ways,
+// so no material leaks the previous one's setting.
+try{genContext.getOptions().hwShadowMap=!skipShadowMap;}catch(e){/* option absent */}// Light limit: MAX_LIGHT_SOURCES is baked into the source, so a tool
+// that can never hold a stage light gets a smaller tier. Written on
+// EVERY generation while the switch is on, so no tier leaks to the next.
+let maxLights=mxRigLightCount+1+STAGE_LIGHT_SLOTS;if(readLightLimit()){maxLights=mxRigLightCount+1+chooseStageLightTier(stageLightCount);try{genContext.getOptions().hwMaxActiveLightSources=maxLights;}catch(e){/* option absent */}}// Bail before the ~expensive shader-generation call if this
 // build was superseded (mounted flipped while awaiting above),
 // nothing GL-side exists yet, so there's nothing to dispose.
 if(!isMounted())return null;// Colorspace aliases are normalized on the LIVE document for the
 // duration of gen.generate only; restore in finally so the authored
 // document (and any export of it) never actually changes.
-const colorspaceDoc=mxSafe(()=>renderable.getDocument(),null)||documentArg;let colorspaceAliasResult=null;let colorspaceTransformResult=null;if(colorspaceDoc){colorspaceAliasResult=applyColorspaceAliases(colorspaceDoc);// Must follow the aliases: an authored "srgb_tx" only becomes a
+const colorspaceDoc=mxSafe(()=>renderable.getDocument(),null)||documentArg;let colorspaceAliasResult=null;let colorspaceTransformResult=null;let materialWorkspaceResult=null;if(colorspaceDoc){colorspaceAliasResult=applyColorspaceAliases(colorspaceDoc);// Must follow the aliases: an authored "srgb_tx" only becomes a
 // name cmlib knows once applyColorspaceAliases has normalized it.
-colorspaceTransformResult=applyColorspaceTransforms(colorspaceDoc);}// Catches a MaterialX type mismatch (no implicit coercion) BEFORE
+colorspaceTransformResult=applyColorspaceTransforms(colorspaceDoc);// Scene-only "Material working space" setting: never set outside the
+// Scene's own compile path (see compileMtlxSceneMaterial), so the
+// Viewer/Compare/Builder/Graph previews and every embed are unaffected.
+if(sceneFeatureOptions&&sceneFeatureOptions.materialWorkspace==='acescg'){try{materialWorkspaceResult=applyMaterialWorkspaceTransforms(colorspaceDoc);}catch(e){// Safe-fail: leave the material in Rec.709 rather than throw.
+mtlxWarn('Material working space (ACEScg) conversion failed, staying in Rec.709: '+(e&&e.message||e));materialWorkspaceResult=null;}}}// Catches a MaterialX type mismatch (no implicit coercion) BEFORE
 // generation, which otherwise fails deep inside an opaque nodegraph
 // call with a GLSL line number instead of naming the real culprit.
-const mismatch=findTypeMismatches(renderable,mx);if(mismatch){throw new Error(`Material "${label}": input "${mismatch.inputName}" on "${mismatch.nodeName}" `+`(${mismatch.inputType}) is connected to "${mismatch.sourceName}" (${mismatch.sourceType}); `+'MaterialX requires matching types');}let mxShader;const __genPerfStart=window.MTLX_PERF_LOG?performance.now():0;try{try{mxShader=gen.generate('PreviewShader',renderable,genContext);}catch(genErr){// Decode the REAL MaterialX error (Emscripten throws
+const powerNodeNames=materialPowerNodeNames(colorspaceDoc);const mismatch=findTypeMismatches(renderable,mx);if(mismatch){throw new Error(`Material "${label}": input "${mismatch.inputName}" on "${mismatch.nodeName}" `+`(${mismatch.inputType}) is connected to "${mismatch.sourceName}" (${mismatch.sourceType}); `+'MaterialX requires matching types');}let mxShader;const __genPerfStart=window.MTLX_PERF_LOG?performance.now():0;try{try{mxShader=gen.generate('PreviewShader',renderable,genContext);}catch(genErr){// Decode the REAL MaterialX error (Emscripten throws
 // numeric pointers) instead of a generic string, then name the
 // node types behind it, which MaterialX's own message omits.
 const detail=unresolvedNodesText(describeUnresolvedNodes(renderable));throw new Error(`Shader generation failed for "${label}": ${mxErr(mx,genErr)}`+(detail?`. ${detail}`:''));}}finally{// Reverse order: the transforms were layered on top of the aliases.
-if(colorspaceTransformResult)colorspaceTransformResult.restore();if(colorspaceAliasResult)colorspaceAliasResult.restore();}if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] gen.generate: '+(performance.now()-__genPerfStart).toFixed(1)+'ms (target: '+label+')');}// Stage identifiers: some JS builds don't expose the mx.Stage enum
+if(materialWorkspaceResult)materialWorkspaceResult.restore();if(colorspaceTransformResult)colorspaceTransformResult.restore();if(colorspaceAliasResult)colorspaceAliasResult.restore();}if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] gen.generate: '+(performance.now()-__genPerfStart).toFixed(1)+'ms (target: '+label+')');}// Stage identifiers: some JS builds don't expose the mx.Stage enum
 // object ("Cannot read ... 'VERTEX'"). The underlying constants are
 // just the strings "vertex"/"pixel", which getSourceCode accepts.
 const VERTEX_STAGE=mx.Stage&&mx.Stage.VERTEX||'vertex';const PIXEL_STAGE=mx.Stage&&mx.Stage.PIXEL||'pixel';let vs=stripVersion(mxShader.getSourceCode(VERTEX_STAGE));// hwSrgbEncodeOutput=false means raw linear output, so encodeDisplay()'s
 // (runtime-gated) epilogue is injected below unless the FRAGMENT
 // OUTPUT's own assignment already encodes srgb, checking the whole
 // shader string false-positives.
-let fs=stripVersion(mxShader.getSourceCode(PIXEL_STAGE));({vs,fs}=patchGeompropVaryings(vs,fs));const vertexInputs=parseVertexInputs(vs);const geomprops=vertexInputs.filter(v=>v.name.startsWith('i_geomprop_')).map(v=>({name:v.name.slice('i_geomprop_'.length),type:v.type}));const notices=[];if(colorspaceAliasResult){for(const[key,count]of colorspaceAliasResult.rewrites){const[from,to]=key.split(' -> ');notices.push(`Colorspace "${from}" is not a MaterialX 1.39 name; ${count} inputs treated as `+(to==='(removed)'?'no conversion':to));}}if(colorspaceTransformResult){for(const[cs,count]of colorspaceTransformResult.converted){notices.push(`Colorspace "${cs}": ${count} texture(s) converted to lin_rec709 in the shader`);}for(const cs of colorspaceTransformResult.unsupported){notices.push(`Colorspace "${cs}" has no conversion available; those textures are sampled unconverted`);}}fs=patchUnlitLightingRefs(fs);fs=patchScenePhysicalLightFalloff(fs,sceneRgbt);fs=patchSceneThinWalledTransmission(fs,sceneRgbt,notices);const outDeclMatch=fs.match(/\bout\s+vec4\s+(\w+)\s*;/);const outVar=outDeclMatch?outDeclMatch[1]:null;const outAssignments=outVar?fs.match(new RegExp('\\b'+outVar+'\\s*=[^;]*;','g')):null;if(!outVar||!outAssignments||!outAssignments.length){mtlxWarn(`mtlx-engine: could not locate the fragment output assignment for "${label}", skipping encodeDisplay() as a fail-safe (cannot verify it's safe to inject ACES+sRGB without double-encoding).`);}else if(/srgb/i.test(outAssignments.join('\n'))){// Self-encoding materials skip the epilogue entirely (no
+let fs=stripVersion(mxShader.getSourceCode(PIXEL_STAGE));fs=patchMaterialPowerNodes(fs,powerNodeNames);({vs,fs}=patchGeompropVaryings(vs,fs));const vertexInputs=parseVertexInputs(vs);// geompropvalue nodes carry a `default` for when the stream is absent;
+// collect it so binding can use it instead of zeros.
+const geompropDefaults=materialGeompropDefaults(colorspaceDoc);const geomprops=vertexInputs.filter(v=>v.name.startsWith('i_geomprop_')).map(v=>{const name=v.name.slice('i_geomprop_'.length);const defaultValue=geompropDefaults.get(name)||null;return defaultValue?{name,type:v.type,defaultValue}:{name,type:v.type};});const notices=[];if(colorspaceAliasResult){for(const[key,count]of colorspaceAliasResult.rewrites){const[from,to]=key.split(' -> ');notices.push(`Colorspace "${from}" is not a MaterialX 1.39 name; ${count} inputs treated as `+(to==='(removed)'?'no conversion':to));}}if(colorspaceTransformResult){for(const[cs,count]of colorspaceTransformResult.converted){notices.push(`Colorspace "${cs}": ${count} texture(s) converted to lin_rec709 in the shader`);}for(const cs of colorspaceTransformResult.unsupported){notices.push(`Colorspace "${cs}" has no conversion available; those textures are sampled unconverted`);}}fs=patchUnlitLightingRefs(fs);fs=patchScenePhysicalLightFalloff(fs,sceneRgbt);fs=patchSceneThinWalledTransmission(fs,sceneRgbt,notices);const outDeclMatch=fs.match(/\bout\s+vec4\s+(\w+)\s*;/);const outVar=outDeclMatch?outDeclMatch[1]:null;const outAssignments=outVar?fs.match(new RegExp('\\b'+outVar+'\\s*=[^;]*;','g')):null;if(!outVar||!outAssignments||!outAssignments.length){mtlxWarn(`mtlx-engine: could not locate the fragment output assignment for "${label}", skipping encodeDisplay() as a fail-safe (cannot verify it's safe to inject ACES+sRGB without double-encoding).`);}else if(/srgb/i.test(outAssignments.join('\n'))){// Self-encoding materials skip the epilogue entirely (no
 // u_peelLinear gate to attach to), so the linear peel/tail passes
 // treat their output as already display-encoded, a pre-existing
 // approximation, sharper now that peeling can otherwise be linear.
-mtlxWarn(`mtlx-engine: the fragment output assignment for "${label}" already calls an sRGB encode (despite hwSrgbEncodeOutput=false): skipping encodeDisplay() to avoid double-encoding (ACES tone mapping will NOT be applied to this material).`);}else{fs=encodeDisplay(fs);}// Screen-space reflections wrap the generated IBL call before the
+mtlxWarn(`mtlx-engine: the fragment output assignment for "${label}" already calls an sRGB encode (despite hwSrgbEncodeOutput=false): skipping encodeDisplay() to avoid double-encoding (ACES tone mapping will NOT be applied to this material).`);}else{fs=encodeDisplay(fs);}// Local reflections substitute the dome lookup's `Li` BEFORE screen-space
+// reflections wrap the whole function, so SSR (when unparked) blends on
+// top of a local-env-aware fallback rather than the bare dome.
+fs=patchLocalEnvironmentRadiance(fs,{skipLocalEnv,notices});// Screen-space reflections wrap the generated IBL call before the
 // refraction/peel patches touch the shader.
 fs=patchScreenSpaceReflection(fs,{skipSsr,notices});// Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
-fs=patchTransmissionAlpha(fs,{skipRefraction});let payloadSupported=false;if(sceneRgbt){fs=patchRgbtPayload(fs);payloadSupported=fs.indexOf('/* MX_RGBT_PAYLOAD_SUPPORTED */')!==-1;}let lightTransportSupported=false;if(lightTransport){fs=patchLightTransportPayload(fs,notices,lightTransport);lightTransportSupported=fs.indexOf('MX_LIGHT_TRANSPORT_TERMINAL_RETURN')!==-1;}fs=patchShadowBounds(fs);fs=patchShadowLightScope(fs,{skipTransmittance});fs=patchLightSourceKindStruct(fs);fs=patchAreaLightSourceCosine(fs);fs=patchAmbientOcclusion(fs,{skipSkyVis,skipAoVolume});fs=patchTransmissionThickness(fs,{dropThicknessMap});// Depth-peel machinery: baked into every fragment shader
+fs=patchTransmissionAlpha(fs,{skipRefraction});let payloadSupported=false;if(sceneRgbt){fs=patchRgbtPayload(fs);payloadSupported=fs.indexOf('/* MX_RGBT_PAYLOAD_SUPPORTED */')!==-1;}let lightTransportSupported=false;if(lightTransport){fs=patchLightTransportPayload(fs,notices,lightTransport);lightTransportSupported=fs.indexOf('MX_LIGHT_TRANSPORT_TERMINAL_RETURN')!==-1;}fs=patchShadowBounds(fs);fs=patchShadowLightScope(fs,{skipTransmittance});fs=patchLightSourceKindStruct(fs);fs=patchAreaLightSourceCosine(fs);// skipOcclusion drops the whole block (screen-space AO included), which
+// only ever ran at strength 0 in a tool that cannot bind an AO pass.
+if(!skipOcclusion)fs=patchAmbientOcclusion(fs,{skipSkyVis,skipAoVolume});fs=patchDiffuseBounceAdd(fs,{skipSkyVis,skipBounce});fs=patchSpecularAA(fs,{specularAA});fs=patchTransmissionThickness(fs,{dropThicknessMap});// Depth-peel machinery: baked into every fragment shader
 // UNCONDITIONALLY (not just when Force Transparency is on), see
 // injectPeelDiscard's header comment above for why this keeps
 // toggling the setting a pure uniform flip (no regen/recompile) and
@@ -1609,14 +2077,42 @@ fs=patchTransmissionAlpha(fs,{skipRefraction});let payloadSupported=false;if(sce
 fs=injectPeelDiscard(fs,payloadSupported);// Uniform introspection, still fully inside the mxExclusive lock:
 // plainizeMxUniformData converts every vector/matrix/color `data`
 // field to a plain, detached JS array before the lock can release.
-let introspected=[];for(const stageName of[VERTEX_STAGE,PIXEL_STAGE]){let st=null;try{st=mxShader.getStage(stageName);}catch(e){/* stage absent */}if(st)introspected=introspected.concat(collectMxUniforms(st));}introspected=introspected.map(plainizeMxUniformData);// uv_scale/uv_offset are ALWAYS emitted as uniforms (never inline
+let introspected=[];for(const stageName of[VERTEX_STAGE,PIXEL_STAGE]){let st=null;try{st=mxShader.getStage(stageName);}catch(e){/* stage absent */}if(st)introspected=introspected.concat(collectMxUniforms(st));}introspected=introspected.map(plainizeMxUniformData);introspected=annotateFilenameSamplerModes(introspected,colorspaceDoc||documentArg);// uv_scale/uv_offset are ALWAYS emitted as uniforms (never inline
 // vec2 literals), so applyHeightToNormalTexel's identity check reads
 // their MaterialX-introspected default value here, once introspected
 // exists, instead of pattern-matching the (nonexistent) literal text.
-fs=applyHeightToNormalTexel(fs,notices,introspected);// Last reference to mxShader, free it here, still inside the lock.
+fs=applyHeightToNormalTexel(fs,notices,introspected);// Const inputs: the last source pass, so every regex above still sees
+// the declarations it matches on. Pruned entries leave `introspected`
+// so nothing tries to bind a uniform that no longer exists.
+let constInputs=[];if(allowConstInputs!==false&&readConstInputs()){const constified=constifyInputUniforms(vs,fs,introspected);vs=constified.vs;fs=constified.fs;introspected=constified.introspected;constInputs=constified.constInputs;}// Last reference to mxShader, free it here, still inside the lock.
 // Guarded: a BindingError here must never fail an otherwise-successful
 // generation. Loop-local `st` handles are left for FinalizationRegistry.
-try{mxShader.delete();}catch(e){/* already deleted */}return{vs,fs,introspected,transparent,vertexInputs,geomprops,notices,payloadSupported,lightTransportSupported};};// Public entry point: serializes generatePreviewSourcesUnlocked against
+try{mxShader.delete();}catch(e){/* already deleted */}// Displacement is generated as its own tiny standalone program, never
+// let a failure here break the surface material; any problem becomes
+// a notice on the returned sources instead of a throw.
+let displacement=null;try{const __dispGenStart=window.MTLX_PERF_LOG?performance.now():0;displacement=generateDisplacementSourcesUnlocked({mx,gen,genContext,renderable,materialName,allowConstInputs});if(displacement&&window.MTLX_PERF_LOG)displacement.genMs=performance.now()-__dispGenStart;if(displacement&&displacement.notices&&displacement.notices.length){notices.push(...displacement.notices);}}catch(e){notices.push('Displacement skipped: '+(e&&e.message?e.message:String(e)));displacement=null;}// What this source does NOT contain, so uniform seeding can skip the
+// same features instead of binding samplers no program declares.
+const featureSkips={shadowMap:skipShadowMap,occlusion:skipOcclusion,skyVis:skipOcclusion||skipSkyVis,aoVolume:skipOcclusion||skipSkyVis||skipAoVolume};return{vs,fs,introspected,transparent,vertexInputs,geomprops,notices,payloadSupported,lightTransportSupported,displacement,maxLights,constInputs,featureSkips};};// Follows one displacementshader-typed input to the element to generate
+// from: the connected node, or the connected nodegraph's Output element
+// when the input names a nodegraph and output.
+const mxFollowDisplacementInput=(input,doc)=>{if(!input)return null;const nodeName=mxElAttr(input,'nodename');if(nodeName)return mxSafe(()=>input.getConnectedNode(),null);const graphName=mxElAttr(input,'nodegraph');if(graphName){const ng=mxSafe(()=>doc.getNodeGraph(graphName),null);const outName=mxElAttr(input,'output');return ng&&outName?mxSafe(()=>ng.getOutput(outName),null):null;}return null;};// resolveDisplacementSource: finds the element to generate the standalone
+// displacement program from. Must run inside the existing mxExclusive lock.
+// `notices`, when given, gets a note when more than one distinct connection is found.
+const resolveDisplacementSource=({mx,renderable,materialName,notices=null})=>{if(!renderable)return null;if(mxElType(renderable)==='displacementshader')return renderable;const doc=mxSafe(()=>renderable.getDocument(),null);if(!doc)return null;if(materialName){const matNode=mxSafe(()=>doc.getNode(materialName),null);if(matNode&&mxElType(matNode)==='material'){const el=mxFollowDisplacementInput(mxSafe(()=>matNode.getInput('displacementshader'),null),doc);if(el)return el;}}const renderableName=mxElName(renderable);let allNodes=[];try{allNodes=vecToArray(doc.getNodes?doc.getNodes():null);}catch(e){allNodes=[];}let found=null;const distinct=new Set();for(const n of allNodes){if(mxElType(n)!=='material')continue;const surfInput=mxSafe(()=>n.getInput('surfaceshader'),null);if(!surfInput||mxElAttr(surfInput,'nodename')!==renderableName)continue;const el=mxFollowDisplacementInput(mxSafe(()=>n.getInput('displacementshader'),null),doc);if(!el)continue;distinct.add(mxElName(el)+'|'+mxElCat(el));if(!found)found=el;}if(found&&distinct.size>1&&notices){notices.push('Multiple materials connect a different displacement to "'+renderableName+'"; using the first one found');}return found;};// detectDisplacementMode: a `displacement` node's own input type; a `mix`
+// of displacementshader recurses into fg/bg; a nodegraph output recurses
+// into its connected node; anything else is `auto`.
+const detectDisplacementMode=element=>{if(!element)return'auto';const category=mxElCat(element);if(category==='displacement'){const t=mxElType(mxSafe(()=>element.getInput('displacement'),null));return t==='float'||t==='vector3'?t:'auto';}if(category==='mix'&&mxElType(element)==='displacementshader'){const fgMode=detectDisplacementMode(mxSafe(()=>{const i=element.getInput('fg');return i?i.getConnectedNode():null;},null));const bgMode=detectDisplacementMode(mxSafe(()=>{const i=element.getInput('bg');return i?i.getConnectedNode():null;},null));if(fgMode==='float'&&bgMode==='float')return'float';if(fgMode==='vector3'||bgMode==='vector3')return'vector3';// mixed float+vector3 treated as tangent-space vector
+return'auto';}const connected=mxSafe(()=>element.getConnectedNode?element.getConnectedNode():null,null);return connected&&connected!==element?detectDisplacementMode(connected):'auto';};// FNV-1a over a UTF-16 JS string, good enough for a change-detection key
+// (not cryptographic). Returns an 8-char hex string.
+const fnv1aHex=str=>{let h=0x811c9dc5;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,0x01000193);}return(h>>>0).toString(16).padStart(8,'0');};// generateDisplacementSourcesUnlocked: generates the standalone displacement
+// program (see evaluateDisplacement for how it's used). Must run inside the
+// existing lock; every failure is caught and turned into a notice, never a throw.
+const generateDisplacementSourcesUnlocked=({mx,gen,genContext,renderable,materialName,allowConstInputs})=>{const notices=[];const source=resolveDisplacementSource({mx,renderable,materialName,notices});if(!source)return null;const mode=detectDisplacementMode(source);const document=mxSafe(()=>source.getDocument(),null);let colorspaceAliasResult=null;let colorspaceTransformResult=null;if(document){colorspaceAliasResult=applyColorspaceAliases(document);colorspaceTransformResult=applyColorspaceTransforms(document);}const powerNodeNames=materialPowerNodeNames(document);let prevHwTransparency;let hadHwTransparency=true;try{prevHwTransparency=genContext.getOptions().hwTransparency;}catch(e){hadHwTransparency=false;}let shader=null;try{try{genContext.getOptions().hwTransparency=false;}catch(e){/* option absent */}try{shader=gen.generate('mtlx_displacement',source,genContext);}catch(genErr){const msg=mxErr(mx,genErr);if(/mix/i.test(msg)&&/implementation/i.test(msg)){throw new Error('Displacement mixing is not supported by the MaterialX shader generator.');}throw new Error('shader generation failed ('+msg.slice(0,160)+')');}const VERTEX_STAGE=mx.Stage&&mx.Stage.VERTEX||'vertex';const PIXEL_STAGE=mx.Stage&&mx.Stage.PIXEL||'pixel';let vs=stripVersion(shader.getSourceCode(VERTEX_STAGE));let fs=stripVersion(shader.getSourceCode(PIXEL_STAGE));fs=patchMaterialPowerNodes(fs,powerNodeNames);({vs,fs}=patchGeompropVaryings(vs,fs));const vertexInputs=parseVertexInputs(vs);const geompropDefaults=materialGeompropDefaults(document);const geomprops=vertexInputs.filter(input=>input.name.startsWith('i_geomprop_')).map(input=>{const name=input.name.slice('i_geomprop_'.length);const defaultValue=geompropDefaults.get(name)||null;return defaultValue?{name,type:input.type,defaultValue}:{name,type:input.type};});let introspected=[];for(const stageName of[VERTEX_STAGE,PIXEL_STAGE]){let st=null;try{st=shader.getStage(stageName);}catch(e){/* stage absent */}if(st)introspected=introspected.concat(collectMxUniforms(st));}introspected=introspected.map(plainizeMxUniformData);introspected=annotateFilenameSamplerModes(introspected,document);// Const inputs, before the splices so the rewritten declarations are
+// still the plain generator output the regexes below expect.
+let constInputs=[];if(allowConstInputs!==false&&readDisplacementConstInputs()){const constified=constifyInputUniforms(vs,fs,introspected,DISPLACEMENT_CONST_INPUT_NAMES);vs=constified.vs;fs=constified.fs;introspected=constified.introspected;constInputs=constified.constInputs;}// Pixel splice: retarget the discarded final assignment into a
+// little-endian floatBitsToUint pack of one offset*scale component.
+const outMatch=fs.match(/\bout\s+vec4\s+(\w+)\s*;/);const structMatches=[...fs.matchAll(/displacementshader\s+(\w+)\s*=/g)];const outVar=outMatch?outMatch[1]:null;const structVar=structMatches.length?structMatches[structMatches.length-1][1]:null;let psSpliced=false;if(outVar&&structVar){const finalRe=new RegExp('\\b'+outVar+'\\s*=\\s*vec4\\(\\s*0\\.0\\s*,\\s*0\\.0\\s*,\\s*0\\.0\\s*,\\s*1\\.0\\s*\\)\\s*;(?=\\s*\\})');if(finalRe.test(fs)){const pack='{\n'+'        uint dispBits = floatBitsToUint(('+structVar+'.offset * '+structVar+'.scale)[u_dispComponent]);\n'+'        '+outVar+' = vec4(float(dispBits & 0xFFu), float((dispBits >> 8u) & 0xFFu), '+'float((dispBits >> 16u) & 0xFFu), float((dispBits >> 24u) & 0xFFu)) / 255.0;\n'+'    }';fs=fs.replace(finalRe,pack);fs=fs.replace(/\bvoid\s+main\s*\(/,'uniform int u_dispComponent;\nvoid main(');psSpliced=true;}}// Vertex splice: rasterize into a readback grid instead of the view.
+const vsAnchorRe=/gl_Position\s*=\s*u_viewProjectionMatrix\s*\*\s*hPositionWorld\s*;/;let vsSpliced=false;if(vsAnchorRe.test(vs)){vs=vs.replace(vsAnchorRe,'gl_Position = vec4(i_dispTexel, 0.0, 1.0);\n    gl_PointSize = 1.0;');vs=vs.replace(/\bvoid\s+main\s*\(/,'in vec2 i_dispTexel;\nvoid main(');vsSpliced=true;}if(!psSpliced||!vsSpliced){mtlxWarn('mtlx-engine: displacement splice anchor missing, '+(!vsSpliced?'vertex: '+vs.slice(0,200):'pixel: '+fs.slice(0,200)));throw new Error('generated shader anchors not found (vertex or pixel); MaterialX codegen changed');}const key=fnv1aHex(vs+String.fromCharCode(0)+fs+String.fromCharCode(0)+JSON.stringify(introspected.map(u=>({name:u.name,type:u.type,data:u.data,samplerModes:u.samplerModes||null}))));return{vs,fs,introspected,geomprops,mode,key,notices,constInputs};}finally{if(colorspaceTransformResult)colorspaceTransformResult.restore();if(colorspaceAliasResult)colorspaceAliasResult.restore();if(hadHwTransparency){try{genContext.getOptions().hwTransparency=prevHwTransparency;}catch(e){/* option absent */}}try{shader&&shader.delete&&shader.delete();}catch(e){/* already deleted */}}};// Public entry point: serializes generatePreviewSourcesUnlocked against
 // the shared wasm heap. Callers must go through THIS wrapper, never call
 // generatePreviewSourcesUnlocked directly, to avoid overlapping wasm ops.
 const generatePreviewSources=(...args)=>mxExclusive(()=>generatePreviewSourcesUnlocked(...args));// ANGLE D3D11 reports 16 texture image units; a Scene material bakes twelve
@@ -1628,48 +2124,62 @@ const DEFAULT_SAMPLER_BUDGET=16;// Drop order when a program exceeds the sampler
 // "a", "a and b", "a, b and c" for user-facing lists.
 const joinWithAnd=items=>items.length<=1?items.join(''):items.slice(0,-1).join(', ')+' and '+items[items.length-1];const SAMPLER_BUDGET_DROP_ORDER=[// Parked with screen-space reflections (always skipped for now).
 // { key: 'skipSsr', label: 'screen-space reflection (u_opaqueColor)' },
-{key:'skipAoVolume',label:'occlusion volume (u_aoVolumeMap)',userLabel:'ambient occlusion'},{key:'skipSkyVis',label:'sky visibility (u_skyVisMap)',userLabel:'sky visibility'},{key:'dropThicknessMap',label:'thickness map (u_thicknessMap)',userLabel:'transmission thickness'},{key:'skipTransmittance',label:'shadow transmittance (u_shadowTransmittance)',userLabel:'colored shadows through transparent materials'},{key:'skipRefraction',label:'refraction colour (u_opaqueColor)',userLabel:'refraction'}];// Viewer-path generation with the same sampler budget as the Scene: drops
+{key:'skipLocalEnv',label:'local reflection capture (u_localEnvRadiance)',userLabel:'local reflections'},{key:'skipBounce',label:'bounce volume (u_skyBounceMap)',userLabel:'diffuse bounce'},{key:'skipAoVolume',label:'occlusion volume (u_aoVolumeMap)',userLabel:'ambient occlusion'},{key:'skipSkyVis',label:'sky visibility (u_skyVisMap)',userLabel:'sky visibility'},{key:'dropThicknessMap',label:'thickness map (u_thicknessMap)',userLabel:'transmission thickness'},{key:'skipTransmittance',label:'shadow transmittance (u_shadowTransmittance)',userLabel:'colored shadows through transparent materials'},{key:'skipRefraction',label:'refraction colour (u_opaqueColor)',userLabel:'refraction'}];// Viewer-path generation with the same sampler budget as the Scene: drops
 // optional samplers in SAMPLER_BUDGET_DROP_ORDER until the fragment fits
 // the texture unit limit, and notes every drop on srcs.notices.
-const generatePreviewSourcesWithinBudget=async args=>{const overrideBudget=typeof window!=='undefined'?window.__mtlxSamplerBudgetOverride:undefined;const budget=Number.isFinite(overrideBudget)?overrideBudget:DEFAULT_SAMPLER_BUDGET;const dropped=[];let srcs=null;for(let attempt=0;;attempt++){const sceneFeatureOptions={};for(const d of dropped)sceneFeatureOptions[d.key]=true;srcs=await generatePreviewSources(Object.assign({},args,{sceneFeatureOptions}));if(!srcs)return null;if(countFragmentSamplers(srcs.fs).count<=budget)break;if(attempt>=SAMPLER_BUDGET_DROP_ORDER.length)break;dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);}if(dropped.length){const count=countFragmentSamplers(srcs.fs).count;const effects=joinWithAnd(dropped.map(d=>d.userLabel));srcs.notices=(srcs.notices||[]).concat(['Texture slots: this material uses more textures than this GPU allows ('+budget+'), so '+effects+(dropped.length>1?' are':' is')+' turned off for it']);srcs.samplerBudget={limit:budget,count,dropped:dropped.map(d=>d.label),droppedLabels:dropped.map(d=>d.userLabel)};}return srcs;};// Scene-view material compiler. This deliberately exposes the preview shader
+const generatePreviewSourcesWithinBudget=async args=>{const overrideBudget=typeof window!=='undefined'?window.__mtlxSamplerBudgetOverride:undefined;const budget=Number.isFinite(overrideBudget)?overrideBudget:DEFAULT_SAMPLER_BUDGET;const dropped=[];let srcs=null;for(let attempt=0;;attempt++){// The caller's feature gating is the base; budget drops add to it.
+const sceneFeatureOptions=Object.assign({},args.sceneFeatureOptions||null);for(const d of dropped)sceneFeatureOptions[d.key]=true;srcs=await generatePreviewSources(Object.assign({},args,{sceneFeatureOptions}));if(!srcs)return null;if(countFragmentSamplers(srcs.fs).count<=budget)break;if(attempt>=SAMPLER_BUDGET_DROP_ORDER.length)break;dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);}if(dropped.length){const count=countFragmentSamplers(srcs.fs).count;const effects=joinWithAnd(dropped.map(d=>d.userLabel));srcs.notices=(srcs.notices||[]).concat(['Texture slots: this material uses more textures than this GPU allows ('+budget+'), so '+effects+(dropped.length>1?' are':' is')+' turned off for it']);srcs.samplerBudget={limit:budget,count,dropped:dropped.map(d=>d.label),droppedLabels:dropped.map(d=>d.userLabel)};}return srcs;};// Scene-view material compiler. This deliberately exposes the preview shader
 // generation slice without allocating a renderer, scene, or canvas. Scene
 // renderers can compile a unique source once, then create independent uniform
 // instances for each object that uses that source.
-const DEFAULT_UNIFORM_VECTOR_BUDGET=1024;const compileMtlxSceneMaterial=async({mx,gen,genContext,renderable,label='material',isMounted=()=>true,document:documentArg=null,sceneRgbt=false,lightTransport=false,samplerBudget=null,uniformVectorBudget=null})=>{if(!renderable)throw new Error('MaterialX scene material is missing its renderable surface.');// Test-only override wins over the caller's live GL limit, so a headless
+const DEFAULT_UNIFORM_VECTOR_BUDGET=1024;const compileMtlxSceneMaterial=async({mx,gen,genContext,renderable,label='material',materialName=null,isMounted=()=>true,document:documentArg=null,sceneRgbt=false,lightTransport=false,samplerBudget=null,uniformVectorBudget=null,materialWorkspace='rec709',specularAA=true,stageLightCount=null,featureOptions=null})=>{if(!renderable)throw new Error('MaterialX scene material is missing its renderable surface.');// Test-only override wins over the caller's live GL limit, so a headless
 // spec can force a tight budget without a real ANGLE context.
-const overrideBudget=typeof window!=='undefined'?window.__mtlxSamplerBudgetOverride:undefined;const budget=Number.isFinite(overrideBudget)?overrideBudget:Number.isFinite(samplerBudget)?samplerBudget:DEFAULT_SAMPLER_BUDGET;const uniformLimit=Number.isFinite(uniformVectorBudget)?uniformVectorBudget:DEFAULT_UNIFORM_VECTOR_BUDGET;const dropped=[];let srcs=null;let samplerInfo=null;for(let attempt=0;;attempt++){const sceneFeatureOptions={};for(const d of dropped)sceneFeatureOptions[d.key]=true;srcs=await generatePreviewSources({mx,gen,genContext,renderable,label,isMounted,document:documentArg,sceneRgbt,lightTransport,sceneFeatureOptions});if(!srcs)return null;samplerInfo=countFragmentSamplers(srcs.fs);if(samplerInfo.count<=budget)break;if(attempt>=SAMPLER_BUDGET_DROP_ORDER.length)break;// hooks exhausted, still over
+const overrideBudget=typeof window!=='undefined'?window.__mtlxSamplerBudgetOverride:undefined;const budget=Number.isFinite(overrideBudget)?overrideBudget:Number.isFinite(samplerBudget)?samplerBudget:DEFAULT_SAMPLER_BUDGET;const uniformLimit=Number.isFinite(uniformVectorBudget)?uniformVectorBudget:DEFAULT_UNIFORM_VECTOR_BUDGET;const dropped=[];let srcs=null;let samplerInfo=null;let budgetAttempts=0;for(let attempt=0;;attempt++){budgetAttempts=attempt+1;// The scene's live feature set is the base; budget drops add to it.
+const sceneFeatureOptions=Object.assign({materialWorkspace,specularAA},featureOptions||null);for(const d of dropped)sceneFeatureOptions[d.key]=true;srcs=await generatePreviewSources({mx,gen,genContext,renderable,label,materialName,isMounted,document:documentArg,sceneRgbt,lightTransport,sceneFeatureOptions,stageLightCount});if(!srcs)return null;samplerInfo=countFragmentSamplers(srcs.fs);if(samplerInfo.count<=budget)break;if(attempt>=SAMPLER_BUDGET_DROP_ORDER.length)break;// hooks exhausted, still over
 dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);}const declared=parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));const overBudget=samplerInfo.count>budget;const uniformInfo=estimateFragmentUniformVectors(srcs.fs);return{...srcs,declared,// Program identity excludes uniforms and object transforms. Source
 // text is already fully adapted by generatePreviewSources.
-programKey:srcs.vs+'\\n/* scene-fs */\\n'+srcs.fs,sceneRgbt,lightTransport:lightTransport===true||lightTransport===4||lightTransport==='transfer'?4:0,lightTransportSupported:!!srcs.lightTransportSupported,payloadSupported:!!srcs.payloadSupported,label,samplerCount:samplerInfo.count,samplerNames:samplerInfo.names,samplerBudget:{limit:budget,count:samplerInfo.count,dropped:dropped.map(d=>d.label)},samplerOverBudget:overBudget,fragmentUniformVectors:{estimate:uniformInfo.estimate,limit:uniformLimit,largest:uniformInfo.largest},fragmentUniformOverBudget:uniformInfo.estimate>uniformLimit};};// Create a detached uniform map for one scene object. Every call returns a
+programKey:srcs.vs+'\\n/* scene-fs */\\n'+srcs.fs+'\\n/* displacement */\\n'+(srcs.displacement?srcs.displacement.key:'')+'\\n/* material-workspace */\\n'+materialWorkspace,sceneRgbt,lightTransport:lightTransport===true||lightTransport===4||lightTransport==='transfer'?4:0,lightTransportSupported:!!srcs.lightTransportSupported,payloadSupported:!!srcs.payloadSupported,label,samplerCount:samplerInfo.count,samplerNames:samplerInfo.names,samplerBudget:{limit:budget,count:samplerInfo.count,dropped:dropped.map(d=>d.label)},samplerOverBudget:overBudget,budgetAttempts,fragmentUniformVectors:{estimate:uniformInfo.estimate,limit:uniformLimit,largest:uniformInfo.largest},fragmentUniformOverBudget:uniformInfo.estimate>uniformLimit};};// Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms=({compiled,env=null,lightData=[],stageLights=null,shadowMap=null,shadowMatrix=null,ssaoMap=null,ssaoTexel=null,ssaoStrength=1,thicknessMap=null,thicknessTexel=null,thicknessScale=1,refractionTwoSided=false,sceneRadius=1,envTilt=null,envRotationRad=0,envExposure=1,environmentIndirectScale=1,environmentKeyScale=1,lightScales=null,shadowDiagnosticVisibilityScale=1,displayTransform=null,shadowAtlas=null,shadowMatrices=null,shadowTiles=null,shadowDepthPlanes=null,shadowDepthRanges=null,shadowSourceRadii=null,shadowTexelSizes=null,shadowFaceOrigins=null,shadowFaceValid=null,shadowFaceBasisX=null,shadowFaceBasisY=null,shadowFaceBasisZ=null,shadowSlotFace=null,shadowSlotFaceCount=null,shadowTransmittance=null,shadowRecordCells=null,skyVisMap=null,skyVisMin=null,skyVisSize=null,skyVisStrength=1,skyVisCell=0,aoVolumeMap=null,aoVolumeMin=null,aoVolumeSize=null,aoVolumeStrength=1,aoVolumeCell=0})=>{if(!compiled)throw new Error('Cannot create scene uniforms without compiled MaterialX source.');const uniforms={u_worldMatrix:{value:new THREE.Matrix4()},u_viewProjectionMatrix:{value:new THREE.Matrix4()},u_worldInverseTransposeMatrix:{value:new THREE.Matrix4()},u_viewPosition:{value:new THREE.Vector3()},u_peelMode:{value:0},u_peelHasPrev:{value:0},u_peelPrevDepth:{value:getDummyTex()},u_opaqueDepth:{value:getDummyTexWhite()},u_peelLinear:{value:0},// Injected by encodeDisplay, so these are never in MaterialX's own
+const createMtlxSceneUniforms=({compiled,env=null,lightData=[],stageLights=null,shadowMap=null,shadowMatrix=null,ssaoMap=null,ssaoTexel=null,ssaoStrength=1,thicknessMap=null,thicknessTexel=null,thicknessScale=1,refractionTwoSided=false,sceneRadius=1,envTilt=null,envRotationRad=0,envExposure=1,environmentIndirectScale=1,environmentKeyScale=1,lightScales=null,shadowDiagnosticVisibilityScale=1,displayTransform=null,shadowAtlas=null,shadowMatrices=null,shadowTiles=null,shadowDepthPlanes=null,shadowDepthRanges=null,shadowSourceRadii=null,shadowTexelSizes=null,shadowFaceOrigins=null,shadowFaceValid=null,shadowFaceBasisX=null,shadowFaceBasisY=null,shadowFaceBasisZ=null,shadowSlotFace=null,shadowSlotFaceCount=null,shadowTransmittance=null,shadowRecordCells=null,skyVisMap=null,skyVisMin=null,skyVisSize=null,skyVisStrength=1,skyVisCell=0,aoVolumeMap=null,aoVolumeMin=null,aoVolumeSize=null,aoVolumeStrength=1,aoVolumeCell=0,skyBounceMap=null,skyBounceMin=null,skyBounceSize=null,skyBounceStrength=0,skyBounceCell=0,bounceScale=0,bounceTint=null,localEnvMap=null,localEnvMips=1,localEnvStrength=0,localEnvProbe=null,localEnvBoxMin=null,localEnvBoxMax=null,localEnvParallax=0})=>{if(!compiled)throw new Error('Cannot create scene uniforms without compiled MaterialX source.');const uniforms={u_worldMatrix:{value:new THREE.Matrix4()},u_viewProjectionMatrix:{value:new THREE.Matrix4()},u_worldInverseTransposeMatrix:{value:new THREE.Matrix4()},u_viewPosition:{value:new THREE.Vector3()},u_peelMode:{value:0},u_peelHasPrev:{value:0},u_peelPrevDepth:{value:getDummyTex()},u_opaqueDepth:{value:getDummyTexWhite()},u_peelLinear:{value:0},// Injected by encodeDisplay, so these are never in MaterialX's own
 // introspection and cannot be gated on has() like the rest. The
 // transform defaults to the caller's, letting the Scene run a filmic
 // curve while the Material Viewer stays on plain sRGB for parity.
-u_displayExposure:{value:displayExposureScale()},u_displayTransform:{value:displayTransformId(displayTransform||getDisplayTransform())},// Shadow atlas. Seeded unconditionally for the same sampler-unit
-// reason as the sky volume below, and defaulted to "no caster on any
-// slot", which makes the whole lookup an exact no-op.
+u_displayExposure:{value:displayExposureScale()},u_displayTransform:{value:displayTransformId(displayTransform||getDisplayTransform())}};// A feature this source never generated declares no uniform for it, so
+// seeding one would only allocate. featureSkips carries what was gated
+// out, which has()/parseUniforms cannot see for a highp sampler3D.
+const featureSkips=compiled&&compiled.featureSkips||{};if(!featureSkips.shadowMap)Object.assign(uniforms,{// Shadow atlas. Seeded whenever the source carries shadow sampling,
+// for the same sampler-unit reason as the sky volume below, and
+// defaulted to "no caster on any slot": an exact no-op.
 u_shadowAtlas:{value:shadowAtlas||getDummyTexWhite()},u_shadowMatrices:{value:shadowMatrices&&shadowMatrices.length===SHADOW_FACE_SLOTS?shadowMatrices:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Matrix4())},u_shadowTiles:{value:shadowTiles&&shadowTiles.length===SHADOW_FACE_SLOTS?shadowTiles:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,1,1))},u_shadowDepthPlanes:{value:shadowDepthPlanes&&shadowDepthPlanes.length===SHADOW_FACE_SLOTS?shadowDepthPlanes:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,0,1))},u_shadowDepthRanges:{value:shadowDepthRanges&&shadowDepthRanges.length===SHADOW_FACE_SLOTS?shadowDepthRanges:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector2(0,1))},u_shadowSourceRadii:{value:shadowSourceRadii&&shadowSourceRadii.length===SHADOW_FACE_SLOTS?shadowSourceRadii:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4())},u_shadowTexelWorldSize:{value:shadowTexelSizes&&shadowTexelSizes.length===SHADOW_FACE_SLOTS?shadowTexelSizes:new Array(SHADOW_FACE_SLOTS).fill(0)},// Light position for a cube-group face, and whether a face actually
 // holds rendered data (the renderer always reserves six per group,
 // but only allocates a cell where geometry actually falls in it).
 u_shadowFaceOrigin:{value:shadowFaceOrigins&&shadowFaceOrigins.length===SHADOW_FACE_SLOTS?shadowFaceOrigins:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3())},u_shadowFaceValid:{value:shadowFaceValid&&shadowFaceValid.length===SHADOW_FACE_SLOTS?shadowFaceValid:new Array(SHADOW_FACE_SLOTS).fill(0)},u_shadowFaceBasisX:{value:shadowFaceBasisX&&shadowFaceBasisX.length===SHADOW_FACE_SLOTS?shadowFaceBasisX:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(1,0,0))},u_shadowFaceBasisY:{value:shadowFaceBasisY&&shadowFaceBasisY.length===SHADOW_FACE_SLOTS?shadowFaceBasisY:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,1,0))},u_shadowFaceBasisZ:{value:shadowFaceBasisZ&&shadowFaceBasisZ.length===SHADOW_FACE_SLOTS?shadowFaceBasisZ:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,0,1))},// Cloned, not aliased: applyShadowMatrix() writes into this uniform's
 // own array in place, and a diagnostic swap must never corrupt the
 // renderer's live shadowSlotFace/shadowSlotFaceCount state.
-u_shadowSlotFace:{value:shadowSlotFace&&shadowSlotFace.length===SHADOW_LIGHT_SLOTS_MAX?new Int32Array(shadowSlotFace):new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1)},u_shadowSlotFaceCount:{value:shadowSlotFaceCount&&shadowSlotFaceCount.length===SHADOW_LIGHT_SLOTS_MAX?new Int32Array(shadowSlotFaceCount):new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0)},u_shadowDiagnosticVisibilityScale:{value:Number.isFinite(Number(shadowDiagnosticVisibilityScale))?Math.max(0,Number(shadowDiagnosticVisibilityScale)):1},// Baked sky visibility. Seeded unconditionally, NOT through has():
-// parseUniforms' regex has no room for a precision qualifier, so
-// `uniform highp sampler3D` is invisible to it just as
-// `uniform highp sampler2D u_peelPrevDepth` is. An unseeded sampler
-// sits on texture unit 0 next to a sampler2D, and ANGLE then rejects
-// the entire draw with "Two textures of different types use the same
-// sampler location", so the scene renders nothing at all.
+u_shadowSlotFace:{value:shadowSlotFace&&shadowSlotFace.length===SHADOW_LIGHT_SLOTS_MAX?new Int32Array(shadowSlotFace):new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1)},u_shadowSlotFaceCount:{value:shadowSlotFaceCount&&shadowSlotFaceCount.length===SHADOW_LIGHT_SLOTS_MAX?new Int32Array(shadowSlotFaceCount):new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0)},u_shadowDiagnosticVisibilityScale:{value:Number.isFinite(Number(shadowDiagnosticVisibilityScale))?Math.max(0,Number(shadowDiagnosticVisibilityScale)):1}});if(!featureSkips.occlusion)Object.assign(uniforms,{// Baked sky visibility. Seeded whenever the occlusion block was
+// generated, NOT through has(): parseUniforms' regex has no room for
+// a precision qualifier, so `uniform highp sampler3D` is invisible.
+// An unseeded sampler sits on texture unit 0 next to a sampler2D, and
+// ANGLE then rejects the entire draw with "Two textures of different
+// types use the same sampler location": the scene renders nothing.
 // A white 1x1x1 volume at strength 0 is an exact no-op.
 u_skyVisMap:{value:skyVisMap||getDummyTex3DWhite()},u_skyVisMin:{value:skyVisMin?skyVisMin.clone():new THREE.Vector3()},u_skyVisSize:{value:skyVisSize?skyVisSize.clone():new THREE.Vector3(1,1,1)},u_skyVisCell:{value:skyVisCell||0},u_skyVisStrength:{value:skyVisMap?skyVisStrength:0},// Baked occlusion volume, same sampler-unit hazard as u_skyVisMap
 // above: a highp sampler3D is invisible to has()/parseUniforms, so
-// this is seeded unconditionally too. White at strength 0: no-op.
-u_aoVolumeMap:{value:aoVolumeMap||getDummyTex3DWhite()},u_aoVolumeMin:{value:aoVolumeMin?aoVolumeMin.clone():new THREE.Vector3()},u_aoVolumeSize:{value:aoVolumeSize?aoVolumeSize.clone():new THREE.Vector3(1,1,1)},u_aoVolumeCell:{value:aoVolumeCell||0},u_aoVolumeStrength:{value:aoVolumeMap?aoVolumeStrength:0}};if(compiled.payloadSupported){// Scene RGB-T is opt-in at compile time and remains inactive until
+// this is seeded alongside it. White at strength 0: no-op.
+u_aoVolumeMap:{value:aoVolumeMap||getDummyTex3DWhite()},u_aoVolumeMin:{value:aoVolumeMin?aoVolumeMin.clone():new THREE.Vector3()},u_aoVolumeSize:{value:aoVolumeSize?aoVolumeSize.clone():new THREE.Vector3(1,1,1)},u_aoVolumeCell:{value:aoVolumeCell||0},u_aoVolumeStrength:{value:aoVolumeMap?aoVolumeStrength:0}});// Baked diffuse bounce is patched in independently of the
+// occlusion gate, so it is seeded whatever that gate did.
+Object.assign(uniforms,{// Baked diffuse bounce, same sampler-unit hazard as the two volumes
+// above: seeded unconditionally. Default value is irrelevant at
+// strength 0 (the additive term early-returns), so this reuses the
+// same dummy white volume rather than allocating a second one.
+u_skyBounceMap:{value:skyBounceMap||getDummyTex3DWhite()},u_skyBounceMin:{value:skyBounceMin?skyBounceMin.clone():new THREE.Vector3()},u_skyBounceSize:{value:skyBounceSize?skyBounceSize.clone():new THREE.Vector3(1,1,1)},u_skyBounceCell:{value:skyBounceCell||0},u_skyBounceStrength:{value:skyBounceMap?skyBounceStrength:0},// Denormalizes the baked scalar SH1 encoding and reintroduces the
+// blockers' mean chroma (see patchDiffuseBounceAdd, shadeBounce in
+// js/usd-scene-skyvis.js): scale 0 is an exact no-op regardless of
+// strength or the baked volume's readiness.
+u_bounceScale:{value:Number.isFinite(bounceScale)?Math.max(0,bounceScale):0},u_bounceTint:{value:bounceTint?bounceTint.clone():new THREE.Vector3(1,1,1)}});if(compiled.payloadSupported){// Scene RGB-T is opt-in at compile time and remains inactive until
 // the compositor sets these selectors.
-uniforms.u_peelRgbt={value:0};uniforms.u_peelRgbtPass={value:0};uniforms.u_peelRgbtLayer={value:0};}applyIntrospectedUniformDefaults(uniforms,compiled.introspected||[]);const declared=new Set((compiled.declared||[]).map(u=>u.name));const has=name=>declared.has(name);const radiance=envRadianceForShading(env)||getDummyTex();const irradiance=env&&env.irradiance||radiance;const mips=env&&env.mips!=null?env.mips:1;if(has('u_time'))uniforms.u_time={value:MTLX_CLOCK.time};if(has('u_frame'))uniforms.u_frame={value:MTLX_CLOCK.frame};if(has('u_envRadiance'))uniforms.u_envRadiance={value:radiance};if(has('u_envIrradiance'))uniforms.u_envIrradiance={value:irradiance};for(const u of compiled.declared||[]){if(!/sampler/i.test(u.type)||!/env/i.test(u.name))continue;// "u_envIrradiance" contains "radiance", so the irradiance test
+uniforms.u_peelRgbt={value:0};uniforms.u_peelRgbtPass={value:0};uniforms.u_peelRgbtLayer={value:0};}applyIntrospectedUniformDefaults(uniforms,compiled.introspected||[]);const declared=new Set((compiled.declared||[]).map(u=>u.name));const has=name=>declared.has(name);const radiance=envRadianceForShading(env)||getDummyTex();const irradiance=envIrradianceForShading(env)||radiance;const mips=env&&env.mips!=null?env.mips:1;if(has('u_time'))uniforms.u_time={value:MTLX_CLOCK.time};if(has('u_frame'))uniforms.u_frame={value:MTLX_CLOCK.frame};if(has('u_envRadiance'))uniforms.u_envRadiance={value:radiance};if(has('u_envIrradiance'))uniforms.u_envIrradiance={value:irradiance};for(const u of compiled.declared||[]){if(!/sampler/i.test(u.type)||!/env/i.test(u.name))continue;// "u_envIrradiance" contains "radiance", so the irradiance test
 // must run first or the diffuse term binds the sharp radiance map.
 if(/irradiance|diffuse/i.test(u.name))uniforms[u.name]={value:irradiance};else if(/radiance|specular|prefilter/i.test(u.name))uniforms[u.name]={value:radiance};}// envTilt carries a dome light's non-vertical orientation. The rotation
 // slider stays a pure yaw, so the dome's yaw is decomposed out of the tilt
@@ -1680,7 +2190,11 @@ if(has('u_envMatrix')){const m=new THREE.Matrix4().makeRotationY(Math.PI/2+envRo
 // matrix here is a raw world-to-light-clip transform. A white AO map at
 // strength 0 and a white transmittance record (an empty cell's clear
 // color, see mx_shadow_transmittance) are exact no-ops the same way.
-if(has('u_shadowTransmittance'))uniforms.u_shadowTransmittance={value:shadowTransmittance||getDummyTexWhite()};if(has('u_shadowRecordCells')){uniforms.u_shadowRecordCells={value:shadowRecordCells&&shadowRecordCells.length===SHADOW_FACE_SLOTS?shadowRecordCells:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,0,0))};}if(has('u_ssaoMap'))uniforms.u_ssaoMap={value:ssaoMap||getDummyTexWhite()};if(has('u_ssaoTexel'))uniforms.u_ssaoTexel={value:ssaoTexel?ssaoTexel.clone():new THREE.Vector2()};if(has('u_ssaoStrength'))uniforms.u_ssaoStrength={value:ssaoMap?ssaoStrength:0};// Zero scale means zero path length, which is clear glass: the safe
+if(has('u_shadowTransmittance'))uniforms.u_shadowTransmittance={value:shadowTransmittance||getDummyTexWhite()};if(has('u_shadowRecordCells')){uniforms.u_shadowRecordCells={value:shadowRecordCells&&shadowRecordCells.length===SHADOW_FACE_SLOTS?shadowRecordCells:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,0,0))};}// Local environment reflections: a plain sampler2D, visible to has()
+// unlike the sampler3D volumes above, so this stays gated exactly like
+// u_ssaoMap. White at strength 0 (or coverage 0, see mx_local_env_mix's
+// own early return) is an exact no-op.
+if(has('u_localEnvRadiance'))uniforms.u_localEnvRadiance={value:localEnvMap||getDummyTexWhite()};if(has('u_localEnvMips'))uniforms.u_localEnvMips={value:Number.isFinite(localEnvMips)?localEnvMips:1};if(has('u_localEnvStrength'))uniforms.u_localEnvStrength={value:localEnvMap?localEnvStrength:0};if(has('u_localEnvProbe'))uniforms.u_localEnvProbe={value:localEnvProbe?localEnvProbe.clone():new THREE.Vector3()};if(has('u_localEnvBoxMin'))uniforms.u_localEnvBoxMin={value:localEnvBoxMin?localEnvBoxMin.clone():new THREE.Vector3()};if(has('u_localEnvBoxMax'))uniforms.u_localEnvBoxMax={value:localEnvBoxMax?localEnvBoxMax.clone():new THREE.Vector3()};if(has('u_localEnvParallax'))uniforms.u_localEnvParallax={value:localEnvParallax?1:0};if(has('u_ssaoMap'))uniforms.u_ssaoMap={value:ssaoMap||getDummyTexWhite()};if(has('u_ssaoTexel'))uniforms.u_ssaoTexel={value:ssaoTexel?ssaoTexel.clone():new THREE.Vector2()};if(has('u_ssaoStrength'))uniforms.u_ssaoStrength={value:ssaoMap?ssaoStrength:0};// Zero scale means zero path length, which is clear glass: the safe
 // reading when no back-face pass has run.
 if(has('u_thicknessMap'))uniforms.u_thicknessMap={value:thicknessMap||getDummyTex()};if(has('u_thicknessTexel'))uniforms.u_thicknessTexel={value:thicknessTexel?thicknessTexel.clone():new THREE.Vector2()};if(has('u_thicknessScale'))uniforms.u_thicknessScale={value:thicknessMap?thicknessScale:0};if(has('u_thicknessTargetValid'))uniforms.u_thicknessTargetValid={value:thicknessMap?1:0};if(has('u_thicknessReferencePath')){// With u_thicknessMap dropped for the budget the per-frame target
 // update never runs, so seed the authored transmission_depth as the
@@ -1693,7 +2207,7 @@ if(has('u_refractionTwoSided'))uniforms.u_refractionTwoSided={value:!!refraction
 // starts off until applyThickness classifies a real thickness source.
 if(has('u_opaqueColor'))uniforms.u_opaqueColor={value:getDummyTexWhite()};if(has('u_opaqueColorLevels'))uniforms.u_opaqueColorLevels={value:0};if(has('u_peelRefractsScene'))uniforms.u_peelRefractsScene={value:0};if(has('u_sceneRadius'))uniforms.u_sceneRadius={value:Math.max(0,Number(sceneRadius)||0)};// Screen-space reflections: off until the renderer's per-frame history
 // is valid (see applySsrHistory in js/usd-scene-renderer.js).
-if(has('u_ssrEnabled'))uniforms.u_ssrEnabled={value:0};if(has('u_ssrStrength'))uniforms.u_ssrStrength={value:1};if(has('u_ssrMaxRoughness'))uniforms.u_ssrMaxRoughness={value:0.5};if(has('u_historyViewProjectionMatrix'))uniforms.u_historyViewProjectionMatrix={value:new THREE.Matrix4()};if(has('u_historyViewProjectionInverseMatrix'))uniforms.u_historyViewProjectionInverseMatrix={value:new THREE.Matrix4()};if(has('u_historyViewPosition'))uniforms.u_historyViewPosition={value:new THREE.Vector3()};if(has('u_viewProjectionInverseMatrix'))uniforms.u_viewProjectionInverseMatrix={value:new THREE.Matrix4()};if(has('u_shadowMap'))uniforms.u_shadowMap={value:shadowMap||getDummyTexWhite()};if(has('u_shadowMatrix'))uniforms.u_shadowMatrix={value:shadowMatrix?shadowMatrix.clone():shadowOffMatrix()};if(has('u_lightData')){const entries=currentLights(lightData,env&&env.keyLight,envRotationRad,stageLights,envExposure*Math.max(0,Number(environmentKeyScale)||0),lightScales);uniforms.u_lightData={value:entries};}if(has('u_numActiveLightSources'))uniforms.u_numActiveLightSources={value:activeLightCount(lightData,env&&env.keyLight,stageLights)};return uniforms;};// Uniform map for a transfer light-transport variant: texture uniforms are
+if(has('u_ssrEnabled'))uniforms.u_ssrEnabled={value:0};if(has('u_ssrStrength'))uniforms.u_ssrStrength={value:1};if(has('u_ssrMaxRoughness'))uniforms.u_ssrMaxRoughness={value:0.5};if(has('u_historyViewProjectionMatrix'))uniforms.u_historyViewProjectionMatrix={value:new THREE.Matrix4()};if(has('u_historyViewProjectionInverseMatrix'))uniforms.u_historyViewProjectionInverseMatrix={value:new THREE.Matrix4()};if(has('u_historyViewPosition'))uniforms.u_historyViewPosition={value:new THREE.Vector3()};if(has('u_viewProjectionInverseMatrix'))uniforms.u_viewProjectionInverseMatrix={value:new THREE.Matrix4()};if(has('u_shadowMap'))uniforms.u_shadowMap={value:shadowMap||getDummyTexWhite()};if(has('u_shadowMatrix'))uniforms.u_shadowMatrix={value:shadowMatrix?shadowMatrix.clone():shadowOffMatrix()};if(has('u_lightData')){const entries=currentLights(lightData,env&&env.keyLight,envRotationRad,stageLights,envExposure*Math.max(0,Number(environmentKeyScale)||0),lightScales,compiled.maxLights);uniforms.u_lightData={value:entries};}if(has('u_numActiveLightSources'))uniforms.u_numActiveLightSources={value:activeLightCount(lightData,env&&env.keyLight,stageLights,compiled.maxLights)};return uniforms;};// Uniform map for a transfer light-transport variant: texture uniforms are
 // shared by reference with the display map so later texture loads reach
 // both; record and transform uniforms are seeded fresh.
 const createLightTransportUniforms=({compiled,displayUniforms})=>{if(!compiled)throw new Error('Cannot create light transport uniforms without compiled MaterialX source.');const names=new Set();const declRe=/uniform\s+(?:(?:low|medium|high)p\s+)?\w+\s+(\w+)\s*(?:\[\s*\w+\s*\])?\s*;/g;let m;while((m=declRe.exec(compiled.fs||''))!==null)names.add(m[1]);const uniforms={};if(displayUniforms){for(const name of names){if(Object.prototype.hasOwnProperty.call(displayUniforms,name))uniforms[name]=displayUniforms[name];}}uniforms.u_recordEntryDepth={value:getDummyTexWhite()};uniforms.u_recordExitDepth={value:getDummyTexWhite()};uniforms.u_recordCellOrigin={value:new THREE.Vector2()};uniforms.u_recordPass={value:1};uniforms.u_recordDepthPlane={value:new THREE.Vector4(0,0,0,0)};uniforms.u_recordTexel={value:new THREE.Vector2()};uniforms.u_recordDepthSpan={value:1};uniforms.u_recordUnitScale={value:1};// Unused by the transfer variant itself. shadowRenderFaceTransmittance
@@ -1754,14 +2268,47 @@ if(u.block!=='PublicUniforms')continue;if(u.data==null)continue;if(u.type==='fil
 // thing that would visibly break every frame if ever touched.
 if(PREVIEW_TRANSFORM_UNIFORM_NAMES.has(u.name))continue;const tu=mxValueToThreeUniform(u.type,u.data);if(!tu)continue;if(uniforms[u.name])uniforms[u.name].value=tu.value;else uniforms[u.name]=tu;}// Fast-refresh keeps the live sampler bindings, so a `default` that
 // changed has to re-bake its 1x1 texture here as well.
-for(const u of introspected){if(u.type!=='filename')continue;const slot=uniforms[u.name];if(!samplerHoldsDefault(slot))continue;slot.value=getFilenameDefaultTexture(introspected,u.name);}};// ------------------------------------------------------------------
+for(const u of introspected){if(u.type!=='filename')continue;const slot=uniforms[u.name];if(!samplerHoldsDefault(slot))continue;slot.value=getFilenameDefaultTexture(introspected,u.name);}};// evaluateDisplacement: draws one THREE.Points per vertex into an RGBA8
+// readback grid, one pass per x/y/z component, and decodes the little-endian
+// bit pack generateDisplacementSourcesUnlocked spliced into the pixel stage.
+// True only for a REAL authored file reference (u.data is a path string),
+// not just any 'filename'-typed uniform (library samplers like
+// u_shadowMap use that type too, with no data).
+const hasDisplacementFileRef=displacement=>!!displacement&&(displacement.introspected||[]).some(u=>u.type==='filename'&&typeof u.data==='string'&&u.data);const evaluateDisplacement=async({renderer,displacement,geometry,worldMatrix,fileMap,textureCache,textureQueue,maxTextureSize,isAlive,time=0})=>{if(!renderer||!displacement||!geometry)return null;const notices=[];const mode=displacement.mode||'auto';if(typeof window!=='undefined'&&window.__mtlxForceDisplacementFailure===true){notices.push('Displacement evaluation forced to fail (test hook)');return{offsets:null,mode,notices};}const alive=()=>typeof isAlive!=='function'||isAlive();let evalGeometry=null,material=null,target=null;try{let baseGeometry=geometry;if(!baseGeometry.getAttribute('i_position'))baseGeometry=prepGeometry(baseGeometry);const position=baseGeometry.getAttribute('position');if(!position){notices.push('Displacement evaluation failed: geometry has no position attribute');return{offsets:null,mode,notices};}const N=position.count;const gl=renderer.getContext();const W=Math.min(4096,gl.getParameter(gl.MAX_TEXTURE_SIZE),gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));const H=Math.ceil(N/W);if(H>W){notices.push('Displacement evaluation failed: '+N+' vertices exceed the readback grid limit');return{offsets:null,mode,notices};}const texel=new Float32Array(N*2);for(let i=0;i<N;i++){texel[i*2]=(i%W+0.5)/W*2-1;texel[i*2+1]=(Math.floor(i/W)+0.5)/H*2-1;}evalGeometry=new THREE.BufferGeometry();for(const name of Object.keys(baseGeometry.attributes)){evalGeometry.setAttribute(name,baseGeometry.attributes[name]);}evalGeometry.setAttribute('i_dispTexel',new THREE.BufferAttribute(texel,2));const uniforms={};applyIntrospectedUniformDefaults(uniforms,displacement.introspected||[]);const declared=parseUniforms(displacement.vs).concat(parseUniforms(displacement.fs));const has=n=>declared.some(d=>d.name===n);const wm=worldMatrix||new THREE.Matrix4();if(has('u_worldMatrix'))uniforms.u_worldMatrix={value:wm};const normalMatName=has('u_worldInverseTransposeMatrix')?'u_worldInverseTransposeMatrix':(declared.find(d=>/normal.*matrix|matrix.*normal|inversetranspose/i.test(d.name))||{}).name;if(normalMatName)uniforms[normalMatName]={value:new THREE.Matrix3().getNormalMatrix(wm)};if(has('u_viewProjectionMatrix'))uniforms.u_viewProjectionMatrix={value:new THREE.Matrix4()};if(has('u_time'))uniforms.u_time={value:time};if(has('u_frame'))uniforms.u_frame={value:0};uniforms.u_dispComponent={value:0};if(fileMap&&(displacement.introspected||[]).some(u=>u.type==='filename')){const bindResult=bindDroppedTextures({uniforms,introspected:displacement.introspected,textureCache:textureCache||TEXTURE_CACHE,textureQueue,maxTextureSize,isAlive,notices},fileMap);if(bindResult.missing.length){notices.push('Displacement: texture not found for '+bindResult.missing.join(', ')+', using the node default');}if(bindResult.pending.length)await Promise.all(bindResult.pending);}if(!alive())return null;material=new THREE.RawShaderMaterial({vertexShader:displacement.vs,fragmentShader:displacement.fs,glslVersion:THREE.GLSL3,uniforms,depthTest:false,depthWrite:false});const points=new THREE.Points(evalGeometry,material);points.frustumCulled=false;const scene=new THREE.Scene();scene.add(points);const camera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);// The analytic-normal frame differences two displacement evaluations
+// eps apart (eps ~0.15mm at level 1, giving deltas ~3e-5 at a 0.2
+// slope on egg_normals). The bit-pack readback below reconstructs a
+// full float32 from an RGBA8 target's bytes, but those bytes still
+// pass through the GPU's UNORM8 write path (clamp+round, and on some
+// drivers dithering) before they can be read back; any of that
+// rounding noise reads as terracing once amplified by the eps
+// division. An RGBA32F target skips the UNORM8 round trip entirely,
+// so the analytic path requires it and fails soft to the mesh
+// recompute when the extension isn't available.
+let wantAnalytic=getDisplacementNormalsMode()!=='mesh'&&mode!=='vector3';const floatReadbackAvailable=!!(gl.getExtension&&(gl.getExtension('EXT_color_buffer_float')||gl.getExtension('WEBGL_color_buffer_float')));if(wantAnalytic&&!floatReadbackAvailable){wantAnalytic=false;notices.push('Analytic displacement normals unavailable: no float render-target readback on this GPU, using the mesh recompute');}const readbackFormat=wantAnalytic?'rgba32f':'rgba8';target=new THREE.WebGLRenderTarget(W,H,{type:readbackFormat==='rgba32f'?THREE.FloatType:THREE.UnsignedByteType,format:THREE.RGBAFormat,depthBuffer:false,magFilter:THREE.NearestFilter,minFilter:THREE.NearestFilter});// Save/restore pattern shared with ensurePrefilteredEnv.
+const previousTarget=renderer.getRenderTarget();const previousClearColor=renderer.getClearColor(new THREE.Color());const previousClearAlpha=renderer.getClearAlpha();const previousAutoClear=renderer.autoClear;const previousViewport=renderer.getViewport(new THREE.Vector4());const restore=()=>{renderer.setRenderTarget(previousTarget);renderer.setClearColor(previousClearColor,previousClearAlpha);renderer.autoClear=previousAutoClear;renderer.setViewport(previousViewport);};// Restore on every exit: a throw from compile, render or readback must
+// never leave the live view bound to this disposed target.
+const perf=window.MTLX_PERF_LOG?{compileMs:0,readbackMs:0}:null;const __compileStart=perf?performance.now():0;try{compileFilteringDriverNoise(renderer,scene,camera);if(perf)perf.compileMs=performance.now()-__compileStart;// Attribute to THIS material's own program, not the first broken
+// program anywhere in the shared renderer (an unrelated material
+// would otherwise blame every displacement evaluation). Mirrors
+// reportBadPrograms in js/usd-scene-renderer.js. Falls back to the
+// old scan if r128 hasn't recorded a currentProgram yet.
+const props=renderer.properties.get(material);const ownProgram=props&&props.currentProgram;const badProg=ownProgram?ownProgram.diagnostics&&ownProgram.diagnostics.runnable===false?ownProgram:null:(renderer.info.programs||[]).find(p=>p.diagnostics&&p.diagnostics.runnable===false);if(badProg){const d=badProg.diagnostics;const log=(d.programLog||'')+(d.vertexShader&&d.vertexShader.log?' VERT: '+d.vertexShader.log:'')+(d.fragmentShader&&d.fragmentShader.log?' FRAG: '+d.fragmentShader.log:'');notices.push('Displacement evaluation failed: '+(log.split('\n')[0]||'program not runnable').slice(0,200));return{offsets:null,mode,notices};}// rgba32f: readRenderTargetPixels wants a Float32Array and hands
+// back the exact bytes the shader wrote (0..1, no UNORM8 clamp);
+// rgba8: the older Uint8Array path, byte-for-byte as GL wrote it.
+const pixels=readbackFormat==='rgba32f'?new Float32Array(W*H*4):new Uint8Array(W*H*4);const byteView=new DataView(new ArrayBuffer(4));renderer.autoClear=false;renderer.setViewport(0,0,W,H);// One pass = 3 draws (x/y/z components) against whatever
+// i_position is currently bound on evalGeometry; the analytic-
+// normal frame below rebinds i_position twice more to sample
+// the same network at two tangent-offset positions.
+const runPass=()=>{const passOffsets=new Float32Array(N*3);for(let c=0;c<3;c++){uniforms.u_dispComponent.value=c;renderer.setRenderTarget(target);renderer.setClearColor(0x000000,0);renderer.clear(true,true,true);renderer.render(scene,camera);renderer.readRenderTargetPixels(target,0,0,W,H,pixels);for(let i=0;i<N;i++){const p=i*4;if(readbackFormat==='rgba32f'){byteView.setUint8(0,Math.round(pixels[p]*255)&0xFF);byteView.setUint8(1,Math.round(pixels[p+1]*255)&0xFF);byteView.setUint8(2,Math.round(pixels[p+2]*255)&0xFF);byteView.setUint8(3,Math.round(pixels[p+3]*255)&0xFF);}else{byteView.setUint8(0,pixels[p]);byteView.setUint8(1,pixels[p+1]);byteView.setUint8(2,pixels[p+2]);byteView.setUint8(3,pixels[p+3]);}passOffsets[i*3+c]=byteView.getFloat32(0,true);}}return passOffsets;};const offsets=runPass();let offsetsTangent=null,offsetsBitangent=null,analyticFrame=null;if(wantAnalytic){try{const posAttr2=evalGeometry.getAttribute('i_position')||evalGeometry.getAttribute('position');const normAttr2=evalGeometry.getAttribute('i_normal')||evalGeometry.getAttribute('normal');const tanAttr2=evalGeometry.getAttribute('i_tangent');const bitanAttr2=evalGeometry.getAttribute('i_bitangent');const idx2=baseGeometry.getIndex();if(posAttr2&&normAttr2&&posAttr2.count===N){analyticFrame=MtlxMeshDisplacement.computeAnalyticNormalFrame({positions:posAttr2.array,normals:normAttr2.array,tangents:tanAttr2?tanAttr2.array:null,bitangents:bitanAttr2?bitanAttr2.array:null,indices:idx2?idx2.array:null});const basePos=posAttr2.array;const posName=evalGeometry.getAttribute('i_position')?'i_position':'position';const buildOffsetPositions=dir=>{const out=new Float32Array(N*3);for(let i=0;i<N;i++){const e=analyticFrame.eps[i];out[i*3]=basePos[i*3]+dir[i*3]*e;out[i*3+1]=basePos[i*3+1]+dir[i*3+1]*e;out[i*3+2]=basePos[i*3+2]+dir[i*3+2]*e;}return out;};evalGeometry.setAttribute(posName,new THREE.BufferAttribute(buildOffsetPositions(analyticFrame.tangent),3));offsetsTangent=runPass();evalGeometry.setAttribute(posName,new THREE.BufferAttribute(buildOffsetPositions(analyticFrame.bitangent),3));offsetsBitangent=runPass();evalGeometry.setAttribute(posName,new THREE.BufferAttribute(basePos,3));}}catch(e){offsetsTangent=null;offsetsBitangent=null;analyticFrame=null;notices.push('Analytic displacement normals unavailable, using the mesh recompute: '+(e&&e.message?e.message:String(e)));}}if(perf)perf.readbackMs=performance.now()-__compileStart-perf.compileMs;return{offsets,offsetsTangent,offsetsBitangent,analyticFrame,mode,notices,readbackFormat,perf};}finally{restore();}}catch(error){notices.push('Displacement evaluation failed: '+(error&&error.message?error.message:String(error)));return{offsets:null,mode,notices};}finally{if(target)target.dispose();if(material)material.dispose();if(evalGeometry)evalGeometry.dispose();}};// ------------------------------------------------------------------
 // tryRefreshRenderView, attempts a cheap in-place refresh of an
 // existing view instead of a full rebuild: regenerates sources and, if
 // byte-identical to the live view's, re-uploads only uniform defaults.
 // Returns { refreshed, srcs } (srcs handed back so a real-mismatch
 // caller doesn't need to regenerate again) or { refreshed: true }.
 // ------------------------------------------------------------------
-const tryRefreshRenderView=async({view,mx,gen,genContext,renderable,label,isMounted=()=>true})=>{const __t=window.MTLX_PERF_LOG?performance.now():0;let srcs;try{srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,isMounted});}catch(e){return{refreshed:false,srcs:null};}if(!srcs)return{refreshed:false,srcs:null};// Belt-and-suspenders: compare the transparency verdict explicitly
+const tryRefreshRenderView=async({view,mx,gen,genContext,renderable,label,materialName=null,isMounted=()=>true})=>{const __t=window.MTLX_PERF_LOG?performance.now():0;let srcs;try{// Same generation options the live view was built with, else the
+// byte compare below can never match.
+srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS,allowConstInputs:view?view.allowConstInputs!==false:true});}catch(e){return{refreshed:false,srcs:null};}if(!srcs)return{refreshed:false,srcs:null};// Belt-and-suspenders: compare the transparency verdict explicitly
 // rather than relying on srcs.vs/fs alone. Gated on FORCE_TRANSPARENCY:
 // when off, a verdict flip is irrelevant and forcing rebuild is pointless.
 if(srcs.vs!==view.vs||srcs.fs!==view.fs||FORCE_TRANSPARENCY&&!!srcs.transparent!==!!view.isTransparent)return{refreshed:false,srcs};// A filename value can change without the GLSL text changing, so
@@ -1769,7 +2316,9 @@ if(srcs.vs!==view.vs||srcs.fs!==view.fs||FORCE_TRANSPARENCY&&!!srcs.transparent!
 // texture onto a reused view does NOT render; force a full rebuild instead.
 const oldFilenames=new Map();for(const u of view.introspected||[]){if(u.type==='filename')oldFilenames.set(u.name,u.data!=null?u.data:null);}const newFilenames=new Map();for(const u of srcs.introspected||[]){if(u.type==='filename')newFilenames.set(u.name,u.data!=null?u.data:null);}const filenameNames=new Set([...oldFilenames.keys(),...newFilenames.keys()]);for(const name of filenameNames){const oldVal=oldFilenames.has(name)?oldFilenames.get(name):null;const newVal=newFilenames.has(name)?newFilenames.get(name):null;if(oldVal!==newVal)return{refreshed:false,srcs,texChange:true};}// Introspection happens inside generatePreviewSourcesUnlocked under
 // the same hold; this function performs no wasm reads.
-view.introspected=srcs.introspected;applyIntrospectedUniformDefaults(view.uniforms,srcs.introspected,{overwrite:true});if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] preview fast-refresh (source unchanged): '+(performance.now()-__t).toFixed(1)+'ms (target: '+label+')');}return{refreshed:true};};// ------------------------------------------------------------------
+view.introspected=srcs.introspected;applyIntrospectedUniformDefaults(view.uniforms,srcs.introspected,{overwrite:true});// Displacement is not part of the surface source, so an edit to its values
+// reaches the view only through this sync.
+if(typeof view.syncDisplacementSources==='function')view.syncDisplacementSources(srcs.displacement||null);if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] preview fast-refresh (source unchanged): '+(performance.now()-__t).toFixed(1)+'ms (target: '+label+')');}return{refreshed:true};};// ------------------------------------------------------------------
 // createMtlxRenderView, persistent render-pipeline shell for one
 // preview surface: renderer/scene/camera/env/geometry built ONCE;
 // every edit calls applyMaterial() to swap materials on the SAME shell.
@@ -1889,7 +2438,7 @@ void main() {
 const studioInverseAcesSrgbGlsl=mode=>{if(mode==='lin_rec709')return'vec3 inverseAcesSrgb(vec3 col) { return col; }\n';if(mode==='srgb')return'vec3 inverseAcesSrgb(vec3 col) { return srgbToLinear(col); }\n';return'vec3 inverseAcesSrgb(vec3 col) {\n'+'    const mat3 acesInInv = mat3(\n'+'        vec3(1.76474097, -0.14702785, -0.03633683), vec3(-0.67577768, 1.16025151, -0.16243644),\n'+'        vec3(-0.08896329, -0.01322366, 1.19877327)\n'+'    );\n'+'    const mat3 acesOutInv = mat3(\n'+'        vec3(0.64303825, 0.05926869, 0.00596190), vec3(0.31118675, 0.93143649, 0.06392902),\n'+'        vec3(0.04577546, 0.00929492, 0.93011838)\n'+'    );\n'+'    vec3 y = acesOutInv * srgbToLinear(col);\n'+// FIXME: the per-channel quadratic inverse of the ACES fit is only valid for
 // colors the tonemap can reach. Near-neutral stops round-trip at ~1e-9 error,
 // but saturated hues fail badly (pure cyan misses by up to 0.93); rework before authoring a colorful backdrop.
-'    vec3 qa = vec3(1.0) - 0.983729 * y;\n'+'    vec3 qb = vec3(0.0245786) - 0.4329510 * y;\n'+'    vec3 qc = vec3(-0.000090537) - 0.238081 * y;\n'+'    vec3 x = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, vec3(0.0)))) / (2.0 * qa);\n'+'    return (acesInInv * x) * 0.6;\n'+'}\n';};const STUDIO_GRADIENT_FRAGMENT_SHADER=mode=>`
+'    vec3 qa = vec3(1.0) - 0.983729 * y;\n'+'    vec3 qb = vec3(0.0245786) - 0.4329510 * y;\n'+'    vec3 qc = vec3(-0.000090537) - 0.238081 * y;\n'+'    vec3 x = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, vec3(0.0)))) / (2.0 * qa);\n'+'    return acesInInv * x;\n'+'}\n';};const STUDIO_GRADIENT_FRAGMENT_SHADER=mode=>`
 varying vec2 vUv;
 uniform vec3 uStop0;
 uniform vec3 uStop1;
@@ -2133,14 +2682,21 @@ backdrop,// 'zoom' (default): plain wheel zooms. 'scroll': plain wheel is gated
 wheelMode='zoom',// isMounted: PERMANENT lifecycle bail (component unmounted). isActive:
 // TEMPORARY visibility (backgrounded view skips render, keeps looping).
 // isAlive: OPTIONAL, read only by animate() via `aliveFn` below.
-isMounted=()=>true,isActive=()=>true,isAlive=null,debugKind='',// Initial camera pull-back. 3.6 is roomy framing; ~2.55 fills the
+isMounted=()=>true,isActive=()=>true,isAlive=null,debugKind='',// Opt-out for views whose sliders write uniforms with no regeneration
+// path (the docs node preview); see constifyInputUniforms.
+allowConstInputs=true,// Initial camera pull-back. 3.6 is roomy framing; ~2.55 fills the
 // frame for small square previews. IGNORED in full-scene mode, the
 // camera there is copied verbatim from the GLB's own embedded camera.
 cameraDistance=3.6,// false (default) = fixed, non-interactive authored GLB camera (graph
 // editor); true (docs/viewer) = OrbitControls with pivot/zoom/polar
 // clamp and Box3 containment. Ignored outside full-scene mode.
 sceneOrbit=false,// Caps setPixelRatio; lower it for cheap side-by-side/compare views.
-maxPixelRatio=2})=>{// See the isAlive doc above: defaulting to isMounted here preserves
+maxPixelRatio=2,// Names the <material> element whose displacementshader input to
+// follow (see resolveDisplacementSource); null scans the document.
+materialName=null,// Highest triangle count this view's subdivided preview mesh may
+// reach; window.__mtlxTriangleBudgetOverride (test hook) wins over
+// this at each use, mirroring the sampler-budget override pattern above.
+triangleBudget=PREVIEW_TRIANGLE_BUDGET})=>{// See the isAlive doc above: defaulting to isMounted here preserves
 // today's exact behavior for every caller that doesn't pass isAlive.
 const aliveFn=isAlive||isMounted;// Mode derived from geomName: 'shaderball-scene' -> full authored GLB
 // scene with detached embedded camera; 'shaderball' -> simple
@@ -2166,7 +2722,14 @@ let captureState=null;let __captureCanvas=null,__captureCtx=null;let controls=nu
 let __snapshotCanvas=null,__snapshotCtx=null;// Shell-level material/geometry/uniforms state, reassigned by
 // applyMaterialInternal() on every swap so one shell backs many edits.
 // `uniforms` MUST be `let`: every closure below shares this binding.
-let mesh=null,material=null,geometry=null,uniforms=null;// Scene-mode state, null/empty when sceneMode is null (sphere/cube
+let mesh=null,material=null,geometry=null,uniforms=null;// Displacement (P5) state: originalGeometry as built (kept until
+// teardown), baseGeometry subdivided-but-undisplaced, displacedGeometry
+// the CPU-displaced result on `mesh` (null when nothing is displaced).
+let originalGeometry=null,baseGeometry=null,displacedGeometry=null;let displacementSources=null,dispKey=null,dispToken=0;// dispState: 'none' | 'pending' | 'applied' | 'skipped' | 'failed' | 'off'.
+let dispState='none',dispSubdivLevel=null,dispTriangles=0;let dispWithinBudget=true;let dispCappedNotice=null,dispDroppedNotice=null,dispEvalNotices=[];let materialNotices=[];let dispFileMap=null,dispRunInFlight=false;let dispSettlePromise=null,dispSettleResolve=null;let applyDispDebounceToken=0;// Reassigned once, below, to the real handle object literal; declared
+// here (with the rest of this shell's state) so displacement closures
+// defined ahead of it can still dispatch { view: handle } once it exists.
+let handle=null;// Scene-mode state, null/empty when sceneMode is null (sphere/cube
 // path guards with `if (sceneGroup)`). sceneGroup: instantiated GLB
 // root. sceneOwnedMaterials/pmremRT: disposed by disposePartial below.
 let sceneGroup=null,sceneOwnedMaterials=[],pmremRT=null;// Depth-peel shell state (see the FORCE_TRANSPARENCY flag's header
@@ -2218,7 +2781,7 @@ let envSoftKeyDir=null;const rigCount=lightData&&lightData.length||0;// Per-view
 let fetchedEnvMap=null;let envMapCallId=0;// guards latest-call-wins in setEnvMap()
 // Frees a privately-fetched env's textures. Never call this on the
 // shared default/override env from getEnvironment()/envOverride.
-const disposeFetchedEnv=env=>{if(!env)return;try{if(env.radiance)env.radiance.dispose();}catch(e){/* already disposed/invalid */}try{if(env.irradiance&&env.irradiance!==env.radiance)env.irradiance.dispose();}catch(e){/* ditto */}try{if(env.radiancePrefiltered)env.radiancePrefiltered.dispose();}catch(e){/* ditto */}try{if(env.background)env.background.dispose();}catch(e){/* ditto */}};// No-OrbitControls fallback only (script blocked): mirrors the
+const disposeFetchedEnv=env=>{if(!env)return;try{if(env.radiance)env.radiance.dispose();}catch(e){/* already disposed/invalid */}try{if(env.irradiance&&env.irradiance!==env.radiance)env.irradiance.dispose();}catch(e){/* ditto */}try{if(env.irradianceConvolved&&env.irradianceConvolved!==env.irradiance&&env.irradianceConvolved!==env.radiance)env.irradianceConvolved.dispose();}catch(e){/* ditto */}try{if(env.radiancePrefiltered)env.radiancePrefiltered.dispose();}catch(e){/* ditto */}try{if(env.background)env.background.dispose();}catch(e){/* ditto */}};// No-OrbitControls fallback only (script blocked): mirrors the
 // autoRotate state so the fallback spin can be toggled too.
 let fallbackSpin=!!autoRotate;// wheelMode 'scroll' state: the canvas wheel-gate listener plus the
 // lazily-created zoom-hint overlay and its fade timer, all torn
@@ -2226,12 +2789,15 @@ let fallbackSpin=!!autoRotate;// wheelMode 'scroll' state: the canvas wheel-gate
 let wheelGateHandler=null;let wheelHintEl=null,wheelHintTimer=null;const isWheelHintMac=/Mac|iPhone|iPad|iPod/.test(navigator.platform||navigator.userAgent||'');// Shows (or refreshes) the "Use Ctrl/⌘ + scroll to zoom" pill,
 // centered over the canvas's positioned parent; fades ~1.2s after
 // the last gated wheel event. The node is created lazily, once.
-const showWheelHint=()=>{if(!wheelHintEl){const parent=canvas.parentElement;if(!parent)return;wheelHintEl=document.createElement('div');wheelHintEl.textContent=isWheelHintMac?'Use ⌘ + scroll to zoom':'Use Ctrl + scroll to zoom';wheelHintEl.style.cssText='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'+'padding:6px 14px;border-radius:9999px;background:rgba(17,24,39,0.85);'+'color:#f3f4f6;font:13px system-ui,sans-serif;pointer-events:none;'+'opacity:0;transition:opacity 200ms ease;z-index:30;white-space:nowrap;';parent.appendChild(wheelHintEl);}wheelHintEl.style.opacity='1';if(wheelHintTimer)clearTimeout(wheelHintTimer);wheelHintTimer=setTimeout(()=>{if(wheelHintEl)wheelHintEl.style.opacity='0';},1200);};const disposePartial=()=>{stopped=true;if(reqId)cancelAnimationFrame(reqId);if(resizeObs)resizeObs.disconnect();if(controls)controls.dispose();// wheelMode 'scroll' teardown: the capture listener and the
+const showWheelHint=()=>{if(!wheelHintEl){const parent=canvas.parentElement;if(!parent)return;wheelHintEl=document.createElement('div');wheelHintEl.textContent=isWheelHintMac?'Use ⌘ + scroll to zoom':'Use Ctrl + scroll to zoom';wheelHintEl.style.cssText='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'+'padding:6px 14px;border-radius:9999px;background:rgba(17,24,39,0.85);'+'color:#f3f4f6;font:13px system-ui,sans-serif;pointer-events:none;'+'opacity:0;transition:opacity 200ms ease;z-index:30;white-space:nowrap;';parent.appendChild(wheelHintEl);}wheelHintEl.style.opacity='1';if(wheelHintTimer)clearTimeout(wheelHintTimer);wheelHintTimer=setTimeout(()=>{if(wheelHintEl)wheelHintEl.style.opacity='0';},1200);};const disposePartial=()=>{stopped=true;dispToken++;dispRunInFlight=false;if(dispSettleResolve){dispSettleResolve();dispSettleResolve=null;dispSettlePromise=null;}if(reqId)cancelAnimationFrame(reqId);if(resizeObs)resizeObs.disconnect();if(controls)controls.dispose();// wheelMode 'scroll' teardown: the capture listener and the
 // hint overlay (plus its pending fade timer), if either exists.
 if(wheelGateHandler)canvas.removeEventListener('wheel',wheelGateHandler,{capture:true});if(wheelHintTimer)clearTimeout(wheelHintTimer);if(wheelHintEl&&wheelHintEl.parentElement)wheelHintEl.parentElement.removeChild(wheelHintEl);// Best-effort: renderer.dispose() below only frees the
 // renderer's OWN GL state, not material/geometry, dispose those
 // too (each swap already disposes its own previous ones).
-try{if(material)material.dispose();}catch(e){/* already disposed/invalid */}try{if(geometry)geometry.dispose();}catch(e){/* ditto */}// bgMesh: dispose its own geometry/material and drop it from
+try{if(material)material.dispose();}catch(e){/* already disposed/invalid */}try{if(geometry)geometry.dispose();}catch(e){/* ditto */}// Displacement (P5): `geometry` (just disposed) is whichever of
+// these three is active; a Set dedupes by reference so the other
+// two are each disposed exactly once, never twice.
+try{const dispGeoms=new Set([originalGeometry,baseGeometry,displacedGeometry].filter(Boolean));dispGeoms.delete(geometry);dispGeoms.forEach(g=>{try{g.dispose();}catch(e2){/* already disposed/invalid */}});}catch(e){/* best-effort */}// bgMesh: dispose its own geometry/material and drop it from
 // the scene. Do NOT dispose bgMesh.material.map (envBgTexture):
 // env textures are shared/cached across every live view.
 try{if(bgMesh){scene.remove(bgMesh);bgMesh.geometry.dispose();bgMesh.material.dispose();}}catch(e){/* already disposed/invalid, or scene never got this far */}// studioGroup: drop it, dispose its two per-view MATERIALS and
@@ -2254,16 +2820,16 @@ try{if(peelPipeline)peelPipeline.dispose();}catch(e){/* already disposed/invalid
 const __totalPerfStart=window.MTLX_PERF_LOG?performance.now():0;try{// Generates the shader from the renderable surface node.
 // See generatePreviewSources for the full breakdown;
 // extracted so tryRefreshRenderView can reuse it for a diff.
-const __srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,isMounted});// Bail if this build was superseded while awaiting above:
+const __srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS,allowConstInputs});// Bail if this build was superseded while awaiting above:
 // nothing GL-side exists yet, so disposePartial() is a
 // safe, idempotent no-op beyond flagging `stopped`.
 if(!__srcs){disposePartial();return null;}// introspected: already plain JS, converted inside the
 // mxExclusive-locked generatePreviewSourcesUnlocked
 // before the lock released. No wasm reads left here.
-const{vs,fs,introspected,transparent,geomprops,notices}=__srcs;// Pre-warms the driver compile BEFORE the display renderer
+const{vs,fs,introspected,transparent,geomprops,notices,maxLights}=__srcs;// Pre-warms the driver compile BEFORE the display renderer
 // is created; the old after-renderer placement measured
 // 0.8-2.5s WebGLRenderer init stalls from queue contention.
-const warmResult=await prewarmShaderCompile({vs,fs,isMounted,label});if(warmResult==='bailed'||!isMounted()){disposePartial();return null;}// --- three.js scene (WebGL2) ---
+prewarmDisplacementSources(__srcs,isMounted,label);const warmResult=await prewarmShaderCompile({vs,fs,isMounted,label});if(warmResult==='bailed'||!isMounted()){disposePartial();return null;}// --- three.js scene (WebGL2) ---
 // clientWidth can be 0 before layout; fall back so the
 // viewport isn't 0×0 (which renders nothing → black).
 const cw=canvas.clientWidth||canvas.parentElement&&canvas.parentElement.clientWidth||400;const ch=canvas.clientHeight||256;// Bail before allocating the WebGL context if this build
@@ -2364,7 +2930,9 @@ let sceneOrbitFitDist=null;// Radius of the framing target (the ball proper, see
 let sceneOrbitFitRadius=null;// Finds (and caches) the ball assembly's world bounding
 // sphere: 'shader_ball' by name, falling back to
 // material_surface's parent, then sceneGroup (never throws).
-const getBallBoundingSphere=()=>{if(ballBoundingSphere)return ballBoundingSphere;if(!sceneGroup)return null;const ballNode=sceneGroup.getObjectByName('shader_ball')||mesh&&mesh.parent||sceneGroup;ballNode.updateMatrixWorld(true);const box=new THREE.Box3().setFromObject(ballNode);ballBoundingSphere=box.getBoundingSphere(new THREE.Sphere());return ballBoundingSphere;};// Single entry point for every fov-affecting event so they
+// Framing always measures the undisplaced mesh, so displacement
+// (sync on the first build or landing later) never moves the camera.
+const withFramingGeometry=fn=>{if(!mesh||!originalGeometry||mesh.geometry===originalGeometry)return fn();const current=mesh.geometry;mesh.geometry=originalGeometry;try{return fn();}finally{mesh.geometry=current;}};const getBallBoundingSphere=()=>{if(ballBoundingSphere)return ballBoundingSphere;if(!sceneGroup)return null;const ballNode=sceneGroup.getObjectByName('shader_ball')||mesh&&mesh.parent||sceneGroup;ballNode.updateMatrixWorld(true);const box=withFramingGeometry(()=>new THREE.Box3().setFromObject(ballNode));ballBoundingSphere=box.getBoundingSphere(new THREE.Sphere());return ballBoundingSphere;};// Single entry point for every fov-affecting event so they
 // never disagree: starts from effectiveFullSceneVFov, then
 // widens further only while fullscreenFit is on.
 const recomputeCameraFov=()=>{if(fullSceneAuthoredFov==null)return;// non-fullScene modes keep their fixed fov untouched
@@ -2419,7 +2987,7 @@ const syncSize=()=>{if(resizeSuspended)return;const w=canvas.clientWidth||cw;con
 if(needsLighting||sceneInst){const env=envOverride||(await getEnvironment());if(!isMounted()){disposePartial();return null;}// Independent of envRadiance/etc. below: scene-mode's
 // PMREM further down needs A radiance source even
 // when this material is unlit and never touches u_env*.
-const radianceSrc=env?env.radiance:makeEnvTexture(256,128,false);if(needsLighting){if(env){envRadiance=envRadianceForShading(env);envIrradiance=env.irradiance;envMips=env.mips;envBgTexture=env.background;envHasFile=true;envPrefilteredIrr=!!env.prefilteredIrr;envKeyLight=env.keyLight||null;envSoftKeyDir=env.softKeyDir||null;}else{envRadiance=makeEnvTexture(256,128,false);envIrradiance=makeEnvTexture(64,32,true);envMips=Math.floor(Math.log2(256))+1;// Same convention gap as the HDR path: the
+const radianceSrc=env?env.radiance:makeEnvTexture(256,128,false);if(needsLighting){if(env){envRadiance=envRadianceForShading(env);envIrradiance=envIrradianceForShading(env);envMips=env.mips;envBgTexture=env.background;envHasFile=true;envPrefilteredIrr=!!env.prefilteredIrr;envKeyLight=env.keyLight||null;envSoftKeyDir=env.softKeyDir||null;}else{envRadiance=makeEnvTexture(256,128,false);envIrradiance=makeEnvTexture(64,32,true);envMips=Math.floor(Math.log2(256))+1;// Same convention gap as the HDR path: the
 // synthesized data is top-first too, so the
 // background needs its own flipY=true copy.
 envBgTexture=makeBackgroundTexture(envRadiance);envHasFile=false;}// Shell-owned skybox mesh (see bgMesh's declaration
@@ -2493,7 +3061,43 @@ if(sceneInst){scene.add(sceneGroup);mesh=sceneInst.surfaceMesh;geometry=mesh.geo
 sceneGroup.updateMatrixWorld(true);}else{geometry=prepGeometry(await buildPreviewGeometry(geomName));// Initial screen-proportional fit for the 2D buffer,
 // don't rely on the ResizeObserver's first fire
 // ordering against the first rendered frame.
-if(flat2d)fitQuadToAspect((canvas.clientWidth||cw)/(canvas.clientHeight||ch));}if(!isMounted()){disposePartial();return null;}if(fullScene&&sceneOrbit&&controls){// OrbitControls' constructor already ran update()
+if(flat2d)fitQuadToAspect((canvas.clientWidth||cw)/(canvas.clientHeight||ch));}if(!isMounted()){disposePartial();return null;}// Displacement (P5): kept alive (never disposed) until
+// teardown; every geometry below derives from it, never
+// from a previous displaced result.
+originalGeometry=geometry;// Silhouette-bottom floor placement, factored out so a
+// later geometry swap can re-run it too.
+const updateStudioFloor=()=>{if(!studioGroup)return;let floorY=-1;try{const box=new THREE.Box3().setFromObject(sceneGroup||mesh);if(isFinite(box.min.y))floorY=box.min.y;}catch(e){/* degenerate/empty box - keep the -1 fallback */}studioGroup.position.y=floorY;};// Current, complete set of displacement-derived notices
+// (subdivision cap/drop, plus the latest evaluation run's
+// own notices), for getDisplacementState() and the status event.
+const currentDispNotices=()=>[dispCappedNotice,dispDroppedNotice].filter(Boolean).concat(dispEvalNotices);// Rebuilt, never appended, so re-runs cannot stack stale copies.
+const syncHandleNotices=()=>{if(handle)handle.notices=materialNotices.concat(currentDispNotices());};const dispDispatchStatus=()=>{if(!handle)return;try{window.dispatchEvent(new CustomEvent('mtlx-displacement-status',{detail:{view:handle,state:dispState,notices:currentDispNotices()}}));}catch(e){/* best-effort */}};// Sets `mesh.geometry`/`geometry` to `g`; a genuine
+// displaced result is disposed on the NEXT swap, the base/
+// original is left alone. Safe pre-`mesh` too (first build).
+const swapMeshGeometry=g=>{const prevDisplaced=displacedGeometry;displacedGeometry=g!==originalGeometry&&g!==baseGeometry?g:null;geometry=g;if(mesh){mesh.geometry=g;updateStudioFloor();}if(prevDisplaced&&prevDisplaced!==g){try{prevDisplaced.dispose();}catch(e){/* already disposed/invalid */}}};// Non-indexed corners, Loop-subdivided (creases at authored
+// normal breaks) then welded back into an indexed geometry;
+// other attributes are dropped (reported by the caller).
+const subdivideSourceGeometry=(source,level)=>{const nonIndexed=source.index?source.toNonIndexed():source;const posAttr=nonIndexed.getAttribute('position');const normAttr=nonIndexed.getAttribute('normal');const uvAttr=nonIndexed.getAttribute('uv');const toArr=attr=>attr?attr.array instanceof Float32Array?attr.array:Float32Array.from(attr.array):null;const geomprops=Object.keys(nonIndexed.attributes).filter(name=>name.startsWith('i_geomprop_')).map(name=>({name:name.slice('i_geomprop_'.length),itemSize:nonIndexed.getAttribute(name).itemSize,data:toArr(nonIndexed.getAttribute(name))}));const meshIn={positions:toArr(posAttr),normals:toArr(normAttr),uvs:toArr(uvAttr),geomprops};if(nonIndexed!==source)nonIndexed.dispose();if(!meshIn.positions)return null;const subdivided=MtlxMeshSubdivision.subdivideMesh(meshIn,level,{creaseByNormals:true});if(!subdivided)return null;const welded=MtlxMeshSubdivision.weldMesh(subdivided);const out=new THREE.BufferGeometry();out.setAttribute('position',new THREE.BufferAttribute(welded.positions,3));out.setAttribute('normal',new THREE.BufferAttribute(welded.normals,3));if(welded.uvs)out.setAttribute('uv',new THREE.BufferAttribute(welded.uvs,2));for(const stream of welded.geomprops||[]){out.setAttribute('i_geomprop_'+stream.name,new THREE.BufferAttribute(stream.data,stream.itemSize));}out.setIndex(new THREE.BufferAttribute(welded.indices,1));prepGeometry(out);// prepGeometry, aliasUvGeomprops and computeTangents rebuild these on
+// the subdivided mesh, so only genuinely lost attributes are reported.
+const rebuilt=new Set(['position','normal','uv','i_position','i_normal','i_texcoord_0','tangent','i_tangent','i_bitangent',...UV_GEOMPROP_ALIASES,...(welded.geomprops||[]).map(stream=>'i_geomprop_'+stream.name)]);const dropped=Object.keys(source.attributes).filter(n=>!rebuilt.has(n));return{geometry:out,dropped};};// Ensures baseGeometry reflects the current preview
+// subdivision setting (capped to the triangle budget),
+// rebuilding only when the resolved level changed.
+const ensureBaseGeometry=()=>{const posAttr=originalGeometry.getAttribute('position');const idx=originalGeometry.getIndex();const baseTriangleCount=Math.max(1,Math.round((idx?idx.count:posAttr?posAttr.count:3)/3));const overrideBudget=window.__mtlxTriangleBudgetOverride;const budget=Number.isFinite(overrideBudget)?overrideBudget:triangleBudget;const{level,capped,triangles,allowed}=pickSubdivisionLevel(baseTriangleCount,getPreviewSubdivisionLevel(),budget);if(dispSubdivLevel===level&&baseGeometry)return{level,capped,triangles,allowed};let built=originalGeometry;let dropped=[];if(level>0){const cacheKey=baseGeomCacheKey(geomName,sceneMode,level);const cached=baseGeomCacheGet(cacheKey);if(cached){built=cached.clone();}else{const result=subdivideSourceGeometry(originalGeometry,level);if(result){dropped=result.dropped;baseGeomCacheSet(cacheKey,result.geometry);built=result.geometry.clone();}}}if(baseGeometry&&baseGeometry!==originalGeometry){try{baseGeometry.dispose();}catch(e){/* already disposed/invalid */}}baseGeometry=built;dispSubdivLevel=level;dispTriangles=triangles;dispWithinBudget=allowed;dispCappedNotice=!allowed?'Displacement skipped: base mesh has '+triangles+' triangles, above the '+budget+' triangle budget':capped?'Subdivision capped at level '+level+' ('+triangles+' triangles) to stay under the budget':null;dispDroppedNotice=dropped.length?'Subdivision dropped extra vertex attributes: '+dropped.join(', '):null;syncHandleNotices();return{level,capped,triangles,allowed};};const bindDisplacementGeomprops=()=>{if(!baseGeometry||!displacementSources||!displacementSources.geomprops)return;bindGeompropAttributes(baseGeometry,displacementSources.geomprops,text=>{if(!dispEvalNotices.includes(text))dispEvalNotices.push(text);});};// Computes displaced positions/normals from `base` and
+// clones them into a fresh geometry; null with no position data.
+const buildDisplacedGeometry=(base,result)=>{const posAttr=base.getAttribute('position');if(!posAttr)return null;const normAttr=base.getAttribute('normal');const tanAttr=base.getAttribute('i_tangent');const bitanAttr=base.getAttribute('i_bitangent');const idxAttr=base.getIndex();const computed=MtlxMeshDisplacement.computeDisplacedAttributes({positions:posAttr.array,normals:normAttr?normAttr.array:null,tangents:tanAttr?tanAttr.array:null,bitangents:bitanAttr?bitanAttr.array:null,indices:idxAttr?idxAttr.array:null,offsets:result.offsets,mode:result.mode,offsetsTangent:result.offsetsTangent||null,offsetsBitangent:result.offsetsBitangent||null,analyticFrame:result.analyticFrame||null,displacementNormals:getDisplacementNormalsMode()});const out=base.clone();out.setAttribute('position',new THREE.BufferAttribute(computed.positions,3));out.setAttribute('normal',new THREE.BufferAttribute(computed.normals,3));out.deleteAttribute('i_position');out.deleteAttribute('i_normal');out.deleteAttribute('i_tangent');out.deleteAttribute('i_bitangent');out.deleteAttribute('i_texcoord_0');prepGeometry(out);out.computeBoundingBox();out.computeBoundingSphere();return out;};// Lands one evaluateDisplacement() result: a superseded
+// token stops without swapping; a null/failed result falls
+// all the way back to originalGeometry, never a partial one.
+const landDisplacementResult=(token,result,failState)=>{if(token!==dispToken||stopped)return;dispRunInFlight=false;if(dispSettleResolve){dispSettleResolve();dispSettleResolve=null;dispSettlePromise=null;}dispEvalNotices=result&&result.notices||[];syncHandleNotices();if(!result||!result.offsets){dispState=failState||'failed';swapMeshGeometry(originalGeometry);dispDispatchStatus();return;}const built=buildDisplacedGeometry(baseGeometry,result);if(!built){dispState='failed';swapMeshGeometry(originalGeometry);dispDispatchStatus();return;}swapMeshGeometry(built);dispState='applied';dispDispatchStatus();};const cancelDisplacementRun=()=>{dispToken++;dispRunInFlight=false;if(dispSettleResolve){dispSettleResolve();dispSettleResolve=null;dispSettlePromise=null;}};// Evaluates the current displacementSources/baseGeometry
+// and lands the result; shared by settings toggles, a
+// material debounce and an arriving file map.
+const runDisplacement=async()=>{if(stopped||flat2d||!displacementSources||!baseGeometry)return;bindDisplacementGeomprops();const token=++dispToken;if(!dispWithinBudget){landDisplacementResult(token,{offsets:null,notices:[dispCappedNotice]},'skipped');return;}dispState='pending';dispRunInFlight=true;if(!dispSettlePromise)dispSettlePromise=new Promise(res=>{dispSettleResolve=res;});dispDispatchStatus();const posAttr=baseGeometry.getAttribute('position');if(!posAttr||posAttr.count<3){landDisplacementResult(token,{offsets:null,notices:['Displacement skipped: geometry has too few vertices']},'skipped');return;}let result=null;try{result=await evaluateDisplacement({renderer,displacement:displacementSources,geometry:baseGeometry,worldMatrix:mesh?mesh.matrixWorld:new THREE.Matrix4(),fileMap:dispFileMap,textureCache:undefined,isAlive:()=>!stopped&&token===dispToken});}catch(e){result={offsets:null,notices:['Displacement evaluation failed: '+(e&&e.message?e.message:String(e))]};}landDisplacementResult(token,result,'failed');};// First build: subdivide + evaluate before the first apply
+// so the first frame shows the final geometry; a filename-
+// driven or slow (>4s) program lands later instead.
+displacementSources=__srcs.displacement;dispKey=displacementSources?displacementSources.key:null;if(!flat2d&&displacementSources&&getDisplacementEnabled()){ensureBaseGeometry();bindDisplacementGeomprops();geometry=baseGeometry;if(mesh)mesh.geometry=baseGeometry;// See hasDisplacementFileRef's header comment above.
+if(!dispWithinBudget){const token=++dispToken;landDisplacementResult(token,{offsets:null,notices:[dispCappedNotice]},'skipped');}else if(!hasDisplacementFileRef(displacementSources)){const token=++dispToken;dispState='pending';dispRunInFlight=true;if(!dispSettlePromise)dispSettlePromise=new Promise(res=>{dispSettleResolve=res;});const evalPromise=evaluateDisplacement({renderer,displacement:displacementSources,geometry:baseGeometry,worldMatrix:mesh?mesh.matrixWorld:new THREE.Matrix4(),fileMap:dispFileMap,textureCache:undefined,isAlive:()=>!stopped&&token===dispToken}).catch(e=>({offsets:null,notices:['Displacement evaluation failed: '+(e&&e.message?e.message:String(e))]}));const FIRST_BUILD_DISPLACEMENT_TIMEOUT_MS=4000;const timedOut=Symbol('mtlx-disp-timeout');const raced=await Promise.race([evalPromise,new Promise(resolve=>setTimeout(()=>resolve(timedOut),FIRST_BUILD_DISPLACEMENT_TIMEOUT_MS))]);if(raced===timedOut){// Keep waiting in the background; the rest of
+// this function is synchronous, so `mesh`/`handle`
+// both exist well before this resolves.
+evalPromise.then(result=>landDisplacementResult(token,result,'failed'));}else{landDisplacementResult(token,raced,'failed');}}// else: filename-driven, wait for onDisplacementFileMap.
+}if(fullScene&&sceneOrbit&&controls){// OrbitControls' constructor already ran update()
 // against its placeholder (0,0,0) target and re-aimed
 // the camera, restore the authored pose first.
 if(sceneAuthoredPose){camera.position.copy(sceneAuthoredPose.position);camera.quaternion.copy(sceneAuthoredPose.quaternion);}const sphere=getBallBoundingSphere();// Pivot on the authored view ray at the ball's depth:
@@ -2511,7 +3115,7 @@ const box=new THREE.Box3().setFromObject(sceneGroup);const size=box.getSize(new 
 const back=camera.position.clone().sub(controls.target).normalize();const exit=box.containsPoint(controls.target)?new THREE.Ray(controls.target.clone(),back).intersectBox(box,new THREE.Vector3()):null;controls.maxDistance=exit?controls.target.distanceTo(exit):d*4;// Captures setup distance + ball radius for the fit-to-
 // ball fov. Radius = HALF the largest AABB extent, not
 // Box3.getBoundingSphere() (which framed ~1.7x too far).
-let fitCenter=null,fitRadius=null;if(mesh){mesh.updateMatrixWorld(true);const bb=new THREE.Box3().setFromObject(mesh);fitCenter=bb.getCenter(new THREE.Vector3());const bs=bb.getSize(new THREE.Vector3());fitRadius=Math.max(bs.x,bs.y,bs.z)/2;}else if(sphere){fitCenter=sphere.center;fitRadius=sphere.radius;}sceneOrbitFitRadius=fitRadius;sceneOrbitFitDist=fitCenter?camera.position.distanceTo(fitCenter):null;recomputeCameraFov();camera.updateProjectionMatrix();// Snapshot for resetCamera(): position0/target0 now
+let fitCenter=null,fitRadius=null;if(mesh){mesh.updateMatrixWorld(true);const bb=withFramingGeometry(()=>new THREE.Box3().setFromObject(mesh));fitCenter=bb.getCenter(new THREE.Vector3());const bs=bb.getSize(new THREE.Vector3());fitRadius=Math.max(bs.x,bs.y,bs.z)/2;}else if(sphere){fitCenter=sphere.center;fitRadius=sphere.radius;}sceneOrbitFitRadius=fitRadius;sceneOrbitFitDist=fitCenter?camera.position.distanceTo(fitCenter):null;recomputeCameraFov();camera.updateProjectionMatrix();// Snapshot for resetCamera(): position0/target0 now
 // hold the authored pose + derived pivot, so
 // controls.reset() restores this exact framing.
 controls.saveState();}const vp=new THREE.Matrix4();// Hoisted above the first material apply: applyMaterialInternal
@@ -2523,7 +3127,10 @@ const setUniforms=()=>{if(!mesh||!uniforms)return;mesh.updateMatrixWorld();camer
 // state fetched once above rather than re-fetching. Returns
 // the object; does not touch the shell `uniforms` binding.
 // ------------------------------------------------------
-const bindMaterialUniforms=srcs=>{const{vs,fs,introspected}=srcs;// MaterialX-generated shaders expect their own attribute
+const bindMaterialUniforms=srcs=>{const{vs,fs,introspected}=srcs;// Shadow sampling and the occlusion block are gated out of
+// preview sources (nothing here can bind either), so their
+// no-op seeds are gated the same way.
+const featureSkips=srcs.featureSkips||{};// MaterialX-generated shaders expect their own attribute
 // names (i_position, i_normal, ...) and u_* transform
 // uniforms, so we use RawShaderMaterial and feed both manually.
 const newUniforms={u_worldMatrix:{value:new THREE.Matrix4()},u_viewProjectionMatrix:{value:new THREE.Matrix4()},u_worldInverseTransposeMatrix:{value:new THREE.Matrix4()},u_viewPosition:{value:new THREE.Vector3()},// Depth-peel uniforms (see injectPeelDiscard's header
@@ -2543,25 +3150,29 @@ const newUniforms={u_worldMatrix:{value:new THREE.Matrix4()},u_viewProjectionMat
 // comment). u_peelPrevDepth keeps the BLACK default
 // (depth==0.0) for the same fail-safe reason on its
 // own `z <= _prevZ + eps` comparison.
-u_peelMode:{value:0},u_peelHasPrev:{value:0},u_peelPrevDepth:{value:getDummyTex()},u_opaqueDepth:{value:getDummyTexWhite()},// hwShadowMap is on for every generated shader, so the
-// Viewer must bind white moments (fully lit) or its
-// materials would sample nothing and render black.
+u_peelMode:{value:0},u_peelHasPrev:{value:0},u_peelPrevDepth:{value:getDummyTex()},u_opaqueDepth:{value:getDummyTexWhite()},// Harmless when shadow sampling was gated out (no such
+// uniform then); with it generated the Viewer must bind
+// white moments (fully lit) or its materials render black.
 u_shadowMap:{value:getDummyTexWhite()},u_shadowMatrix:{value:shadowOffMatrix()},// encodeDisplay defers to finalMat only while the
 // peel pipeline draws a linear intermediate target.
 // Ordinary opaque frames must remain display encoded.
 u_peelLinear:{value:0},// Injected by encodeDisplay, so MaterialX never
 // introspects it and the defaults pass below cannot
 // supply it.
-u_displayExposure:{value:displayExposureScale()},u_displayTransform:{value:displayTransformId(getDisplayTransform())},// No stage caster in the Viewer, so no slot is shadowed;
+u_displayExposure:{value:displayExposureScale()},u_displayTransform:{value:displayTransformId(getDisplayTransform())}};if(!featureSkips.shadowMap)Object.assign(newUniforms,{// No stage caster in the Viewer, so no slot is shadowed;
 // the white dummy moments map above says the same thing.
 // No stage caster in the Viewer: an all -1 slot map
 // makes the atlas lookup an exact no-op.
-u_shadowAtlas:{value:getDummyTexWhite()},u_shadowMatrices:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Matrix4())},u_shadowTiles:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,1,1))},u_shadowDepthPlanes:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,0,1))},u_shadowDepthRanges:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector2(0,1))},u_shadowSourceRadii:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4())},u_shadowTexelWorldSize:{value:new Array(SHADOW_FACE_SLOTS).fill(0)},u_shadowFaceOrigin:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3())},u_shadowFaceValid:{value:new Array(SHADOW_FACE_SLOTS).fill(0)},u_shadowFaceBasisX:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(1,0,0))},u_shadowFaceBasisY:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,1,0))},u_shadowFaceBasisZ:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,0,1))},u_shadowSlotFace:{value:new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1)},u_shadowSlotFaceCount:{value:new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0)},u_shadowDiagnosticVisibilityScale:{value:1},// Same sampler-unit hazard as the Scene: see
+u_shadowAtlas:{value:getDummyTexWhite()},u_shadowMatrices:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Matrix4())},u_shadowTiles:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,1,1))},u_shadowDepthPlanes:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,0,1))},u_shadowDepthRanges:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector2(0,1))},u_shadowSourceRadii:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4())},u_shadowTexelWorldSize:{value:new Array(SHADOW_FACE_SLOTS).fill(0)},u_shadowFaceOrigin:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3())},u_shadowFaceValid:{value:new Array(SHADOW_FACE_SLOTS).fill(0)},u_shadowFaceBasisX:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(1,0,0))},u_shadowFaceBasisY:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,1,0))},u_shadowFaceBasisZ:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,0,1))},u_shadowSlotFace:{value:new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1)},u_shadowSlotFaceCount:{value:new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0)},u_shadowDiagnosticVisibilityScale:{value:1}});if(!featureSkips.occlusion)Object.assign(newUniforms,{// Same sampler-unit hazard as the Scene: see
 // createMtlxSceneUniforms. No stage volume here, so
 // the white 1x1x1 dummy at strength 0 is the value.
 u_skyVisMap:{value:getDummyTex3DWhite()},u_skyVisMin:{value:new THREE.Vector3()},u_skyVisSize:{value:new THREE.Vector3(1,1,1)},u_skyVisCell:{value:0},u_skyVisStrength:{value:0},// No baked occlusion volume in the Viewer either;
 // same sampler-unit hazard as u_skyVisMap above.
-u_aoVolumeMap:{value:getDummyTex3DWhite()},u_aoVolumeMin:{value:new THREE.Vector3()},u_aoVolumeSize:{value:new THREE.Vector3(1,1,1)},u_aoVolumeCell:{value:0},u_aoVolumeStrength:{value:0}};// GLSL ES 3.0 forbids uniform initializers, so the app
+u_aoVolumeMap:{value:getDummyTex3DWhite()},u_aoVolumeMin:{value:new THREE.Vector3()},u_aoVolumeSize:{value:new THREE.Vector3(1,1,1)},u_aoVolumeCell:{value:0},u_aoVolumeStrength:{value:0}});// Baked diffuse bounce is patched in independently of the
+// occlusion gate, so it is seeded whatever that gate did.
+Object.assign(newUniforms,{// No baked diffuse bounce in the Viewer either; same
+// sampler-unit hazard as u_skyVisMap above.
+u_skyBounceMap:{value:getDummyTex3DWhite()},u_skyBounceMin:{value:new THREE.Vector3()},u_skyBounceSize:{value:new THREE.Vector3(1,1,1)},u_skyBounceCell:{value:0},u_skyBounceStrength:{value:0},u_bounceScale:{value:0},u_bounceTint:{value:new THREE.Vector3(1,1,1)}});// GLSL ES 3.0 forbids uniform initializers, so the app
 // must upload each default, an unset uniform reads as
 // 0 in WebGL, which blacked out every unlit/PBR preview.
 applyIntrospectedUniformDefaults(newUniforms,introspected);if(DEBUG_SHADERS){console.log('introspected uniforms:',introspected.map(u=>`${u.type} ${u.name}${u.data!=null?' (default uploaded)':''}`));if(!introspected.length){console.warn('Shader introspection found NO uniform blocks, defaults not uploaded; expect black. (Binding API mismatch, report the mxShader/stage method names used by generatePreviewSourcesUnlocked.)');}}// Discover what the generated shader actually declares,
@@ -2593,7 +3204,7 @@ if(has('u_refractionTwoSided'))newUniforms.u_refractionTwoSided={value:false};//
 // length (rigCount+1, see getMxEnv's
 // hwMaxActiveLightSources) so later updates can
 // mutate values in place without a rebuild.
-const nLights=activeLightCount(lightData,envKeyLight,null);if(has('u_numActiveLightSources'))newUniforms.u_numActiveLightSources={value:nLights};if(has('u_lightData')){const entries=currentLights(lightData,envKeyLight,envRotationRad);newUniforms.u_lightData={value:entries};}if(DEBUG_SHADERS){console.log('env bound → radiance:',radSampler&&radSampler.name,'| irradiance:',irrSampler&&irrSampler.name,envHasFile?envPrefilteredIrr?'(radiance + prefiltered irradiance files)':'(radiance file; irradiance SH-synthesized)':'(synthesized)','| direct lights:',nLights,'(rig '+rigCount+' + key '+(envKeyLight?1:0)+')');const envUnbound=declared.filter(u=>/sampler/i.test(u.type)&&/env/i.test(u.name)&&!newUniforms[u.name]);if(envUnbound.length)mtlxWarn('UNBOUND env samplers (likely cause of black):',envUnbound.map(u=>u.name));}}return newUniforms;};// syncMeshMaterialMode, derives the mesh material's
+const nLights=activeLightCount(lightData,envKeyLight,null,srcs.maxLights);if(has('u_numActiveLightSources'))newUniforms.u_numActiveLightSources={value:nLights};if(has('u_lightData')){const entries=currentLights(lightData,envKeyLight,envRotationRad,null,undefined,null,srcs.maxLights);newUniforms.u_lightData={value:entries};}if(DEBUG_SHADERS){console.log('env bound → radiance:',radSampler&&radSampler.name,'| irradiance:',irrSampler&&irrSampler.name,envHasFile?envPrefilteredIrr?'(radiance + prefiltered irradiance files)':'(radiance file; irradiance SH-synthesized)':'(synthesized)','| direct lights:',nLights,'(rig '+rigCount+' + key '+(envKeyLight?1:0)+')');const envUnbound=declared.filter(u=>/sampler/i.test(u.type)&&/env/i.test(u.name)&&!newUniforms[u.name]);if(envUnbound.length)mtlxWarn('UNBOUND env samplers (likely cause of black):',envUnbound.map(u=>u.name));}}return newUniforms;};// syncMeshMaterialMode, derives the mesh material's
 // blend/depth flags from viewIsTransparent/
 // FORCE_TRANSPARENCY, in place (no shader rebuild, the
 // peel discard block is baked into every shader
@@ -2658,16 +3269,15 @@ if(oldMaterial)oldMaterial.dispose();// Land the new material in the correct ren
 syncMeshMaterialMode();};// First build: routes through the exact same helper every
 // later applyMaterial() call uses, throwing the same styled
 // Error on failure, identical to today's first-build path.
-applyMaterialInternal({vs,fs,introspected,transparent,geomprops,notices},label);// Contact-shadow casters, only when a studioGroup exists
+applyMaterialInternal({vs,fs,introspected,transparent,geomprops,notices,maxLights},label);// Contact-shadow casters, only when a studioGroup exists
 // to receive them. Full-scene mode has no catcher, so
 // `mesh`/sceneGroup meshes there are left untouched.
 if(studioGroup){// The whole model casts the contact shadow now: the
 // MaterialX surface plus, in scene mode, the neutral
 // glTF parts (same envMapIntensity duck-type as the env-rotation patch above).
-if(mesh)mesh.castShadow=true;if(sceneGroup){sceneGroup.traverse(obj=>{if(!obj.isMesh||!obj.material)return;const mats=Array.isArray(obj.material)?obj.material:[obj.material];if(mats.some(m=>'envMapIntensity'in m))obj.castShadow=true;});}// Silhouette bottom, not the bounding-sphere bottom:
-// normalizeGeometry puts sphere at y=-1 but cube at
-// about y=-0.577, so a fixed floor would leave the cube hovering.
-let floorY=-1;try{const box=new THREE.Box3().setFromObject(sceneGroup||mesh);if(isFinite(box.min.y))floorY=box.min.y;}catch(e){/* degenerate/empty box - keep the -1 fallback */}studioGroup.position.y=floorY;}// renderFrame, the ONE render entry point for this view,
+if(mesh)mesh.castShadow=true;if(sceneGroup){sceneGroup.traverse(obj=>{if(!obj.isMesh||!obj.material)return;const mats=Array.isArray(obj.material)?obj.material:[obj.material];if(mats.some(m=>'envMapIntensity'in m))obj.castShadow=true;});}// Factored out above as updateStudioFloor so a later
+// displacement swap can recompute it too.
+updateStudioFloor();}// renderFrame, the ONE render entry point for this view,
 // called by animate() below and by the handle's snapshot().
 // Byte-identical to the pre-feature `renderer.render(scene,
 // camera)` whenever depth peeling isn't active for this
@@ -2690,7 +3300,10 @@ if(sceneOrbitClampBox&&!sceneOrbitClampBox.containsPoint(camera.position)){scene
 if(!isActive())return;if(!controls&&fallbackSpin){// OrbitControls script blocked → old behavior.
 // Spins the WHOLE assembled scene when present,
 // rotating just `mesh` would leave the backdrop static.
-(sceneGroup||mesh).rotation.y+=0.005;}setUniforms();renderFrame();};animate();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] createMtlxRenderView total: '+(performance.now()-__totalPerfStart).toFixed(1)+'ms (target: '+label+')');}const handle={uniforms,introspected,vs,fs,controls,renderer,notices:notices||[],isTransparent:!!transparent,// Live auto-orbit toggle (no regen needed). No-op in
+(sceneGroup||mesh).rotation.y+=0.005;}setUniforms();renderFrame();};animate();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] createMtlxRenderView total: '+(performance.now()-__totalPerfStart).toFixed(1)+'ms (target: '+label+')');}handle={uniforms,introspected,vs,fs,controls,renderer,allowConstInputs,// Displacement (P5): the first-build subdivide/evaluate run
+// above happened before `handle` existed, so any notice it
+// produced couldn't append here yet, fold it in now.
+notices:(materialNotices=notices||[]).concat(currentDispNotices()),isTransparent:!!transparent,// Live auto-orbit toggle (no regen needed). No-op in
 // full-scene mode by contract: every caller hides the rotate
 // button there, and fallbackSpin would rotate the authored scene.
 // Same contract for flat2d: no controls, and fallbackSpin
@@ -2758,10 +3371,10 @@ refreshRenderMode:()=>{syncMeshMaterialMode();const peelOn=viewIsTransparent&&FO
 refreshDisplaySettings:()=>{const scale=displayExposureScale();const id=displayTransformId(getDisplayTransform());const push=u=>{if(!u)return;if(u.u_displayExposure)u.u_displayExposure.value=scale;if(u.u_displayTransform)u.u_displayTransform.value=id;};push(uniforms);sceneOwnedMaterials.forEach(m=>push(m.uniforms));if('toneMappingExposure'in renderer)renderer.toneMappingExposure=scale;applyThreeToneMappingChunk(getDisplayTransform());scene.traverse(obj=>{if(obj.material&&obj.material.toneMapped)obj.material.needsUpdate=true;});renderFrame();},// Live-swaps the environment without a shader rebuild, used
 // by the Environment dialog's Import/Reset. Also regenerates
 // scene-mode's PMREM. No-op on views with no lighting/env.
-setEnvironment:env=>{if(!env)return;ensurePrefilteredEnv(renderer,env);if(envRadSamplerName&&uniforms[envRadSamplerName])uniforms[envRadSamplerName].value=envRadianceForShading(env);if(envIrrSamplerName&&uniforms[envIrrSamplerName])uniforms[envIrrSamplerName].value=env.irradiance;if(uniforms.u_envRadianceMips)uniforms.u_envRadianceMips.value=env.mips;// Persist onto the SHELL env state too, not just the
+setEnvironment:env=>{if(!env)return;ensurePrefilteredEnv(renderer,env);ensureConvolvedIrradiance(renderer,env);if(envRadSamplerName&&uniforms[envRadSamplerName])uniforms[envRadSamplerName].value=envRadianceForShading(env);if(envIrrSamplerName&&uniforms[envIrrSamplerName])uniforms[envIrrSamplerName].value=envIrradianceForShading(env);if(uniforms.u_envRadianceMips)uniforms.u_envRadianceMips.value=env.mips;// Persist onto the SHELL env state too, not just the
 // current material's uniforms, otherwise a future swap
 // silently reverts to the stale env.
-envRadiance=envRadianceForShading(env);envIrradiance=env.irradiance;envMips=env.mips;envBgTexture=env.background;// New env => possibly a new (or no) key light; refresh the
+envRadiance=envRadianceForShading(env);envIrradiance=envIrradianceForShading(env);envMips=env.mips;envBgTexture=env.background;// New env => possibly a new (or no) key light; refresh the
 // bound uniform entry in place, honoring current rotation.
 envKeyLight=env.keyLight||null;envSoftKeyDir=env.softKeyDir||null;updateKeyLightUniformEntry(uniforms,rigCount,envKeyLight,envRotationRad,envExposure);// Same refresh for the shadow: without this the studio light
 // would keep aiming along the PREVIOUS env's key light until
@@ -2789,19 +3402,23 @@ handle.setEnvironment(env);if(fetchedEnvMap)disposeFetchedEnv(fetchedEnvMap);fet
 return getEnvironment().then(def=>{if(def)swapIn(def,false);return true;});}const clean=String(url).split('?')[0].split('#')[0];const ext=clean.slice(clean.lastIndexOf('.')).toLowerCase();if(ext!=='.hdr'&&ext!=='.exr'){return Promise.reject(new Error('Unsupported environment URL "'+url+'". Expected .hdr or .exr.'));}if(ext==='.hdr'&&typeof THREE.RGBELoader==='undefined'){return Promise.reject(new Error('RGBELoader unavailable (script blocked/offline). Cannot load .hdr environments.'));}if(ext==='.exr'&&typeof THREE.EXRLoader==='undefined'){return Promise.reject(new Error('EXRLoader unavailable (script blocked/offline). Cannot load .exr environments.'));}return fetch(url).then(r=>{if(!r.ok)throw new Error('Failed to fetch environment "'+url+'" (HTTP '+r.status+').');return r.arrayBuffer();}).then(buf=>{const raw=parseEnvBuffer(buf,ext);if(!raw||!raw.image||!raw.image.data){throw new Error('Failed to parse the environment image "'+url+'".');}swapIn(buildEnvFromParsedTexture(raw),true);return true;});},// Applies a new (or already-generated) material into this
 // SAME shell, instead of calling createMtlxRenderView() again.
 // Returns null when superseded/bailed; throws on real compile failure.
-applyMaterial:async({mx,gen,genContext,renderable,srcs=null,label,isMounted=()=>true})=>{const __applyPerfStart=window.MTLX_PERF_LOG?performance.now():0;// `stopped` is disposePartial's flag, an apply arriving
+applyMaterial:async({mx,gen,genContext,renderable,srcs=null,label,materialName:applyMaterialName,isMounted=()=>true})=>{const __applyPerfStart=window.MTLX_PERF_LOG?performance.now():0;// `stopped` is disposePartial's flag, an apply arriving
 // after teardown must do nothing, not resurrect GL state
 // on an already-disposed renderer/context.
-if(stopped||!isMounted())return null;if(!srcs){srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,isMounted});}// A thrown generation error is NOT caught here, it
+if(stopped||!isMounted())return null;if(!srcs){// A caller switching materials passes the new material's name.
+const genMaterialName=applyMaterialName!==undefined?applyMaterialName:materialName;srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName:genMaterialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS,allowConstInputs});}// A thrown generation error is NOT caught here, it
 // propagates like a first-build failure, so the UI shows
 // the same overlay while the old material keeps rendering.
-if(!srcs||!isMounted()||stopped)return null;const warmResult=await prewarmShaderCompile({vs:srcs.vs,fs:srcs.fs,isMounted,label});// 'bailed' or a lost isMounted(): must not touch the
+if(!srcs||!isMounted()||stopped)return null;prewarmDisplacementSources(srcs,isMounted,label);const warmResult=await prewarmShaderCompile({vs:srcs.vs,fs:srcs.fs,isMounted,label});// 'bailed' or a lost isMounted(): must not touch the
 // still-rendering live material, leave it as-is; the
 // superseding call owns the next apply.
 if(warmResult==='bailed'||!isMounted()||stopped)return null;applyMaterialInternal(srcs,label);// Updates the handle's public fields IN PLACE: the
 // object-literal shorthand below captures a snapshot,
 // not a live binding, so every swap must re-assign these.
-handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs;handle.fs=srcs.fs;handle.notices=srcs.notices||[];handle.isTransparent=!!srcs.transparent;if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] applyMaterial total: '+(performance.now()-__applyPerfStart).toFixed(1)+'ms (target: '+label+')');}return handle;},// PNG snapshot of the CURRENT view. The drawing buffer isn't
+handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs;handle.fs=srcs.fs;materialNotices=srcs.notices||[];syncHandleNotices();handle.isTransparent=!!srcs.transparent;handle.syncDisplacementSources(srcs.displacement||null);if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] applyMaterial total: '+(performance.now()-__applyPerfStart).toFixed(1)+'ms (target: '+label+')');}return handle;},// Syncs geometry to a (possibly unchanged) displacement program. Called by
+// applyMaterial and by tryRefreshRenderView's in-place path; a changed key
+// is debounced so a slider drag does not re-evaluate every value.
+syncDisplacementSources:newDisplacement=>{if(stopped)return;displacementSources=newDisplacement||null;if(!displacementSources){applyDispDebounceToken++;cancelDisplacementRun();if(dispState!=='none'){swapMeshGeometry(originalGeometry);dispState='none';dispKey=null;dispEvalNotices=[];syncHandleNotices();dispDispatchStatus();}return;}if(displacementSources.key===dispKey)return;cancelDisplacementRun();dispKey=displacementSources.key;const debounceToken=++applyDispDebounceToken;setTimeout(()=>{if(debounceToken!==applyDispDebounceToken||stopped)return;if(flat2d||!getDisplacementEnabled())return;if(!baseGeometry)ensureBaseGeometry();runDisplacement();},150);},// PNG snapshot of the CURRENT view. The drawing buffer isn't
 // preserved between frames (preserveDrawingBuffer:false), so
 // render synchronously right before reading it back.
 snapshot:()=>{setUniforms();renderFrame();return renderer.domElement.toDataURL('image/png');},// Reads back the current view at caller-chosen dimensions:
@@ -2824,12 +3441,22 @@ captureFrame:()=>{if(!captureState)throw new Error('captureFrame() called with n
 // ratio and layout-driven sizing. Idempotent, safe to call twice.
 endCapture:()=>{if(!captureState)return;canvas.style.visibility=captureState.prevVisibility;renderer.setPixelRatio(captureState.prevPixelRatio);captureState=null;resizeSuspended=false;syncSizeRef();},// Reads the live `uniforms` closure binding (same one setUniforms
 // uses), so a material swap is reflected without a stale copy.
-isAnimated:()=>!!(uniforms&&(uniforms.u_time||uniforms.u_frame)),// Wrapped (not disposePartial directly) so dispose() also
+isAnimated:()=>!!(uniforms&&(uniforms.u_time||uniforms.u_frame)),// Status snapshot: level/triangles/capped describe the current
+// baseGeometry (0 until one is built); notices merges the
+// subdivision and latest-evaluation notices.
+getDisplacementState:()=>({state:dispState,mode:displacementSources?displacementSources.mode:null,level:dispSubdivLevel||0,capped:!!dispCappedNotice,triangles:dispTriangles,notices:currentDispNotices()}),// Resolves once no evaluation is actively in flight (merely
+// waiting on a file map does NOT count, that could hang forever).
+whenDisplacementSettled:()=>dispRunInFlight?dispSettlePromise||Promise.resolve():Promise.resolve(),// Called by the P3 setters through LIVE_VIEWS on every live
+// view; a no-op for flat2d or a material with no displacement.
+refreshDisplacement:()=>{if(flat2d||!displacementSources)return;if(!getDisplacementEnabled()){applyDispDebounceToken++;cancelDisplacementRun();if(dispState!=='off'){swapMeshGeometry(originalGeometry);dispState='off';dispDispatchStatus();}return;}const prevLevel=dispSubdivLevel;const wasOff=dispState==='off'||dispState==='none';ensureBaseGeometry();if(wasOff||prevLevel!==dispSubdivLevel)runDisplacement();},// bindDroppedTextures calls this once per drop for every live
+// view (see its header comment below); re-runs only when the
+// displacement program actually samples a file.
+onDisplacementFileMap:fileMap=>{dispFileMap=fileMap;if(!flat2d&&getDisplacementEnabled()&&hasDisplacementFileRef(displacementSources)){runDisplacement();}},// Wrapped (not disposePartial directly) so dispose() also
 // deregisters the handle from LIVE_VIEWS, otherwise
 // setEnvOverride's broadcast could touch a torn-down view.
 dispose:()=>{LIVE_VIEWS.delete(handle);disposePartial();},// Debug hook: raw GPU state for a headed diagnosis harness.
 // Not for production UI code.
-__debug:()=>({renderer,scene,camera,material:mesh?mesh.material:material})};LIVE_VIEWS.add(handle);return handle;}catch(err){disposePartial();throw err;}};// ---- public API ----
+__debug:()=>({renderer,scene,camera,material:mesh?mesh.material:material,mesh,geometry})};LIVE_VIEWS.add(handle);return handle;}catch(err){disposePartial();throw err;}};// ---- public API ----
 // ------------------------------------------------------------------
 // Fullscreen helpers: native requestFullscreen when available; else a
 // CSS-maximize fallback (position:fixed + synthesized 'fullscreenchange')
@@ -2884,4 +3511,4 @@ const watchFullscreen=cb=>{const h=()=>cb(fullscreenElement());document.addEvent
 (()=>{if(typeof document==='undefined'||document.getElementById('mtlx-shared-css'))return;const st=document.createElement('style');st.id='mtlx-shared-css';st.textContent=['.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgba(75,85,99,.45);}','.mtlx-loading-bar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:9999px;','background:linear-gradient(90deg,transparent,#60a5fa,transparent);animation:mtlx-loading-slide 1.1s ease-in-out infinite;}','@keyframes mtlx-loading-slide{from{transform:translateX(-100%);}to{transform:translateX(350%);}}'].join('');document.head.appendChild(st);})();// Custom highlight.js theme for the XML "Document" dialog, matching the
 // site's dark gray-900/800 + blue-400 palette. Background is explicitly
 // transparent so it doesn't paint over the dialog's own panel.
-(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:#d1d5db;background:transparent;}','.hljs-tag,.hljs-punctuation{color:#6b7280;}','.hljs-name{color:#60a5fa;}','.hljs-attr{color:#9ca3af;}','.hljs-string{color:#4ade80;}','.hljs-comment{color:#6b7280;font-style:italic;}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getHeightToNormalTexel,setHeightToNormalTexel,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,preserveSourceFormatting,TEXTURE_CACHE,textureCacheKey,bindDroppedTextures,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,loadBoundedBitmapTexture,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getKeyLightEnabled,setKeyLightEnabled,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,ensurePrefilteredEnv,getSpecularEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});
+(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:#d1d5db;background:transparent;}','.hljs-tag,.hljs-punctuation{color:#6b7280;}','.hljs-name{color:#60a5fa;}','.hljs-attr{color:#9ca3af;}','.hljs-string{color:#4ade80;}','.hljs-comment{color:#6b7280;font-style:italic;}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getDisplacementEnabled,setDisplacementEnabled,getDisplacementNormalsMode,setDisplacementNormalsMode,getPreviewSubdivisionLevel,setPreviewSubdivisionLevel,PREVIEW_TRIANGLE_BUDGET,pickSubdivisionLevel,getHeightToNormalTexel,setHeightToNormalTexel,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,preserveSourceFormatting,TEXTURE_CACHE,textureCacheKey,samplerCacheKey,normalizeSamplerAddressMode,collectImageSamplerModes,annotateFilenameSamplerModes,bindDroppedTextures,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,runHeavyTextureDecode,loadBoundedBitmapTexture,resetTexturePerf,sceneTextureFastPathEnabled,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getKeyLightEnabled,setKeyLightEnabled,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,evaluateDisplacement,generateDisplacementSourcesUnlocked,detectDisplacementMode,ensurePrefilteredEnv,getSpecularEnvMethod,ensureConvolvedIrradiance,envIrradianceForShading,getDiffuseEnvMethod,setDiffuseEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});

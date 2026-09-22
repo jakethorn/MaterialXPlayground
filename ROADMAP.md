@@ -21,6 +21,7 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 - [planned] **Validate documents at load**: warn about duplicate inputs, unknown colorspaces and mix weights outside 0 to 1 instead of letting MaterialX drop them silently. Type mismatches are already reported.
 - [planned] **Correct transparency blending**: blend transparent layers in linear light instead of display space.
 - [planned] **Faster, quieter texture loading**: decode textures off the main thread, keep objects neutral until their textures are ready, allow cancelling.
+- [idea] **Parallel shader generation**: MaterialX shader generation runs one material at a time on the page's main thread. Run it in a few Web Workers, each with its own copy of the MaterialX module, so scenes with many materials start compiling sooner and the page stays responsive meanwhile.
 - [done] **KTX2 compressed textures**: GPU-compressed textures cut memory use by about four times, so large scenes can load at full resolution. Includes a script that converts a folder of textures once.
 - [done] **Prefiltered environment reflections**: the environment is prefiltered into a GGX mip chain, as MaterialXView does, so smooth surfaces no longer sparkle under high contrast HDRIs.
 - [done] **Shadows and document lights**: shadow maps, plus directional, point and spot lights authored in the document.
@@ -68,8 +69,8 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 
 ## Desktop App
 
-- [in progress] **Electron merge**: an experimental desktop build is merged, with native open and save, recent files, file watching and a Windows jump list; still needs testing, CI validation and a first release.
-- [idea] **Mac verification**: traffic-light gutter, Reveal in Finder, ad-hoc signing on the runner, general testing and validation.
+- [done] **Electron merge**: an experimental desktop build is merged, with native open and save, recent files, file watching and a Windows jump list, and CI builds and smoke-tests installers for Windows, macOS and Linux on every release.
+- [done] **Mac verification**: traffic-light gutter, Reveal in Finder, ad-hoc signing on the runner, general testing and validation.
 
 ## Tutorials
 

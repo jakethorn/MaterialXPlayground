@@ -5,6 +5,13 @@
 <title>MaterialX embed test harness</title>
 </head>
 <body>
+<script>
+  // Embeds stay pinned to the SH diffuse-irradiance path until the
+  // convolved map is verified for embeds; see the matching comment at the
+  // top of embed/mtlx-viewer.js, which is what actually enforces this by
+  // forwarding diffuseEnv=sh onto each iframe's own URL.
+  window.MTLX_DIFFUSE_ENV = 'sh';
+</script>
 <script src="/embed/mtlx-viewer.js"></script>
 <script>
   // Test-only helpers for the embed Playwright suite. Elements/iframes are
@@ -26,7 +33,7 @@
   window.createViewer = function (attrs) {
     var el = document.createElement('materialx-viewer');
     el.__events = [];
-    ['mtlx-ready', 'mtlx-renderables', 'mtlx-error'].forEach(function (type) {
+    ['mtlx-ready', 'mtlx-renderables', 'mtlx-error', 'mtlx-displacement'].forEach(function (type) {
       el.addEventListener(type, function (e) {
         el.__events.push({ type: type, detail: e.detail });
       });

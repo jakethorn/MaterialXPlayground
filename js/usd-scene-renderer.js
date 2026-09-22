@@ -32,6 +32,10 @@ const storedSceneTextureMaxSize = () => {
 // match a reference by eye instead of us hardcoding a factor.
 const SCENE_STAGE_LIGHTS_KEY = 'mtlx_scene_stage_lights';
 const SCENE_STAGE_LIGHTS_EV_KEY = 'mtlx_scene_stage_lights_ev';
+const SCENE_STAGE_LIGHTS_DEFAULT = true;
+const SCENE_STAGE_LIGHTS_EV_DEFAULT = 0;
+// Analytic stage-light slots, must match STAGE_LIGHT_SLOTS in js/mtlx-engine.js.
+const SCENE_STAGE_LIGHT_LIMIT = 16;
 const SCENE_SHADOWS_KEY = 'mtlx_scene_shadows';
 
 // The Scene keeps its own view transform. A whole stage is a photographic
@@ -49,12 +53,45 @@ const storedSceneDisplayTransform = () => {
     } catch (e) { return SCENE_DISPLAY_TRANSFORM_DEFAULT; }
 };
 
+// "Material working space": Karma reads untagged colour constants and the
+// displayColor primvar as ACEScg (Houdini's own scene-linear space), while
+// this viewer treats the same numbers as linear Rec.709. Default stays
+// Rec.709 (matches every other tool's assumption); switching to ACEScg
+// converts every untagged colour with the same cmlib leg used for tagged
+// ACEScg textures. Scene-only, off in iframes, never touches the Viewer,
+// Compare, Builder, Graph previews or embeds.
+const SCENE_MATERIAL_WORKSPACE_KEY = 'mtlx_scene_material_workspace';
+const SCENE_MATERIAL_WORKSPACE_VALUES = ['rec709', 'acescg'];
+const SCENE_MATERIAL_WORKSPACE_DEFAULT = 'rec709';
+const storedSceneMaterialWorkspace = () => {
+    if (window.top !== window) return SCENE_MATERIAL_WORKSPACE_DEFAULT;
+    try {
+        const raw = localStorage.getItem(SCENE_MATERIAL_WORKSPACE_KEY);
+        return SCENE_MATERIAL_WORKSPACE_VALUES.includes(raw) ? raw : SCENE_MATERIAL_WORKSPACE_DEFAULT;
+    } catch (e) { return SCENE_MATERIAL_WORKSPACE_DEFAULT; }
+};
+
+// Geometric specular anti-aliasing (see patchSpecularAA in mtlx-engine.js):
+// widens the anisotropic GGX alpha pair by the screen-space variance of the
+// shading normal and of the roughness input, stopping specular fireflies on
+// materials whose roughness is itself a fine procedural noise field (e.g.
+// egg_brushed_steel). Default on for the Scene; never on in an embed
+// (window.top !== window), same guard shape as the other Scene-only shading
+// settings above. Requires a shader recompile (see setSceneSpecularAA), not
+// a uniform flip, because it changes generated GLSL text.
+const SCENE_SPECULAR_AA_KEY = 'mtlx_scene_specular_aa';
+const storedSceneSpecularAA = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_SPECULAR_AA_KEY) !== '0'; } catch (e) { return true; }
+};
+
 // Baked sky visibility: the room-scale half of the same missing visibility
 // term. Screen space AO handles contacts, this handles walls. Default on,
 // because an interior lit by a dome is wrong without it and the bake is a
 // one-off cost per stage.
 const SCENE_SKYVIS_KEY = 'mtlx_scene_skyvis';
 const SCENE_SKYVIS_STRENGTH_KEY = 'mtlx_scene_skyvis_strength';
+const SCENE_SKYVIS_STRENGTH_DEFAULT = 1;
 const storedSceneSkyVis = () => {
     if (window.top !== window) return false;
     try { return localStorage.getItem(SCENE_SKYVIS_KEY) !== '0'; } catch (e) { return true; }
@@ -72,6 +109,7 @@ const storedSceneSkyVisStrength = () => {
 // Screen-space ambient occlusion: the visibility term MaterialX's IBL lacks.
 const SCENE_AO_KEY = 'mtlx_scene_ao';
 const SCENE_AO_STRENGTH_KEY = 'mtlx_scene_ao_strength';
+const SCENE_AO_STRENGTH_DEFAULT = 0.85;
 
 // Default on. The environment is most of the light in an interior and it has
 // no visibility term of its own, so without this every object sits on its
@@ -97,6 +135,45 @@ const storedSceneAoStrength = () => {
     } catch (e) { return 0.7; }
 };
 
+// Baked ONE-BOUNCE diffuse irradiance (v3, 2026-09-20): per-cell scalar SH1
+// of the blockers' OWN outgoing radiance (albedo_b * the engine's own
+// convolved irradiance at the blocker's normal, key-light gated by the
+// blocker's own sky visibility), on the sky bake's grid, ADDED to the
+// shaded colour as an extra Lambertian contribution
+// (patchDiffuseBounceAdd in js/mtlx-engine.js), not folded into the
+// "occlusion" scalar: canonical.md (2026-09-20) found the analytic key
+// light supplies most of a point's diffuse irradiance and sits entirely
+// outside occlusion's reach, so scaling only the small residual it does
+// multiply cannot recover a Karma-sized indirect share. Replaces the
+// v2 whole-scene-mean reference irradiance (computeBounceERef, eecd3a3/
+// 75ee6b4/fa73f24): see scratchpad/displacement-verified/color-parity/
+// bounce/v3-design.md for the four factors (units, whole-sphere mean,
+// self-hit co-location, no outgoing direction) that made v2 measure only
+// +1.4 percent of beauty against Karma's 18.8 percent indirect share.
+// Bounded by the [0,1] baked mean/moment reconstruction, the [0,1]
+// strength clamp, a non-negative scale and the near-field AO gate, so it
+// can only add light, never remove it or invert sign; default-on is safe.
+const SCENE_BOUNCE_KEY = 'mtlx_scene_bounce';
+const SCENE_BOUNCE_STRENGTH_KEY = 'mtlx_scene_bounce_strength';
+const SCENE_BOUNCE_STRENGTH_DEFAULT = 1;
+const storedSceneBounce = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_BOUNCE_KEY) !== '0'; } catch (e) { return true; }
+};
+// Default 1.0 (v3, 2026-09-20): v3-design.md section 9's chart prediction
+// lands inside Karma's target band at strength 1.0 (about 0.13 at the old
+// v2 default of 0.8), unlike v2 where 0.8 was chosen only because the whole
+// term was small everywhere.
+const storedSceneBounceStrength = () => {
+    if (window.top !== window) return 1;
+    try {
+        const raw = localStorage.getItem(SCENE_BOUNCE_STRENGTH_KEY);
+        if (raw == null || raw === '') return 1;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+    } catch (e) { return 1; }
+};
+
 // Screen-space reflections: a history-reprojected trace for opaque
 // surfaces, image based (IBL) as the fallback. Parked while its artefacts
 // are investigated: forced off, setters kept; flip SCENE_SSR_PARKED to restore.
@@ -104,6 +181,9 @@ const SCENE_SSR_PARKED = true;
 const SCENE_SSR_KEY = 'mtlx_scene_ssr';
 const SCENE_SSR_STRENGTH_KEY = 'mtlx_scene_ssr_strength';
 const SCENE_SSR_MAX_ROUGHNESS_KEY = 'mtlx_scene_ssr_max_roughness';
+const SCENE_SSR_DEFAULT = false;
+const SCENE_SSR_STRENGTH_DEFAULT = 1;
+const SCENE_SSR_MAX_ROUGHNESS_DEFAULT = 0.5;
 const storedSceneSsr = () => {
     if (SCENE_SSR_PARKED || window.top !== window) return false;
     try { return localStorage.getItem(SCENE_SSR_KEY) !== '0'; } catch (e) { return true; }
@@ -125,6 +205,31 @@ const storedSceneSsrMaxRoughness = () => {
         const value = Number(raw);
         return Number.isFinite(value) ? Math.max(0.05, Math.min(1, value)) : 0.5;
     } catch (e) { return 0.5; }
+};
+
+// Local environment reflections: a static per-stage cubemap capture (see
+// js/usd-scene-localenv.js and scratchpad/displacement-verified/reflections/
+// design.md) substituted into the generated environment radiance lookup, so
+// a reflective surface sees the studio set it is actually sitting in
+// (floor, walls) rather than only the dome. Off by default until the
+// verification captures land; flip the '===' to '!==' to default it on.
+// Never on in an embed, same guard shape as SSR/bounce/sky-vis above.
+const SCENE_LOCAL_ENV_PARKED = false;
+const SCENE_LOCAL_ENV_KEY = 'mtlx_scene_local_reflections';
+const SCENE_LOCAL_ENV_STRENGTH_KEY = 'mtlx_scene_local_reflections_strength';
+const SCENE_LOCAL_ENV_STRENGTH_DEFAULT = 1;
+const storedSceneLocalReflections = () => {
+    if (SCENE_LOCAL_ENV_PARKED || window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_LOCAL_ENV_KEY) === '1'; } catch (e) { return false; }
+};
+const storedSceneLocalReflectionStrength = () => {
+    if (window.top !== window) return 1;
+    try {
+        const raw = localStorage.getItem(SCENE_LOCAL_ENV_STRENGTH_KEY);
+        if (raw == null || raw === '') return 1;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+    } catch (e) { return 1; }
 };
 
 // Default on. Shadows are what makes objects sit in a scene rather than float
@@ -410,15 +515,15 @@ const formatSize = (bytes) => (bytes >= GIB ? formatGB(bytes) : formatMB(bytes))
 // way as the texture size cap above.
 const SCENE_SUBDIVISION_KEY = 'mtlx_scene_subdivision';
 const SCENE_SUBDIVISION_VALUES = [0, 1, 2];
-const SCENE_SUBDIVISION_DEFAULT = 1;
+const SCENE_SUBDIVISION_DEFAULT = 0;
 
 const storedSceneSubdivisionLevel = () => {
     if (window.top !== window) return SCENE_SUBDIVISION_DEFAULT;
     try {
         const raw = localStorage.getItem(SCENE_SUBDIVISION_KEY);
-        // Number(null) is 0, which silently disabled subdivision in a fresh
-        // profile. Preserve an explicit stored "0", while an unset/blank
-        // preference uses the documented default level 1.
+        // Number(null) is 0, so read the raw string: an unset or blank
+        // preference takes the default (off), and an explicit stored level
+        // still wins.
         if (raw === null || raw.trim() === '') return SCENE_SUBDIVISION_DEFAULT;
         const stored = Number(raw);
         return SCENE_SUBDIVISION_VALUES.includes(stored) ? stored : SCENE_SUBDIVISION_DEFAULT;
@@ -429,6 +534,124 @@ const setStoredSceneSubdivisionLevel = (level) => {
     if (window.top === window) {
         try { localStorage.setItem(SCENE_SUBDIVISION_KEY, String(level)); } catch (e) { /* privacy mode */ }
     }
+};
+
+// Displacement subdivision override: 'follow' reuses the worker's mesh (or
+// the authored one), a number re-subdivides the pre-subdivision cage at
+// that level, independent of the plain Subdivision setting above.
+const SCENE_DISPLACEMENT_SUBDIVISION_KEY = 'mtlx_scene_displacement_subdivision';
+const SCENE_DISPLACEMENT_SUBDIVISION_VALUES = ['follow', 0, 1, 2, 3];
+const SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT = 'follow';
+
+const storedSceneDisplacementSubdivision = () => {
+    if (window.top !== window) return SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
+    try {
+        const raw = localStorage.getItem(SCENE_DISPLACEMENT_SUBDIVISION_KEY);
+        if (raw === null || raw.trim() === '') return SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
+        if (raw === 'follow') return 'follow';
+        const stored = Number(raw);
+        return SCENE_DISPLACEMENT_SUBDIVISION_VALUES.includes(stored) ? stored : SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
+    } catch (e) { return SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT; /* privacy mode */ }
+};
+
+const setStoredSceneDisplacementSubdivision = (value) => {
+    if (window.top === window) {
+        try { localStorage.setItem(SCENE_DISPLACEMENT_SUBDIVISION_KEY, String(value)); } catch (e) { /* privacy mode */ }
+    }
+};
+
+// Whether the per-mesh/per-stage triangle budgets below are enforced at all,
+// persisted the same way as the settings above. Default ON (limits apply).
+const SCENE_TRIANGLE_LIMITS_KEY = 'mtlx_scene_triangle_limits';
+const SCENE_TRIANGLE_LIMITS_DEFAULT = true;
+
+const storedSceneTriangleLimits = () => {
+    if (window.top !== window) return SCENE_TRIANGLE_LIMITS_DEFAULT;
+    try {
+        const raw = localStorage.getItem(SCENE_TRIANGLE_LIMITS_KEY);
+        if (raw === null || raw.trim() === '') return SCENE_TRIANGLE_LIMITS_DEFAULT;
+        return raw !== 'false';
+    } catch (e) { return SCENE_TRIANGLE_LIMITS_DEFAULT; /* privacy mode */ }
+};
+
+const setStoredSceneTriangleLimits = (value) => {
+    if (window.top === window) {
+        try { localStorage.setItem(SCENE_TRIANGLE_LIMITS_KEY, String(value !== false)); } catch (e) { /* privacy mode */ }
+    }
+};
+
+// Governed quality-preset keys needing a full worker reparse (subdivision
+// has no live setter; triangleLimits' worker budgets need the same reparse).
+// Shared by applySceneSettings/describeSceneSettingsCost so they cannot drift.
+const SCENE_SETTINGS_RELOAD_KEYS = ['subdivision', 'triangleLimits'];
+const SCENE_SETTINGS_REBUILD_KEYS = ['textureMaxSize', 'textureBudgetGib', 'shadows', 'ao', 'skyVis', 'specularAA'];
+const SCENE_SETTINGS_GEOMETRY_KEYS = ['displacement', 'displacementSubdivision'];
+
+// Pure preview for the quality-preset UI: says whether current -> target
+// needs a reload, a display/shader rebuild, or a geometry-only rebuild,
+// without applying anything. Static per key so it works before a stage exists.
+const describeSceneSettingsCost = (current, target) => {
+    const cur = current || {};
+    const tgt = target || {};
+    const changed = (key) => Object.prototype.hasOwnProperty.call(tgt, key) && tgt[key] !== cur[key];
+    const reload = SCENE_SETTINGS_RELOAD_KEYS.some(changed);
+    const rebuild = !reload && SCENE_SETTINGS_REBUILD_KEYS.some(changed);
+    const geometry = !reload && SCENE_SETTINGS_GEOMETRY_KEYS.some(changed);
+    return { reload, rebuild, geometry };
+};
+
+// Serializes rebuilds and coalesces rapid setting changes into one latest pass.
+// request() never rejects, so UI setters may fire it without creating an
+// unhandled promise; whenSettled() gives tests and callers an explicit fence.
+const createSceneRebuildQueue = ({ build, commit, isStopped, onError }) => {
+    let requested = false;
+    let running = null;
+    let cancelled = false;
+    const stopped = () => cancelled || (typeof isStopped === 'function' && isStopped());
+    const pump = async () => {
+        while (requested && !stopped()) {
+            requested = false;
+            try {
+                await build();
+                // A request that arrived while build awaited supersedes this
+                // result. The next loop rebuilds before any derived-state commit.
+                if (!requested && !stopped()) await commit();
+            } catch (error) {
+                if (!stopped() && typeof onError === 'function') onError(error);
+            }
+        }
+    };
+    const request = () => {
+        if (stopped()) return Promise.resolve();
+        requested = true;
+        if (!running) {
+            running = pump().finally(() => {
+                running = null;
+                if (requested && !stopped()) request();
+            });
+        }
+        return running;
+    };
+    return {
+        request,
+        cancel: () => { cancelled = true; requested = false; },
+        whenSettled: () => running || Promise.resolve(),
+    };
+};
+
+const sceneResolvedDisplacementMode = (displacement, result) => {
+    const declared = displacement && displacement.mode || 'auto';
+    if (declared === 'float' || declared === 'vector3') return declared;
+    const offsets = result && result.offsets;
+    if (!offsets) return null;
+    for (let i = 0; i + 2 < offsets.length; i += 3) {
+        const x = Number.isFinite(offsets[i]) ? offsets[i] : 0;
+        const y = Number.isFinite(offsets[i + 1]) ? offsets[i + 1] : 0;
+        const z = Number.isFinite(offsets[i + 2]) ? offsets[i + 2] : 0;
+        const epsilon = 1e-6 * Math.max(1, Math.abs(x));
+        if (Math.abs(x - y) > epsilon || Math.abs(y - z) > epsilon) return 'vector3';
+    }
+    return 'float';
 };
 
 const sceneArray = (value) => value == null ? [] : (Array.isArray(value) ? value : [value]);
@@ -515,6 +738,14 @@ const sceneResolveDomeTexture = (fileMap, stage, rawRef) => {
     if (hits.length === 1) return { path: hits[0], ref, byBasename: true };
     return { path: null, ref, reason: hits.length ? 'ambiguous' : 'missing' };
 };
+
+// Maps an authored UsdLuxDomeLight yaw (its xformOp Y rotation, in degrees)
+// to the engine's mx_latlong yaw. UsdLuxDomeLight puts the lat-long centre
+// at local +Z; mx_latlong (with u_envMatrix = makeRotationY(PI/2 + rad))
+// puts it at local -Z, and USD's row-vector transform convention makes the
+// two not simply additive. Derived and verified in
+// scratchpad/displacement-verified/color-parity/dome-yaw/dome-yaw.md.
+const sceneDomeYawDegFromRotation = (rotationDeg) => (((90 - Number(rotationDeg || 0)) % 360) + 360) % 360;
 
 // Builds the environment a stage's own dome light describes, so a stage
 // renders under the lighting it was authored with. Returns null when the
@@ -1156,6 +1387,10 @@ const sceneInstanceMatrices = (value) => {
     return matrices;
 };
 
+// Custom shadow passes use this explicit stage-derived flag. Missing metadata
+// keeps the default casting behavior; no-shadow affects casters only.
+const sceneObjectCastsShadow = (object) => !(object && object.userData && object.userData.castsShadow === false);
+
 const sceneGeometry = (record) => {
     if (!record || !record.positions || record.positions.length < 3) return null;
     const g = new THREE.BufferGeometry();
@@ -1178,6 +1413,15 @@ const sceneGeometry = (record) => {
         const uvs = record.uvs instanceof Float32Array ? record.uvs : new Float32Array(record.uvs);
         g.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
     }
+    if (Array.isArray(record.geomprops)) {
+        for (const stream of record.geomprops) {
+            if (!stream || !stream.name || !stream.data || !stream.itemSize) continue;
+            const expected = (positions.length / 3) * stream.itemSize;
+            if (!Number.isInteger(stream.itemSize) || stream.itemSize <= 0 || stream.data.length !== expected) continue;
+            const data = stream.data instanceof Float32Array ? stream.data : new Float32Array(stream.data);
+            g.setAttribute('i_geomprop_' + stream.name, new THREE.BufferAttribute(data, stream.itemSize));
+        }
+    }
     if (window.prepGeometry) window.prepGeometry(g);
     const groups = sceneArray(record.groups);
     if (groups.length) {
@@ -1190,9 +1434,196 @@ const sceneGeometry = (record) => {
     return g;
 };
 
+// Constant primvars the USD draw exposes, keyed by geomprop name. Only
+// displayColor arrives today, and always as a single colour.
+const sceneGeompropConstants = (record) => {
+    const color = record && record.displayColor;
+    if (!Array.isArray(color) || color.length < 3) return null;
+    return { displayColor: [Number(color[0]) || 0, Number(color[1]) || 0, Number(color[2]) || 0] };
+};
+
+// Per-mesh RGB albedo estimate for the diffuse bounce bake
+// (buildSkyBounceVolume). MaterialX public uniforms are named after node
+// paths, so there is no reliable "u_base_color" to read; this is a
+// heuristic, resolved in order and clamped to a sane blocker albedo range so
+// no single guess can blow up the bounce term. Returns [r, g, b] (v3: the
+// bake now carries the blockers' own chroma via u_bounceTint, so this can no
+// longer collapse to a single luminance scalar).
+const sceneBounceAlbedo = (object) => {
+    const clampC = (v) => Math.max(0.02, Math.min(0.95, Number(v) || 0));
+    const clampRGB = (arr) => [clampC(arr[0]), clampC(arr[1]), clampC(arr[2])];
+    if (object && object.userData && Array.isArray(object.userData.mtlxBounceAlbedo) && object.userData.mtlxBounceAlbedo.length >= 3) {
+        return clampRGB(object.userData.mtlxBounceAlbedo);
+    }
+    const mats = object && object.material ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
+    for (const material of mats) {
+        const uniforms = material && material.uniforms;
+        if (!uniforms) continue;
+        for (const key of Object.keys(uniforms)) {
+            if (!/(^|_)(base_color|diffuse_color|diffusecolor)$/i.test(key)) continue;
+            const v = uniforms[key] && uniforms[key].value;
+            if (v && v.isColor) return clampRGB([v.r, v.g, v.b]);
+            if (v && v.isVector3) return clampRGB([v.x, v.y, v.z]);
+        }
+    }
+    const displayColor = object && object.userData && object.userData.displayColor;
+    if (Array.isArray(displayColor) && displayColor.length >= 3) return clampRGB(displayColor);
+    return [0.5, 0.5, 0.5];
+};
+
+// mx_latlong_projection, transliterated from
+// libraries/pbrlib/genglsl/lib/mx_microfacet_specular.glsl:531-535.
+const M_PI_INV_JS = 1 / Math.PI;
+const mxLatlongProjectionJS = (nx, ny, nz) => {
+    const latitude = -Math.asin(Math.max(-1, Math.min(1, ny))) * M_PI_INV_JS + 0.5;
+    const longitude = Math.atan2(nx, -nz) * M_PI_INV_JS * 0.5 + 0.5;
+    return [longitude, latitude];
+};
+
+// Irradiance sampler for the diffuse bounce v3 bake (shadeBounce in
+// js/usd-scene-skyvis.js). Replaces computeBounceERef's whole-sphere mean:
+// v3-design.md section 1 found the two surfaces that actually light a
+// typical blocker sit 2 to 2.2 times ABOVE that mean, so a global mean
+// halved the bounce term before anything else happened. Evaluates the SAME
+// convolved irradiance map the shader samples (env.irradianceConvolvedData,
+// retained by ensureConvolvedIrradiance in js/mtlx-engine.js) at an
+// arbitrary blocker normal, by transliterating mx_latlong_projection and
+// bilinearly fetching the retained float readback -- the lookup chain
+// canonical.md (2026-09-20) proved reproduces the GPU to 0.7 percent.
+//
+// keyDirWorld, when supplied, must be the SAME already-rotated key light
+// direction the ordinary light loop uses (env.keyLight.direction.clone()
+// .applyMatrix4(new THREE.Matrix4().makeRotationY(-envRotationRad)), see
+// the call sites below): passed in rather than re-derived from envMatrix's
+// own rotation (a different construction, makeRotationY(Math.PI/2 +
+// envRotationRad)) to avoid a second, error-prone decomposition of the
+// same angle.
+//
+// Returns a closure eStored(nx, ny, nz, Vb) -> [r, g, b] in stored units
+// (pi already folded in, matching mx_environment_irradiance): the convolved
+// dome term at that normal plus the key light's own contribution, gated by
+// Vb (the blocker's own mean sky visibility from the sky bake --
+// v3-design.md section 6's proxy for "is the blocker itself lit by the
+// key"). Returns null when the readback is unavailable (WebGL1, missing
+// float colour buffer, or the SH irradiance path is selected), which makes
+// the whole bounce bake a safe-fail no-op.
+const makeEStoredSampler = (env, envExposure, envMatrix, keyDirWorld) => {
+    if (!env || !env.irradianceConvolvedData || !env.irradianceConvolvedSize) return null;
+    const data = env.irradianceConvolvedData;
+    const w = env.irradianceConvolvedSize[0], h = env.irradianceConvolvedSize[1];
+    if (!(w > 0) || !(h > 0)) return null;
+    const exposure = Number.isFinite(envExposure) ? Math.max(0, envExposure) : 1;
+    const rotated = new THREE.Vector3();
+    const wrapU = (x) => ((x % w) + w) % w;
+    const clampV = (y) => Math.max(0, Math.min(h - 1, y));
+    const sample = (u, v) => {
+        const fx = u * w - 0.5, fy = v * h - 0.5;
+        const x0 = Math.floor(fx), y0 = Math.floor(fy);
+        const tx = fx - x0, ty = fy - y0;
+        const texel = (x, y, c) => data[(clampV(y) * w + wrapU(x)) * 4 + c];
+        const out = [0, 0, 0];
+        for (let c = 0; c < 3; c++) {
+            const a = texel(x0, y0, c) * (1 - tx) + texel(x0 + 1, y0, c) * tx;
+            const b = texel(x0, y0 + 1, c) * (1 - tx) + texel(x0 + 1, y0 + 1, c) * tx;
+            out[c] = a * (1 - ty) + b * ty;
+        }
+        return out;
+    };
+    const keyLight = env.keyLight;
+    const keyColor = (keyLight && Array.isArray(keyLight.color) && keyLight.color.length >= 3) ? keyLight.color : null;
+    const keyIntensity = (keyLight && Number.isFinite(keyLight.intensity)) ? Math.max(0, keyLight.intensity) : 0;
+    return (nx, ny, nz, Vb) => {
+        let rx = nx, ry = ny, rz = nz;
+        if (envMatrix) { rotated.set(nx, ny, nz).transformDirection(envMatrix); rx = rotated.x; ry = rotated.y; rz = rotated.z; }
+        const uv = mxLatlongProjectionJS(rx, ry, rz);
+        const conv = sample(uv[0], uv[1]);
+        let r = conv[0] * exposure, g = conv[1] * exposure, b = conv[2] * exposure;
+        if (keyColor && keyIntensity > 0 && keyDirWorld && Vb > 0) {
+            const ndotl = Math.max(0, nx * keyDirWorld.x + ny * keyDirWorld.y + nz * keyDirWorld.z);
+            if (ndotl > 0) {
+                const k = keyIntensity * exposure * ndotl * Vb * M_PI_INV_JS;
+                r += keyColor[0] * k; g += keyColor[1] * k; b += keyColor[2] * k;
+            }
+        }
+        return [r, g, b];
+    };
+};
+
 const sceneNeutralMaterial = (label) => new THREE.MeshNormalMaterial({
     name: 'USD unsupported material: ' + String(label || 'unknown'),
 });
+
+// Small, fast, non-cryptographic hash (djb2) that folds a long string
+// (resolved MaterialX XML, serialized USD overrides) into a fixed-length
+// compile-cache-key component.
+const sceneDjb2 = (str) => {
+    let hash = 5381;
+    const s = String(str || '');
+    for (let i = 0; i < s.length; i += 1) hash = ((hash * 33) ^ s.charCodeAt(i)) >>> 0;
+    return hash.toString(36);
+};
+
+// Module-level compile cache shared by every scene view/reload, so
+// switching scenes or reloading the same one skips MaterialX codegen
+// whenever nothing that could change the generated source has changed.
+// Deliberately excludes display transform/exposure: encodeDisplay()
+// (js/mtlx-engine.js) turns both into uniforms (u_displayTransform,
+// u_displayExposure), so generated shader source never depends on them.
+// A future change baking either into source must add it to the key below.
+const SCENE_COMPILE_CACHE = new Map();
+const SCENE_COMPILE_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const SCENE_COMPILE_CACHE_MAX_ENTRIES = 256;
+let sceneCompileCacheHits = 0;
+let sceneCompileCacheMisses = 0;
+
+const sceneCompileCacheKey = ({ version, sourceAsset, name, resolvedXml, overrides, sceneRgbt, lightTransport, samplerBudget, uniformVectorBudget, materialWorkspace, stageLightCount, featureOptions }) => [
+    String(version || ''),
+    String(sourceAsset || ''),
+    String(name || ''),
+    sceneDjb2(resolvedXml),
+    sceneDjb2(JSON.stringify(overrides || [])),
+    // Both are literals today: the scene compile always passes sceneRgbt
+    // true, and the light-transport variant rides in the same entry. Key
+    // them properly if either ever varies per material.
+    'rgbt=' + sceneRgbt,
+    'lt=' + lightTransport,
+    'sb=' + samplerBudget,
+    'uv=' + uniformVectorBudget,
+    'h2n=' + (window.getHeightToNormalTexel ? window.getHeightToNormalTexel() : ''),
+    'mws=' + (materialWorkspace || 'rec709'),
+    // Both are baked into the generated source: the light array is sized to
+    // the stage light count, and a disabled feature's code is not emitted at
+    // all, so a cached module must never be reused across either.
+    'lc=' + (Number.isFinite(stageLightCount) ? stageLightCount : 'all'),
+    'fo=' + (featureOptions ? JSON.stringify(featureOptions) : 'none'),
+].join('|');
+
+// Approximate resident size of one cache entry: both compiled variants'
+// generated source, in UTF-16 bytes (2 bytes/char).
+const sceneCompileCacheBytes = (compiled, transferCompiled) => {
+    const srcLen = (obj) => ((obj && obj.vs) || '').length + ((obj && obj.fs) || '').length
+        + ((obj && obj.displacement && obj.displacement.vs) || '').length
+        + ((obj && obj.displacement && obj.displacement.fs) || '').length;
+    return (srcLen(compiled) + srcLen(transferCompiled)) * 2;
+};
+
+const sceneCompileCacheEvict = () => {
+    let total = 0;
+    for (const entry of SCENE_COMPILE_CACHE.values()) total += entry.bytes;
+    for (const [key, entry] of SCENE_COMPILE_CACHE) {
+        if (total <= SCENE_COMPILE_CACHE_MAX_BYTES && SCENE_COMPILE_CACHE.size <= SCENE_COMPILE_CACHE_MAX_ENTRIES) break;
+        SCENE_COMPILE_CACHE.delete(key);
+        total -= entry.bytes;
+    }
+};
+
+// Test/debug escape hatch: drops every cached compile so the next material
+// build always regenerates from source.
+window.__mtlxClearSceneCompileCache = () => {
+    SCENE_COMPILE_CACHE.clear();
+    sceneCompileCacheHits = 0;
+    sceneCompileCacheMisses = 0;
+};
 
 const createMtlxSceneView = async ({
     container, stage, files = [], version, onProgress, isMounted = () => true,
@@ -1202,11 +1633,91 @@ const createMtlxSceneView = async ({
     // and reserve against the single textureMaxBytes budget (see
     // planTextureSize/reserveTexture below). udimMaxTiles stays a sanity cap.
     udimMaxBytes = 256 * 1024 * 1024, textureMaxSize, textureMaxBytes,
+    displacementSubdivision, triangleLimits,
 }) => {
     if (!container) throw new Error('USD scene view requires a container.');
     if (!stage || !Array.isArray(stage.meshes)) throw new Error('USD scene snapshot is missing meshes.');
     if (!window.THREE || !THREE.WebGLRenderer) throw new Error('Three.js WebGL renderer is unavailable.');
-    const report = (event) => { if (onProgress) { try { onProgress(event); } catch (e) {} } };
+    const report = (event) => {
+        // Perf-only hook: lets the compile-speed harness poll for a
+        // display-transform-ready signal without scraping status text.
+        if (window.MTLX_PERF_LOG && event && event.phase === 'display-transform') {
+            window.__mtlxSceneDisplayTransformEvents = window.__mtlxSceneDisplayTransformEvents || [];
+            window.__mtlxSceneDisplayTransformEvents.push({ status: event.status, value: event.value, at: performance.now() });
+        }
+        if (onProgress) { try { onProgress(event); } catch (e) {} }
+    };
+    // Perf measurement only, gated by window.MTLX_PERF_LOG; zero cost when
+    // off. Published as window.__mtlxScenePerf once compile finishes.
+    const scenePerf = window.MTLX_PERF_LOG ? { materials: [], materialPhaseMs: 0, bindPhaseMs: 0, gpuProgramMs: 0,
+        distinctPrograms: 0, distinctProgramsNamesStripped: 0, prewarmParallelWaitMs: 0, firstGeometryFrameMs: null,
+        frameSamples: 0, frameTotalMs: 0, frameAvgMs: null, lastFrameAt: 0,
+        texturePhaseMs: 0, texture: { decodeMs: 0, resizeMs: 0, uploadMs: 0, count: 0 },
+        geometryPhaseMs: 0, displacement: [], envPrefilterMs: null } : null;
+    if (scenePerf && window.resetTexturePerf) window.resetTexturePerf();
+    const sceneLoadStart = performance.now();
+    const scenePerfHash = (s) => {
+        let h = 2166136261;
+        const str = String(s || '');
+        for (let i = 0; i < str.length; i += 1) { h ^= str.charCodeAt(i); h = (h * 16777619) >>> 0; }
+        return h.toString(16);
+    };
+    // Measurement only: approximates how many distinct programs would remain
+    // if structurally identical materials shared one, by replacing each
+    // public (non u_) uniform name and its node-name prefix with a token.
+    const scenePerfStripNames = (fs, introspected) => {
+        const names = new Set();
+        (introspected || []).forEach((u) => {
+            const n = u && u.name && String(u.name);
+            if (!n) return;
+            if (!n.startsWith('u_')) names.add(n);
+            const cut = n.indexOf('_');
+            if (cut > 0) names.add(n.slice(0, cut));
+        });
+        const ordered = Array.from(names).filter((n) => n.length > 1).sort((a, b) => b.length - a.length);
+        let out = String(fs || '');
+        let index = 0;
+        for (const name of ordered) {
+            if (!out.includes(name)) continue;
+            out = out.split(name).join('U' + index);
+            index += 1;
+        }
+        return out;
+    };
+    // Kill switch reader: '0' disables, anything else (or absence) enables.
+    const readDefaultOnSwitch = (key) => { try { return localStorage.getItem(key) !== '0'; } catch (e) { return true; } };
+    // Read once per scene load: no-await parallel driver compiles (item 3).
+    // Default ON, kill switch mtlx_scene_parallel_compile=0.
+    const parallelCompile = readDefaultOnSwitch('mtlx_scene_parallel_compile');
+    const effectiveParallelCompile = parallelCompile;
+    // Read once per scene load: skip full regen on a display-transform-only
+    // change (item 4). Default ON, kill switch mtlx_scene_fast_display=0.
+    const fastDisplaySwitch = readDefaultOnSwitch('mtlx_scene_fast_display');
+    // Read once per scene load: warm the standalone displacement program on
+    // the hidden KHR context during the material phase, so the geometry
+    // step's compile is a driver cache hit. Kill switch
+    // mtlx_displacement_prewarm=0.
+    const displacementPrewarm = readDefaultOnSwitch('mtlx_displacement_prewarm');
+    // Read once per scene load: let bind/textures/geometry/bakes run while the
+    // surface programs are still compiling, joining only before the first use
+    // of a surface program on the visible renderer. Default ON, kill switch
+    // mtlx_scene_overlap_geometry=0 joins right after the material phase.
+    const overlapGeometry = readDefaultOnSwitch('mtlx_scene_overlap_geometry');
+    // Pending { promise, perfEntry, submitAt } prewarm joins in parallel mode,
+    // awaited together before the first surface-program use (see joinPrewarms).
+    const pendingPrewarms = [];
+    const joinPrewarms = async (lateJoin) => {
+        if (!effectiveParallelCompile || !pendingPrewarms.length) return;
+        if (lateJoin) report({ phase: 'renderer', status: 'step', step: 'shader-join' });
+        else report({ phase: 'material', status: 'driver-wait', total: pendingPrewarms.length });
+        const startedAt = scenePerf ? performance.now() : 0;
+        await Promise.all(pendingPrewarms.map(async (p) => {
+            await p.promise;
+            if (p.perfEntry) p.perfEntry.prewarmMs = performance.now() - p.submitAt;
+        }));
+        if (scenePerf) scenePerf.prewarmParallelWaitMs += performance.now() - startedAt;
+        pendingPrewarms.length = 0;
+    };
     const warnings = Array.isArray(stage.warnings) ? stage.warnings.slice() : [];
     const prepassWarnings = new Set();
     let displayTransformListener = null;
@@ -1216,10 +1727,31 @@ const createMtlxSceneView = async ({
     let displayRebuildPromise = null;
     let displayDirty = false;
     let displayRevision = 0;
-    displayTransformListener = () => {
+    // Generation-affecting: full material regen, used for heightToNormalTexel
+    // and texture size/budget changes, and (switch off) the global display
+    // transform event too.
+    const markDisplayRegenDirty = () => {
         displayDirty = true;
         displayRevision += 1;
         if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+    };
+    // Set right before the fast path is used, once pushDisplaySettings and
+    // environmentBridge exist (see updateRendererDisplayTransform below).
+    let applyDisplayTransformFast = null;
+    displayTransformListener = () => {
+        // The global display transform is a uniform in every generated
+        // shader, so with the switch on a value-only push is enough; the
+        // Scene's own transform (setSceneDisplayTransform) already does the
+        // same thing today. Everything else routed through this listener
+        // (heightToNormalTexel, texture size/budget) calls
+        // markDisplayRegenDirty directly instead, and always keeps the full
+        // regen path regardless of this switch.
+        if (fastDisplaySwitch && applyDisplayTransformFast) {
+            applyDisplayTransformFast();
+            report({ phase: 'display-transform', status: 'ready', value: window.getDisplayTransform ? window.getDisplayTransform() : 'srgb' });
+            return;
+        }
+        markDisplayRegenDirty();
     };
     window.addEventListener('mtlx-display-transform', displayTransformListener);
     sceneTransparencyListener = () => { if (sceneTransparencyRefresh) sceneTransparencyRefresh(); };
@@ -1227,7 +1759,7 @@ const createMtlxSceneView = async ({
     // heightToNormalTexel is generation-affecting like the display
     // transform: reuse the same rebuild path so a flag flip recompiles.
     const settingsChangedListener = (e) => {
-        if (e.detail && e.detail.key === 'heightToNormalTexel') displayTransformListener();
+        if (e.detail && e.detail.key === 'heightToNormalTexel') markDisplayRegenDirty();
     };
     window.addEventListener('mtlx-settings-changed', settingsChangedListener);
     const fileMap = sceneFileMap(files, stage);
@@ -1274,6 +1806,13 @@ const createMtlxSceneView = async ({
     // null = the Default (auto framing) entry; otherwise a stage.cameras
     // primPath. resetCamera() re-applies whichever of these is selected.
     let selectedCameraPath = null;
+    const clearAppliedStudioCameraLimits = (cameraControls, polarApplied, distanceApplied, authoredSelected) => {
+        if (!cameraControls || !authoredSelected) return { polarApplied, distanceApplied };
+        if (polarApplied) cameraControls.maxPolarAngle = Math.PI;
+        if (distanceApplied) cameraControls.maxDistance = Infinity;
+        return { polarApplied: false, distanceApplied: false };
+    };
+    const shouldClampStudioCamera = (cameraPath) => !cameraPath;
     // Turntable/GIF capture state: while true, resize() is a no-op so the
     // fixed capture resolution set by beginCapture() sticks between frames.
     let resizeSuspended = false;
@@ -1302,7 +1841,15 @@ const createMtlxSceneView = async ({
     };
     const geometries = new Set();
     const textureCache = new Map();
-    const textureQueue = { tail: Promise.resolve() };
+    // Bounded decode concurrency for ordinary (non-KTX2/EXR/HDR/TIF) Scene
+    // textures: 'tails' is a small round-robin set of serial chains, one
+    // slot decoding at a time each, so several textures decode in parallel
+    // without unbounding total concurrency. The fast path (default on) makes
+    // this worth doing since each decode is now cheap; with the switch off,
+    // a single-slot queue reproduces the old fully-serial behaviour.
+    const textureFastPath = window.sceneTextureFastPathEnabled ? window.sceneTextureFastPathEnabled() : true;
+    const TEXTURE_DECODE_CONCURRENCY = textureFastPath ? 5 : 1;
+    const textureQueue = { tails: Array.from({ length: TEXTURE_DECODE_CONCURRENCY }, () => Promise.resolve()), next: 0 };
     const documents = new Set();
     const prims = [];
     let rebuildingProvisional = null;
@@ -1419,7 +1966,43 @@ const createMtlxSceneView = async ({
     let aoVolumeSize = null;
     let aoVolumeCell = 0;
     let aoVolumeInfo = null;
+    // Baked one-bounce diffuse irradiance volume (js/usd-scene-skyvis.js's
+    // bakeBounceGeometry/shadeBounce). Shares the sky bake's own grid. The
+    // GEOMETRY half (skyBounceGeometry/skyBounceVoxels) depends only on
+    // geometry and is rebuilt alongside the sky volume, never per frame; the
+    // SHADING half (the texture/scale/tint below) additionally depends on
+    // the environment and is re-run alone (reshadeSkyBounce) on a dome yaw,
+    // exposure or environment change, without re-marching.
+    let skyBounceTexture = null;
+    let skyBounceMin = null;
+    let skyBounceSize = null;
+    let skyBounceCell = 0;
+    let skyBounceScale = 0;
+    let skyBounceTint = new THREE.Vector3(1, 1, 1);
+    let skyBounceGeometry = null;
+    let skyBounceVoxels = null;
+    let skyBounceInfo = null;
+    let bounceEnabled = storedSceneBounce();
+    let bounceStrength = storedSceneBounceStrength();
+    // Static local environment capture (js/usd-scene-localenv.js): a 512x256
+    // RGBA16F lat-long DataTexture, RGB premultiplied by A (captured
+    // coverage). Rebuilt on stage/geometry/material/environment change via
+    // localEnvDirty, consumed once at the top of renderFrame rather than
+    // inline, so an environment-rotation drag does not re-run six face
+    // renders and a prefilter chain every frame.
+    let localEnvTexture = null;
+    let localEnvMips = 1;
+    let localEnvProbe = null;
+    let localEnvBoxMin = null;
+    let localEnvBoxMax = null;
+    let localEnvParallax = 0;
+    let localEnvEnabled = storedSceneLocalReflections();
+    let localEnvStrength = storedSceneLocalReflectionStrength();
+    let localEnvInfo = null;
+    let localEnvDirty = false;
     let sceneDisplayTransform = storedSceneDisplayTransform();
+    let materialWorkspace = storedSceneMaterialWorkspace();
+    let specularAAEnabled = storedSceneSpecularAA();
     let shadowsEnabled = storedSceneShadows();
     // Ambient occlusion resources. Unlike the shadow map these are rebuilt
     // every frame the camera moves, because the whole term is screen space.
@@ -1498,6 +2081,39 @@ const createMtlxSceneView = async ({
     let sceneRadius = 1;
     let aoEnabled = storedSceneAo();
     let aoStrength = storedSceneAoStrength();
+    // Kill switch shared with the engine: '0' generates every feature again.
+    const featureGatedShaders = () => {
+        try { return localStorage.getItem('mtlx_feature_gated_shaders') !== '0'; } catch (e) { return true; }
+    };
+    // Stage-light slots the live materials were compiled for, so a later
+    // light change past that reservation can trigger a rebuild.
+    let compiledStageLightSlots = null;
+    // A feature that is off is not generated at all. Turning one back ON
+    // regenerates the materials (regenerateForFeatures); turning one OFF
+    // keeps the larger shader, whose uniforms already hold it inert.
+    const sceneFeatureOptions = () => {
+        if (!featureGatedShaders()) return null;
+        return {
+            skipShadowMap: !shadowsEnabled,
+            skipOcclusion: !aoEnabled && !skyVisEnabled,
+            skipSkyVis: !skyVisEnabled,
+            skipAoVolume: !aoEnabled,
+        };
+    };
+    const generatedFeatures = { shadows: false, ao: false, skyVis: false };
+    // Union over one compile pass, cleared when a pass starts, so a toggle
+    // that arrives mid-pass is answered by a rebuild rather than by a stale
+    // "already generated".
+    const resetGeneratedFeatures = () => {
+        generatedFeatures.shadows = false;
+        generatedFeatures.ao = false;
+        generatedFeatures.skyVis = false;
+    };
+    const noteGeneratedFeatures = () => {
+        generatedFeatures.shadows = generatedFeatures.shadows || shadowsEnabled;
+        generatedFeatures.ao = generatedFeatures.ao || aoEnabled;
+        generatedFeatures.skyVis = generatedFeatures.skyVis || skyVisEnabled;
+    };
     const disposeThicknessResources = () => {
         thicknessTargets.forEach((target) => { try { target.dispose(); } catch (e) {} });
         thicknessTargets.clear();
@@ -1581,6 +2197,11 @@ const createMtlxSceneView = async ({
     let domeEnv = null;
     let envTilt = null;
     let stageLights = [];
+    // Stage-light slots a generated shader must reserve, rounded up to a
+    // tier by the engine. convertLights hands the whole budget out across
+    // the emitters, so the bounds pass only moves samples between lights.
+    let stageLightsConverted = false;
+    const stageLightSlotHint = () => (stageLightsConverted ? stageLights.length : SCENE_STAGE_LIGHT_LIMIT);
     let stageLightsEnabled = storedSceneStageLights();
     let stageLightsEv = storedSceneStageLightsEv();
     // Scratch-only direct-light diagnostic state. It is never read from or
@@ -1658,6 +2279,16 @@ const createMtlxSceneView = async ({
         // budgets); persistence still only happens for the 1/2/4 GiB steps.
         textureMaxBytes: (Number(textureMaxBytes) > 0) ? Number(textureMaxBytes) : storedSceneTextureBudgetBytes(),
     };
+    // 'follow' reuses the worker-subdivided mesh; a number re-subdivides the
+    // pre-subdivision cage at that level, only for displaced materials.
+    let displacementSubdivisionOverride = SCENE_DISPLACEMENT_SUBDIVISION_VALUES.includes(displacementSubdivision)
+        ? displacementSubdivision : storedSceneDisplacementSubdivision();
+    // When off, the displacement triangle budgets below never cap or disallow.
+    let triangleLimitsEnabled = typeof triangleLimits === 'boolean' ? triangleLimits : storedSceneTriangleLimits();
+    // Bumped on every geometry mutation (displacement apply/restore/rebuild)
+    // so shadowReceiverCache's uuid/visible/count key cannot alias stale
+    // sample points from before the mutation.
+    let geometryRevision = 0;
     const textureStats = { jobs: 0, loaded: 0, failed: 0, udimTiles: 0, udimBytes: 0, bytesReserved: 0, ordinaryBytes: 0, ktx2Substituted: 0 };
     let samplerReport = [];
     const textureReservations = new Set();
@@ -1678,8 +2309,9 @@ const createMtlxSceneView = async ({
     const planTextureSize = async (compiledList) => {
         const entries = new Map(); // path -> { blob, ext, mipmapped }
         for (const compiled of compiledList) {
-            if (!compiled || !Array.isArray(compiled.introspected)) continue;
-            for (const u of compiled.introspected) {
+            if (!compiled) continue;
+            const uniformSets = [compiled.introspected, compiled.displacement && compiled.displacement.introspected];
+            for (const uniforms of uniformSets) for (const u of Array.isArray(uniforms) ? uniforms : []) {
                 if (u.type !== 'filename' || u.data == null) continue;
                 if (/<UDIM>/i.test(String(u.data))) {
                     const tiles = sceneUdimTiles(u.data, fileMap);
@@ -1751,27 +2383,33 @@ const createMtlxSceneView = async ({
     // EXR/HDR/TIF are not resized by createImageBitmap (the bounded PNG/JPEG
     // path), so they are decoded then explicitly bounded to the planned tier
     // via boundDecodedTexture before their real bytes are known/reserved.
-    const decodeUnboundedSceneTexture = async (blob, ext, path, fallback) => {
+    const decodeUnboundedSceneTexture = async (blob, ext, path, fallback, samplerModes) => {
         let tex = null;
         try {
+            // Through the engine's heavy-decode limiter: these parsers are
+            // synchronous main-thread work, so the scene's wider texture
+            // queue must not run more than two of them at once.
             if (ext === 'ktx2') tex = await window.loadKtx2Texture(blob, null, path);
-            else if (ext === 'exr') tex = await window.loadExrTexture(blob);
-            else if (ext === 'hdr') tex = await window.loadHdrTexture(blob);
-            else tex = await window.loadTifTexture(blob, path);
+            else {
+                const startDecode = () => (ext === 'exr' ? window.loadExrTexture(blob)
+                    : ext === 'hdr' ? window.loadHdrTexture(blob)
+                    : window.loadTifTexture(blob, path));
+                tex = await (window.runHeavyTextureDecode ? window.runHeavyTextureDecode(startDecode) : startDecode());
+            }
         } catch (error) {
             if (ext === 'ktx2' && error && error.ktx2InvalidBaseLevel && fallback && fallback.blob && fallback.path !== path) {
                 const notice = 'KTX2 texture ' + path + ' is not a multiple of 4; falling back to ' + fallback.path;
                 if (!udimWarnings.has(notice)) { udimWarnings.add(notice); warnings.push(notice); }
                 const fallbackExt = String(fallback.path).split('.').pop().toLowerCase();
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(fallbackExt)) {
-                    return decodeUnboundedSceneTexture(fallback.blob, fallbackExt, fallback.path, null);
+                    return decodeUnboundedSceneTexture(fallback.blob, fallbackExt, fallback.path, null, samplerModes);
                 }
                 // Ordinary 8-bit source (png/jpg): bound it the same way the
                 // regular (non-unbounded) texture path does.
                 try {
-                    const boundedTex = await window.loadBoundedBitmapTexture(fallback.blob, plannedTextureSize);
+                    const boundedTex = await window.loadBoundedBitmapTexture(fallback.blob, plannedTextureSize, samplerModes);
                     if (!boundedTex) return null;
-                    window.configureLoadedTexture(boundedTex);
+                    window.configureLoadedTexture(boundedTex, samplerModes);
                     const bytes = Math.ceil((boundedTex.image.width || 0) * (boundedTex.image.height || 0) * 4 * 4 / 3);
                     return { tex: boundedTex, bytes };
                 } catch (e) { return null; }
@@ -1790,7 +2428,7 @@ const createMtlxSceneView = async ({
             // the largest levels instead of resampling, then bytes are the
             // exact sum of the kept levels (no 4/3 mip-factor estimate).
             const bytes = window.capKtx2MipLevels(tex, plannedTextureSize);
-            window.configureLoadedTexture(tex);
+            window.configureLoadedTexture(tex, samplerModes);
             return { tex, bytes };
         }
         try {
@@ -1800,7 +2438,7 @@ const createMtlxSceneView = async ({
         const bytesPerPixel = isFloat ? 16 : 4;
         const mipFactor = (!isFloat && tex.generateMipmaps) ? 4 / 3 : 1;
         const bytes = Math.ceil((tex.image.width || 0) * (tex.image.height || 0) * bytesPerPixel * mipFactor);
-        window.configureLoadedTexture(tex);
+        window.configureLoadedTexture(tex, samplerModes);
         return { tex, bytes };
     };
     const udimWarnings = new Set();
@@ -1852,6 +2490,15 @@ const createMtlxSceneView = async ({
         }
         return null;
     };
+    // True when a material's MaterialX document was synthesized from a
+    // UsdShade network rather than authored directly. A Material-level
+    // override on such a material targets an INTERFACE input wired to an
+    // inner node, already resolved by the runtime and retargeted by the
+    // worker's collectMaterialOverrides, not an input of the surface node.
+    const isSynthesizedUsdShadeMaterial = (record) => {
+        const candidates = [record && record.sourceAsset, record && record.materialX && record.materialX.path];
+        return candidates.some((path) => /^__(?:inline|usdshade)_/.test(String(path || '').split('/').pop() || ''));
+    };
     const findOrAddInput = (node, inputName) => {
         let input = window.mxSafe(() => node.getInput(inputName), null);
         if (input) return input;
@@ -1867,7 +2514,14 @@ const createMtlxSceneView = async ({
             // override; that layer normally sits beside the .mtlx, so try the
             // material's directory first and the stage root as a fallback.
             const candidates = baseDirs.map((dir) => sceneJoinPath(dir, ref));
-            return candidates.find((candidate) => fileMap[candidate]) || candidates[0];
+            const hit = candidates.find((candidate) => fileMap[candidate]);
+            if (hit) return hit;
+            // An inline payload declares no directory, so an asset stored
+            // beside the referencing layer misses every candidate above.
+            // Accept a unique basename match before giving up.
+            const base = String(ref).split('/').pop().toLowerCase();
+            const named = Object.keys(fileMap).filter((key) => key.split('/').pop().toLowerCase() === base);
+            return named.length === 1 ? named[0] : candidates[0];
         }
         if (/^\(.*\)$/.test(raw)) return raw.slice(1, -1).split(',').map((v) => v.trim()).join(', ');
         // USD writes bools as 1/0 or true/false; MaterialX parses only the words.
@@ -1891,6 +2545,10 @@ const createMtlxSceneView = async ({
             }
             const input = findOrAddInput(targetNode, ov.input);
             if (!input) {
+                // A Material-level input not found on the matched surface node
+                // is expected noise for a synthesized UsdShade material: it is
+                // an interface input already resolved into an inner node.
+                if (ov.node === null && isSynthesizedUsdShadeMaterial(record)) continue;
                 const nodeLabel = ov.node || window.mxSafe(() => targetNode.getName(), label);
                 const warning = `USD override targets missing input "${ov.input}" on node "${nodeLabel}" in ${label}`;
                 if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
@@ -1979,21 +2637,362 @@ const createMtlxSceneView = async ({
         }
     };
 
-    const loadRenderable = async (record) => {
-        if (record && (record.renderable || record.node)) {
-            return { node: record.renderable || record.node, document: null };
+// The USD runtime's inline MaterialX can name an element after a nodedef id,
+// mistype multi-output and displacement nodes, and lose shader types on
+// mix/add/multiply. These repair it against the MaterialX libraries.
+const SCENE_SHADER_TYPES = new Set(['surfaceshader', 'displacementshader', 'volumeshader', 'BSDF', 'EDF', 'VDF']);
+const SCENE_MULTIOUTPUT_TAGS = new Set(['separate2', 'separate3', 'separate4']);
+const SCENE_STRUCTURAL_TAGS = new Set(['materialx', 'input', 'output', 'token', 'nodedef', 'nodegraph']);
+let sceneNodeDefIndex = null;
+const sceneNodeDefs = (stdlib) => {
+    if (sceneNodeDefIndex) return sceneNodeDefIndex;
+    const categories = new Set();
+    const byName = new Map();
+    const defs = [];
+    for (const def of window.vecToArray(window.mxSafe(() => stdlib.getNodeDefs(), []))) {
+        const name = window.mxSafe(() => String(def.getName()), '');
+        const category = window.mxSafe(() => String(def.getNodeString()), '');
+        const type = window.mxSafe(() => String(def.getType()), '');
+        if (!name || !category) continue;
+        const inputs = new Map();
+        const declared = window.vecToArray(window.mxSafe(
+            () => (def.getActiveInputs ? def.getActiveInputs() : def.getInputs()), []));
+        for (const input of declared) {
+            const inputName = window.mxSafe(() => String(input.getName()), '');
+            if (inputName) inputs.set(inputName, window.mxSafe(() => String(input.getType()), ''));
         }
+        const record = { name, category, type, inputs };
+        categories.add(category);
+        byName.set(name, record);
+        defs.push(record);
+    }
+    sceneNodeDefIndex = { categories, byName, defs };
+    return sceneNodeDefIndex;
+};
+// Opening tags with attributes, offsets, children and the matching close, so
+// a repair can edit tag names and attribute values by offset.
+const sceneScanMtlxElements = (xml) => {
+    const elements = [];
+    const stack = [];
+    const tagRe = /<(\/?)([A-Za-z0-9_]+)((?:[^>"]|"[^"]*")*?)(\/?)>/g;
+    const attrRe = /([A-Za-z0-9_:]+)\s*=\s*"([^"]*)"/g;
+    let match;
+    while ((match = tagRe.exec(xml)) !== null) {
+        const closing = match[1], tag = match[2], attrs = match[3], selfClose = match[4];
+        if (closing) {
+            const open = stack.pop();
+            if (open) { open.closeStart = match.index + 2; open.closeEnd = match.index + 2 + tag.length; }
+            continue;
+        }
+        const el = { tag, attrs, tagStart: match.index + 1, tagEnd: match.index + 1 + tag.length,
+            attrsStart: match.index + 1 + tag.length, children: [], a: {} };
+        attrRe.lastIndex = 0;
+        let attr;
+        while ((attr = attrRe.exec(attrs)) !== null) el.a[attr[1]] = attr[2];
+        if (stack.length) stack[stack.length - 1].children.push(el);
+        elements.push(el);
+        if (!selfClose) stack.push(el);
+    }
+    return elements;
+};
+const sceneAttrValueRange = (el, attr) => {
+    const match = new RegExp(attr + '\s*=\s*"([^"]*)"').exec(el.attrs);
+    if (!match) return null;
+    const start = el.attrsStart + match.index + match[0].indexOf('"') + 1;
+    return [start, start + match[1].length];
+};
+
+// USD may preserve color-style output names after an inline separate node is
+// repaired to a vector nodedef. MaterialX vector separates use x/y/z/w names.
+const sceneVectorSeparateOutput = (category, inputType, output) => {
+    const dimensions = Number(String(category || '').replace('separate', ''));
+    if (dimensions < 2 || dimensions > 4 || inputType !== 'vector' + dimensions) return output;
+    const aliases = { outr: 'outx', outg: 'outy', outb: 'outz', outa: 'outw' };
+    return aliases[output] || output;
+};
+
+// After the repair passes settle, a genuine cross-type connection (not a
+// lost value type) gets a convert node instead of an endless retype; left
+// alone when the library has no convert nodedef for that pair.
+const sceneInsertConverts = (xml, index) => {
+    const elements = sceneScanMtlxElements(xml);
+    const nodes = elements.filter((el) => !SCENE_STRUCTURAL_TAGS.has(el.tag));
+    const typeByName = new Map();
+    const usedNames = new Set();
+    for (const el of elements) if (el.a.name) usedNames.add(el.a.name);
+    for (const el of nodes) if (el.a.name) typeByName.set(el.a.name, el.a.type);
+    const inserts = [];
+    for (const el of nodes) {
+        for (const child of el.children) {
+            if (child.tag !== 'input' || !child.a.nodename || !child.a.type || child.a.output) continue;
+            const producerType = typeByName.get(child.a.nodename);
+            if (!producerType || producerType === child.a.type || producerType === 'multioutput') continue;
+            if (SCENE_SHADER_TYPES.has(producerType) || SCENE_SHADER_TYPES.has(child.a.type)) continue;
+            const convertDef = index.defs.find((d) => d.category === 'convert'
+                && d.inputs.get('in') === producerType && d.type === child.a.type);
+            if (!convertDef) continue;
+            const range = sceneAttrValueRange(child, 'nodename');
+            if (!range) continue;
+            let name = (el.a.name || el.tag) + '_' + child.a.name + '_convert';
+            while (usedNames.has(name)) name += '_';
+            usedNames.add(name);
+            const snippet = '\n  <convert name="' + name + '" type="' + child.a.type + '">'
+                + '<input name="in" type="' + producerType + '" nodename="' + child.a.nodename + '" /></convert>';
+            inserts.push({ range, name, snippet });
+        }
+    }
+    if (!inserts.length) return { xml, count: 0 };
+    inserts.sort((a, b) => b.range[0] - a.range[0]);
+    let out = xml;
+    for (const item of inserts) out = out.slice(0, item.range[0]) + item.name + out.slice(item.range[1]);
+    const closeAt = out.lastIndexOf('</materialx>');
+    const tail = inserts.map((item) => item.snippet).join('');
+    out = closeAt >= 0 ? out.slice(0, closeAt) + tail + out.slice(closeAt) : out + tail;
+    return { xml: out, count: inserts.length };
+};
+
+// Repairs one inline MaterialX document from the USD runtime and reports how
+// many edits were needed. Unknown shapes are left untouched.
+const sceneRepairInlineMaterialX = (xml, stdlib) => {
+    const index = sceneNodeDefs(stdlib);
+    let out = String(xml || '');
+    let repairs = 0;
+    // A node's type, once required by a consumer, is remembered across
+    // passes so a later pass never flips it back.
+    const consumerDecided = new Map();
+    for (let pass = 0; pass < 8; pass += 1) {
+        const nodes = sceneScanMtlxElements(out).filter((el) => !SCENE_STRUCTURAL_TAGS.has(el.tag));
+        const typeByName = new Map();
+        const nodeByName = new Map();
+        for (const el of nodes) if (el.a.name) {
+            typeByName.set(el.a.name, el.a.type);
+            nodeByName.set(el.a.name, el);
+        }
+        // Who reads each node, so a consumer whose nodedef fixes an input
+        // type can decide the producer's type.
+        const consumersOf = new Map();
+        for (const el of nodes) {
+            for (const child of el.children) {
+                if (child.tag !== 'input' || !child.a.nodename || !child.a.name) continue;
+                if (!consumersOf.has(child.a.nodename)) consumersOf.set(child.a.nodename, []);
+                consumersOf.get(child.a.nodename).push({ el, inputName: child.a.name });
+            }
+        }
+        const edits = [];
+        for (const el of nodes) {
+            let category = el.tag;
+            let type = el.a.type;
+            // A tag named after a nodedef id is that nodedef's EXACT
+            // signature: pin its type, its inputs' types and an explicit
+            // nodedef attribute so no later rule can retype it.
+            let pinned = el.a.nodedef ? index.byName.get(el.a.nodedef) : null;
+            if (!pinned && !index.categories.has(category)) {
+                const direct = index.byName.get('ND_' + category);
+                let target = direct ? direct.category : null;
+                if (!target) {
+                    let base = category;
+                    while (base.indexOf('_') >= 0) {
+                        base = base.slice(0, base.lastIndexOf('_'));
+                        if (index.categories.has(base)) { target = base; break; }
+                    }
+                }
+                if (target) {
+                    edits.push([el.tagStart, el.tagEnd, target]);
+                    if (el.closeStart) edits.push([el.closeStart, el.closeEnd, target]);
+                    category = target;
+                    if (direct) {
+                        pinned = direct;
+                        edits.push([el.attrsStart, el.attrsStart, ' nodedef="' + direct.name + '"']);
+                    }
+                }
+            }
+            const typeRange = sceneAttrValueRange(el, 'type');
+            if (typeRange && SCENE_MULTIOUTPUT_TAGS.has(category) && type !== 'multioutput') {
+                edits.push([typeRange[0], typeRange[1], 'multioutput']);
+                type = 'multioutput';
+            } else if (typeRange && category === 'displacement' && type && type !== 'displacementshader') {
+                edits.push([typeRange[0], typeRange[1], 'displacementshader']);
+                type = 'displacementshader';
+            }
+            if (/^(mix|add|multiply)$/.test(category)) {
+                let shaderType = null;
+                for (const child of el.children) {
+                    const target = typeByName.get(child.a.nodename);
+                    if (target && SCENE_SHADER_TYPES.has(target)) shaderType = target;
+                }
+                if (shaderType) {
+                    for (const child of el.children) {
+                        const target = typeByName.get(child.a.nodename);
+                        if (!target || !SCENE_SHADER_TYPES.has(target) || child.a.type === target) continue;
+                        const range = sceneAttrValueRange(child, 'type');
+                        if (range) edits.push([range[0], range[1], target]);
+                    }
+                    if (typeRange && type !== shaderType) {
+                        edits.push([typeRange[0], typeRange[1], shaderType]);
+                        type = shaderType;
+                    }
+                }
+            }
+            // Resolved before the type rules below, which read it.
+            const def = pinned || index.defs.find((d) => d.category === category && d.type === type)
+                || index.defs.find((d) => d.category === category);
+            // Preserve the selected component when a repaired separate node
+            // changes from color channels to vector axes.
+            for (const child of el.children) {
+                if (child.tag !== 'input' || !child.a.nodename || !child.a.output) continue;
+                const source = nodeByName.get(child.a.nodename);
+                if (!source || !SCENE_MULTIOUTPUT_TAGS.has(source.tag)) continue;
+                const sourceInput = source.children.find((item) => item.tag === 'input' && item.a.name === 'in');
+                const fixedOutput = sceneVectorSeparateOutput(source.tag, sourceInput && sourceInput.a.type, child.a.output);
+                if (fixedOutput === child.a.output) continue;
+                const range = sceneAttrValueRange(child, 'output');
+                if (range) edits.push([range[0], range[1], fixedOutput]);
+            }
+            // A pinned node's type is fixed; only an unpinned node still
+            // undecided can have a consumer pick its type for it, and once
+            // picked that decision is remembered for later passes.
+            let lockedType = pinned ? pinned.type : (el.a.name ? consumerDecided.get(el.a.name) : null);
+            if (typeRange && el.a.name && type && !pinned && !lockedType
+                && !SCENE_SHADER_TYPES.has(type) && type !== 'multioutput') {
+                for (const consumer of consumersOf.get(el.a.name) || []) {
+                    const consumerDef = index.defs.find((d) => d.category === consumer.el.tag
+                        && d.type === consumer.el.a.type) || index.defs.find((d) => d.category === consumer.el.tag);
+                    const required = consumerDef && consumerDef.inputs.get(consumer.inputName);
+                    if (!required || SCENE_SHADER_TYPES.has(required) || required === type) continue;
+                    if (index.defs.some((d) => d.category === consumer.el.tag && d.inputs.get(consumer.inputName) === type)) continue;
+                    edits.push([typeRange[0], typeRange[1], required]);
+                    type = required;
+                    lockedType = required;
+                    consumerDecided.set(el.a.name, required);
+                    break;
+                }
+            }
+            const lockedDef = pinned || (lockedType
+                ? index.defs.find((d) => d.category === category && d.type === lockedType)
+                : null);
+            if (lockedDef) {
+                // A locked node's type and its inputs' types come only from
+                // its nodedef; a mismatched connection is left for the
+                // convert pass below, never retyped away from here.
+                if (typeRange && type !== lockedDef.type) {
+                    edits.push([typeRange[0], typeRange[1], lockedDef.type]);
+                    type = lockedDef.type;
+                }
+                for (const child of el.children) {
+                    if (child.tag !== 'input' || !child.a.name || !child.a.type) continue;
+                    const want = lockedDef.inputs.get(child.a.name);
+                    if (!want || child.a.type === want) continue;
+                    const range = sceneAttrValueRange(child, 'type');
+                    if (range) edits.push([range[0], range[1], want]);
+                }
+            } else {
+                // The runtime also loses ordinary value types on a
+                // connection. Follow what each input is fed by, then pick
+                // the nodedef variant that matches.
+                for (const child of el.children) {
+                    if (child.tag !== 'input' || !child.a.nodename || !child.a.type) continue;
+                    const sourceType = typeByName.get(child.a.nodename);
+                    if (!sourceType || sourceType === 'multioutput' || sourceType === child.a.type) continue;
+                    if (SCENE_SHADER_TYPES.has(child.a.type) || SCENE_SHADER_TYPES.has(sourceType)) continue;
+                    const wanted = def && def.inputs.get(child.a.name);
+                    if (wanted && wanted === child.a.type) {
+                        // Already the node's own declared type: only follow
+                        // the producer if an alternate variant using that
+                        // type also fits every OTHER input, otherwise the
+                        // producer itself is the one that is wrong.
+                        const alt = index.defs.find((d) => d.category === category && d.inputs.get(child.a.name) === sourceType);
+                        const altConsistent = alt && el.children.every((sibling) => {
+                            if (sibling.tag !== 'input' || !sibling.a.name || sibling === child) return true;
+                            const siblingWant = alt.inputs.get(sibling.a.name);
+                            return !siblingWant || siblingWant === sibling.a.type;
+                        });
+                        if (!altConsistent) continue;
+                    }
+                    const range = sceneAttrValueRange(child, 'type');
+                    if (range) edits.push([range[0], range[1], sourceType]);
+                    const primary = /^(add|multiply|clamp|separate2|separate3|separate4)$/.test(category)
+                        && (child.a.name === 'in' || child.a.name === 'in1');
+                    if (primary && typeRange && type !== sourceType && type !== 'multioutput') {
+                        edits.push([typeRange[0], typeRange[1], sourceType]);
+                    }
+                }
+            }
+            if (!def) continue;
+            for (const child of el.children) {
+                if (child.tag !== 'input' || !child.a.name || !child.a.type) continue;
+                const want = def.inputs.get(child.a.name);
+                if (want !== 'boolean' || child.a.type !== 'integer') continue;
+                const range = sceneAttrValueRange(child, 'type');
+                if (range) edits.push([range[0], range[1], 'boolean']);
+                const valueRange = sceneAttrValueRange(child, 'value');
+                if (valueRange && (child.a.value === '0' || child.a.value === '1')) {
+                    edits.push([valueRange[0], valueRange[1], child.a.value === '1' ? 'true' : 'false']);
+                }
+            }
+        }
+        if (!edits.length) break;
+        edits.sort((a, b) => b[0] - a[0]);
+        let next = out;
+        let last = Infinity;
+        for (const edit of edits) {
+            if (edit[1] > last) continue;
+            next = next.slice(0, edit[0]) + edit[2] + next.slice(edit[1]);
+            last = edit[0];
+            repairs += 1;
+        }
+        if (next === out) break;
+        out = next;
+    }
+    const converted = sceneInsertConverts(out, index);
+    out = converted.xml;
+    repairs += converted.count;
+    return { xml: out, repairs };
+};
+
+    // Reads and fully resolves one material's MaterialX source text: blob
+    // read, inline-payload repair, include resolution and filename
+    // canonicalization. No MaterialX/wasm work happens here, so this half
+    // is cheap enough to run before consulting the module compile cache.
+    const resolveRenderableSource = async (record) => {
         const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
         const source = sceneNormPath(record && record.sourceAsset);
         const blob = source && fileMap[source];
         if (!blob) throw new Error('MaterialX source asset is unavailable: ' + (record && record.sourceAsset || 'unknown'));
-        const raw = await blob.text();
+        let raw = await blob.text();
+        // The runtime's inline payloads need type repairs before MaterialX
+        // can resolve their nodedefs; authored .mtlx files are left alone.
+        if (/^__inline_/.test(String(source).split('/').pop() || '')) {
+            const fixed = await window.mxExclusive(() => {
+                try {
+                    return sceneRepairInlineMaterialX(raw, mxEnv.stdlib);
+                } catch (e) {
+                    // Never fail a material because the repair itself broke.
+                    const failure = '[info] Material network repair skipped for ' + label + ': ' + (e && e.message || e);
+                    if (!udimWarnings.has(failure)) { udimWarnings.add(failure); warnings.push(failure); }
+                    return null;
+                }
+            });
+            if (fixed && fixed.repairs) {
+                raw = fixed.xml;
+                const warning = '[info] Repaired ' + fixed.repairs + ' node type(s) in the USD material network for ' + label;
+                if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+            }
+        }
         const resolved = canonicalizeSceneFilenameInputs(
             await resolveSceneIncludes(raw, sceneDir(source), fileMap, new Set([source]), warnings),
             source,
             fileMap,
             true,
         );
+        return { source, raw, resolved };
+    };
+
+    // Parses the resolved source into a MaterialX document, selects the
+    // requested renderable, applies USD overrides and records the document
+    // for the preview panel. Needs mxEnv/wasm; not itself cache-keyed.
+    const buildRenderableDocument = async (record, sourceInfo) => {
+        const { source, raw, resolved } = sourceInfo;
+        const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
         let doc = null;
         try {
             await window.mxExclusive(async () => {
@@ -2028,7 +3027,7 @@ const createMtlxSceneView = async ({
                 if (matches.length === 1) {
                     await window.mxExclusive(() => applyUsdOverrides(doc, matches[0].node, record, usdaDir));
                     await storeMaterialDocument(record, doc, resolved, !doc.setDataLibrary);
-                    return { node: matches[0].node, document: doc };
+                    return { node: matches[0].node, document: doc, materialName: matches[0].name };
                 }
             }
             // A composed alias can differ from the sole authored renderable
@@ -2038,7 +3037,7 @@ const createMtlxSceneView = async ({
             if (renderables.length === 1 && !explicitName) {
                 await window.mxExclusive(() => applyUsdOverrides(doc, renderables[0].node, record, usdaDir));
                 await storeMaterialDocument(record, doc, resolved, !doc.setDataLibrary);
-                return { node: renderables[0].node, document: doc };
+                return { node: renderables[0].node, document: doc, materialName: renderables[0].name };
             }
             throw new Error('MaterialX source has no unambiguous renderable for ' + (record.materialName || record.subIdentifier || source));
         } catch (error) {
@@ -2048,6 +3047,16 @@ const createMtlxSceneView = async ({
             }
             throw error;
         }
+    };
+
+    // Full path: resolve source, then build the document. A record already
+    // carrying a live renderable node (test/direct-node callers) skips both.
+    const loadRenderable = async (record) => {
+        if (record && (record.renderable || record.node)) {
+            return { node: record.renderable || record.node, document: null, materialName: (record && record.materialName) || null };
+        }
+        const sourceInfo = await resolveRenderableSource(record);
+        return buildRenderableDocument(record, sourceInfo);
     };
 
     const applyObjectUniforms = (material, object) => {
@@ -2073,8 +3082,11 @@ const createMtlxSceneView = async ({
     };
 
     // Compiles (or returns the cached compile for) one material record,
-    // without binding any texture. Returns null when compileMtlxSceneMaterial
-    // itself yields nothing (hard failure, caller skips the record), or
+    // without binding any texture. Consults the module-level
+    // SCENE_COMPILE_CACHE (before any MaterialX/wasm work) once the source
+    // is resolved, so switching scenes or reloading the same one can skip
+    // codegen entirely. Returns null when compileMtlxSceneMaterial itself
+    // yields nothing (hard failure, caller skips the record), or
     // { compiled: null } for a setup/compile error (caller falls back to a
     // neutral material), or { compiled, cacheKey } on success.
     const ensureCompiledMaterial = async (record, forceCompile = false) => {
@@ -2083,16 +3095,17 @@ const createMtlxSceneView = async ({
             warnings.push('MaterialX material has no compiled renderable: ' + label);
             return { compiled: null };
         }
-        const cacheKey = String(record.path || record.sourceAsset || label) + '|' + String(record.subIdentifier || '') + '|' + String(version || '');
+        const cacheKey = String(record.path || record.sourceAsset || label) + '|' + String(record.subIdentifier || '') + '|' + String(version || '') + '|' + materialWorkspace;
         if (forceCompile) { compiledByPath.delete(cacheKey); transferCompiledByPath.delete(cacheKey); }
         let compiled = compiledByPath.get(cacheKey);
         if (compiled) return { compiled, cacheKey, transferCompiled: transferCompiledByPath.get(cacheKey) || null };
         report({ phase: 'material', path: record.path, label, status: 'start' });
         let sourceDocument = null;
+        let moduleKey = null;
+        // A record already carrying a live renderable node has no
+        // sourceAsset to hash, so it never goes through the module cache.
+        const hasDirectNode = !!(record && (record.renderable || record.node));
         try {
-            const loaded = await loadRenderable(record);
-            const renderable = loaded.node;
-            sourceDocument = loaded.document;
             let samplerBudget = null;
             let uniformVectorBudget = null;
             try {
@@ -2100,15 +3113,87 @@ const createMtlxSceneView = async ({
                 samplerBudget = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
                 uniformVectorBudget = gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS);
             } catch (e) { /* keep the engine's fallback defaults */ }
+            // Runs on the cache-hit path too: the module key carries the
+            // feature options, so a reused module generated exactly these.
+            noteGeneratedFeatures();
+            let renderable = null;
+            let materialName = record.materialName || null;
+            // Perf-gated phase split for the material step (resolve, module
+            // key, document build), so a slow term is attributable.
+            let __perfResolveMs = 0, __perfKeyMs = 0, __perfBuildMs = 0, __perfCacheHit = 0;
+            if (hasDirectNode) {
+                renderable = record.renderable || record.node;
+            } else {
+                const __perfResolveStart = scenePerf ? performance.now() : 0;
+                const sourceInfo = await resolveRenderableSource(record);
+                if (scenePerf) __perfResolveMs = performance.now() - __perfResolveStart;
+                const __perfKeyStart = scenePerf ? performance.now() : 0;
+                moduleKey = sceneCompileCacheKey({
+                    version, sourceAsset: sourceInfo.source,
+                    name: record.subIdentifier || record.materialName || '',
+                    resolvedXml: sourceInfo.resolved, overrides: record.overrides,
+                    sceneRgbt: true, lightTransport: false, samplerBudget, uniformVectorBudget,
+                    materialWorkspace, stageLightCount: stageLightSlotHint(), featureOptions: sceneFeatureOptions(),
+                });
+                if (scenePerf) __perfKeyMs = performance.now() - __perfKeyStart;
+                if (forceCompile) SCENE_COMPILE_CACHE.delete(moduleKey);
+                const cachedEntry = SCENE_COMPILE_CACHE.get(moduleKey);
+                if (cachedEntry) {
+                    SCENE_COMPILE_CACHE.delete(moduleKey);
+                    SCENE_COMPILE_CACHE.set(moduleKey, cachedEntry); // bump LRU order
+                    sceneCompileCacheHits += 1;
+                    // Shallow clone: the returned object gets mutated later
+                    // (mtlxSceneSurfaceMetadata, material.userData), so a
+                    // cache hit can never be poisoned by one view's use of it.
+                    compiled = Object.assign({}, cachedEntry.compiled);
+                    const transferCompiled = cachedEntry.transferCompiled ? Object.assign({}, cachedEntry.transferCompiled) : null;
+                    if (cachedEntry.materialDocument) materialDocuments.set(String(record.path || ''), cachedEntry.materialDocument);
+                    compiledByPath.set(cacheKey, compiled);
+                    transferCompiledByPath.set(cacheKey, transferCompiled);
+                    if (!programByKey.has(compiled.programKey)) programByKey.set(compiled.programKey, compiled);
+                    if (Number.isFinite(compiled.maxLights)) {
+                        compiledStageLightSlots = compiled.maxLights - (((mxEnv && mxEnv.lightData) || []).length + 1);
+                    }
+                    if (scenePerf) {
+                        scenePerf.materials.push({ label, genMs: 0, transferGenMs: 0, prewarmMs: 0,
+                            resolveMs: __perfResolveMs, keyMs: __perfKeyMs, buildMs: 0, cacheHit: 1 });
+                    }
+                    report({ phase: 'material', path: record.path, label, status: 'ready' });
+                    return { compiled, cacheKey, transferCompiled };
+                }
+                sceneCompileCacheMisses += 1;
+                const __perfBuildStart = scenePerf ? performance.now() : 0;
+                const loaded = await buildRenderableDocument(record, sourceInfo);
+                if (scenePerf) __perfBuildMs = performance.now() - __perfBuildStart;
+                renderable = loaded.node;
+                sourceDocument = loaded.document;
+                materialName = loaded.materialName || materialName;
+            }
+            const __perfGenStart = scenePerf ? performance.now() : 0;
             compiled = await window.compileMtlxSceneMaterial({
                 mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
-                renderable, label, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget,
+                renderable, label, materialName, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget, materialWorkspace, specularAA: specularAAEnabled,
+                stageLightCount: stageLightSlotHint(), featureOptions: sceneFeatureOptions(),
             });
+            // Stage slots this source actually reserved, which is the hint
+            // rounded up to the engine's next light tier.
+            if (compiled && Number.isFinite(compiled.maxLights)) {
+                compiledStageLightSlots = compiled.maxLights - (((mxEnv && mxEnv.lightData) || []).length + 1);
+            }
+            const __perfGenMs = scenePerf ? (performance.now() - __perfGenStart) : 0;
             if (!compiled) return null;
             // Uniform paths alone cannot distinguish a direct
             // standard_surface/OpenPBR input from a nested layer closure.
             // Keep source-node qualification beside the detached shader data.
             compiled.mtlxSceneSurfaceMetadata = sceneMaterialSurfaceMetadata(renderable);
+            // Surface compile-time notices (e.g. a displacement network that
+            // failed to generate) so a silently-null compiled.displacement
+            // is never a dead end; without this, a failure here left no
+            // trace anywhere the scene reports.
+            for (const notice of compiled.notices || []) {
+                const text = '[info] ' + label + ': ' + notice;
+                if (!udimWarnings.has(text)) { udimWarnings.add(text); warnings.push(text); }
+            }
             if (compiled.samplerBudget && compiled.samplerBudget.dropped.length) {
                 const effects = compiled.samplerBudget.droppedLabels || compiled.samplerBudget.dropped;
                 const list = effects.length <= 1 ? effects.join('') : effects.slice(0, -1).join(', ') + ' and ' + effects[effects.length - 1];
@@ -2127,20 +3212,27 @@ const createMtlxSceneView = async ({
             // that could qualify as a shadow transmittance caster. Per-object
             // thin/solid gating happens later, in shadowCollectTransmitters.
             let transferCompiled = transferCompiledByPath.get(cacheKey);
+            let transferGenMs = 0;
             if (transferCompiled === undefined) {
                 transferCompiled = null;
                 const preClassification = sceneMaterialClassification(compiled, compiled.mtlxSceneSurfaceMetadata);
                 const preThinReason = preClassification.thinWalled && preClassification.thinWalled.reason;
-                const wantsTransfer = preClassification.coverage.mode === 'static'
+                // The transmittance variant is a second full compile per
+                // material and only ever feeds the shadow atlas.
+                const wantsTransfer = (shadowsEnabled || !featureGatedShaders())
+                    && preClassification.coverage.mode === 'static'
                     && (Number(preClassification.coverage.opacity) < 0.999 || Number(preClassification.coverage.transmission) > 0.001)
                     && (preThinReason === 'constant-thin' || preThinReason === 'constant-solid' || preThinReason === 'default-solid');
                 if (wantsTransfer && window.createLightTransportUniforms) {
+                    const __perfTransferStart = scenePerf ? performance.now() : 0;
                     try {
                         const transferSrcs = await window.compileMtlxSceneMaterial({
                             mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
-                            renderable, label: label + ' (transmittance)', isMounted, document: sourceDocument,
-                            lightTransport: 4, samplerBudget,
+                            renderable, label: label + ' (transmittance)', materialName, isMounted, document: sourceDocument,
+                            lightTransport: 4, samplerBudget, materialWorkspace,
+                            stageLightCount: stageLightSlotHint(), featureOptions: sceneFeatureOptions(),
                         });
+                        if (scenePerf) transferGenMs = performance.now() - __perfTransferStart;
                         if (transferSrcs && transferSrcs.lightTransportSupported) {
                             transferCompiled = transferSrcs;
                         } else if (transferSrcs && transferSrcs.notices && transferSrcs.notices.length) {
@@ -2153,12 +3245,69 @@ const createMtlxSceneView = async ({
                 transferCompiledByPath.set(cacheKey, transferCompiled);
             }
             // Reuse the engine's hidden KHR warm context before this
-            // scene's display WebGL context submits the same source.
+            // scene's display WebGL context submits the same source. In
+            // parallel mode the submit is fired without awaiting completion,
+            // so the driver compiles this program while later materials are
+            // still generating; every pending submit is joined together
+            // right before the real renderer.compile() (see reportRendererStep
+            // 'gpu-program'). The per-submit timeout is stretched by queue
+            // depth so a busy driver with many in-flight programs does not
+            // false-positive a slow-but-fine compile as timed out.
+            let __perfPrewarmMs = 0;
+            let __perfSubmitAt = 0;
+            let __perfDispSubmitMs = 0;
+            let prewarmPromise = null;
             if (window.prewarmShaderCompile) {
-                await window.prewarmShaderCompile({ vs: compiled.vs, fs: compiled.fs, isMounted, label });
+                if (effectiveParallelCompile) {
+                    __perfSubmitAt = scenePerf ? performance.now() : 0;
+                    const timeoutMs = Math.min(60000, 15000 + pendingPrewarms.length * 1000);
+                    prewarmPromise = window.prewarmShaderCompile({ vs: compiled.vs, fs: compiled.fs, isMounted, label, timeoutMs });
+                } else {
+                    const __perfPrewarmStart = scenePerf ? performance.now() : 0;
+                    await window.prewarmShaderCompile({ vs: compiled.vs, fs: compiled.fs, isMounted, label });
+                    if (scenePerf) __perfPrewarmMs = performance.now() - __perfPrewarmStart;
+                }
+                // The standalone displacement program is compiled lazily inside
+                // evaluateDisplacement, in the geometry step; warm it here so
+                // that compile is a driver cache hit. Never awaited inline.
+                if (displacementPrewarm && compiled.displacement && compiled.displacement.vs && compiled.displacement.fs) {
+                    const __perfDispSubmitStart = scenePerf ? performance.now() : 0;
+                    compiled.displacement.prewarmPromise = window.prewarmShaderCompile({
+                        vs: compiled.displacement.vs, fs: compiled.displacement.fs, isMounted,
+                        label: label + ' (displacement)',
+                        timeoutMs: Math.min(60000, 15000 + pendingPrewarms.length * 1000),
+                    });
+                    if (scenePerf) __perfDispSubmitMs = performance.now() - __perfDispSubmitStart;
+                    pendingPrewarms.push({ promise: compiled.displacement.prewarmPromise, perfEntry: null, submitAt: 0 });
+                }
             }
             compiledByPath.set(cacheKey, compiled);
             if (!programByKey.has(compiled.programKey)) programByKey.set(compiled.programKey, compiled);
+            if (moduleKey) {
+                SCENE_COMPILE_CACHE.delete(moduleKey);
+                SCENE_COMPILE_CACHE.set(moduleKey, {
+                    compiled, transferCompiled,
+                    materialDocument: materialDocuments.get(String(record.path || '')) || null,
+                    bytes: sceneCompileCacheBytes(compiled, transferCompiled),
+                });
+                sceneCompileCacheEvict();
+            }
+            if (scenePerf) {
+                const perfEntry = {
+                    label, genMs: __perfGenMs, transferGenMs, prewarmMs: __perfPrewarmMs,
+                    resolveMs: __perfResolveMs, keyMs: __perfKeyMs, buildMs: __perfBuildMs, cacheHit: __perfCacheHit,
+                    dispGenMs: (compiled.displacement && compiled.displacement.genMs) || 0,
+                    dispSubmitMs: __perfDispSubmitMs, budgetAttempts: compiled.budgetAttempts || 1,
+                    fsBytes: compiled.fs ? compiled.fs.length : 0,
+                    programKeyHash: scenePerfHash(compiled.programKey),
+                    srcHash: scenePerfHash((compiled.vs || '') + ' ' + (compiled.fs || '')),
+                    stripHash: scenePerfHash(scenePerfStripNames(compiled.fs, compiled.introspected)),
+                };
+                scenePerf.materials.push(perfEntry);
+                if (prewarmPromise) pendingPrewarms.push({ promise: prewarmPromise, perfEntry, submitAt: __perfSubmitAt });
+            } else if (prewarmPromise) {
+                pendingPrewarms.push({ promise: prewarmPromise, perfEntry: null, submitAt: 0 });
+            }
             report({ phase: 'material', path: record.path, label, status: 'ready' });
             return { compiled, cacheKey, transferCompiled };
         } catch (e) {
@@ -2187,6 +3336,7 @@ const createMtlxSceneView = async ({
         // uniform builder below picks it over the FIS chain when the
         // shaders were generated for the prefilter path.
         if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
+        if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env);
         const diagnosticSlots = diagnosticShadowSlots();
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [], stageLights: diagnosticStageLights(), displayTransform: sceneDisplayTransform,
@@ -2195,6 +3345,9 @@ const createMtlxSceneView = async ({
             shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
+            skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
+            bounceScale: bounceEnabled ? skyBounceScale : 0, bounceTint: bounceEnabled ? skyBounceTint : null,
+            localEnvMap: localEnvEnabled ? localEnvTexture : null, localEnvMips, localEnvStrength, localEnvProbe, localEnvBoxMin, localEnvBoxMax, localEnvParallax,
             envTilt,
             thicknessScale, refractionTwoSided: true, sceneRadius,
             environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
@@ -2270,7 +3423,7 @@ const createMtlxSceneView = async ({
                     // override so a rebuild does not double count.
                     const fallbackHit = hit.substituted && hit.originalBlob
                         ? { path: hit.originalPath, blob: hit.originalBlob } : null;
-                    pendingTextures.push(decodeUnboundedSceneTexture(hit.blob, extension, hit.path, fallbackHit).then((result) => {
+                    pendingTextures.push(decodeUnboundedSceneTexture(hit.blob, extension, hit.path, fallbackHit, u.samplerModes).then((result) => {
                         if (!result) return;
                         const { tex, bytes } = result;
                         if (!reserveTexture(hit.path, false, bytes)) {
@@ -2323,7 +3476,7 @@ const createMtlxSceneView = async ({
             try {
                 stageLights = window.convertUsdStageLights(stage.lights, {
                     rootMatrix: sceneRootMatrix(stage),
-                    limit: 16, // must match STAGE_LIGHT_SLOTS in js/mtlx-engine.js
+                    limit: SCENE_STAGE_LIGHT_LIMIT,
                     sceneCenter,
                     metersPerUnit: Number(stage.metersPerUnit),
                     warn: (message) => { if (warnings.indexOf(message) < 0) warnings.push(message); },
@@ -2332,6 +3485,7 @@ const createMtlxSceneView = async ({
                 warnings.push('Stage light import failed: ' + String(e && e.message || e));
                 stageLights = [];
             }
+            stageLightsConverted = true;
         };
         convertLights(null);
         // sceneRoot has already converted geometry to metres. Convert the
@@ -2414,37 +3568,66 @@ const createMtlxSceneView = async ({
         // Compile every material first (cheap on the second pass below, since
         // it just hits compiledByPath) so the ordinary-texture size tier can
         // be planned from the full reference count before any texture binds.
-        const precompiled = [];
+        // Wrapped in a function so geometry-first mode (below) can defer this
+        // whole phase until after the first neutral-material frame is up.
         const materialList = sceneArray(stage.materials);
-        for (let i = 0; i < materialList.length; i += 1) {
-            const record = materialList[i];
-            const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
-            if (skipMaterialCompile(record)) continue;
-            report({ phase: 'material', status: 'start', index: i + 1, total: materialList.length, label });
-            const ensured = await ensureCompiledMaterial(record);
-            report({ phase: 'material', status: (ensured && ensured.compiled) ? 'ready' : 'error', index: i + 1, total: materialList.length, label });
-            if (ensured && ensured.compiled) precompiled.push(ensured.compiled);
-            // Yield one macrotask so the overlay can paint between compiles;
-            // this is the only behaviour change in this instrumentation pass.
-            await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        await planTextureSize(precompiled);
-        for (let i = 0; i < materialList.length; i += 1) {
-            const record = materialList[i];
-            const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
-            if (!materialHasSource(record)) continue; // handled in the first pass
-            const result = await makeMtlxMaterial(record);
-            if (result) {
-                byPath.set(String(record.path || ''), result);
-                materialRecords.set(String(record.path || ''), record);
-                pendingTextures.push(...(result.pendingTextures || []));
+        const compileAndBindMaterials = async () => {
+            const precompiled = [];
+            const __perfMaterialPhaseStart = scenePerf ? performance.now() : 0;
+            resetGeneratedFeatures();
+            for (let i = 0; i < materialList.length; i += 1) {
+                const record = materialList[i];
+                const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
+                if (skipMaterialCompile(record)) continue;
+                report({ phase: 'material', status: 'start', index: i + 1, total: materialList.length, label });
+                const ensured = await ensureCompiledMaterial(record);
+                report({ phase: 'material', status: (ensured && ensured.compiled) ? 'ready' : 'error', index: i + 1, total: materialList.length, label });
+                if (ensured && ensured.compiled) precompiled.push(ensured.compiled);
+                // Yield one macrotask so the overlay can paint between compiles;
+                // this is the only behaviour change in this instrumentation pass.
+                await new Promise((resolve) => setTimeout(resolve, 0));
             }
-            report({ phase: 'material-bind', index: i + 1, total: materialList.length, label });
-        }
-        await awaitTextureJobs(pendingTextures);
-        // These jobs have settled; only variant jobs created during mesh
-        // partitioning belong to the later wait below.
-        pendingTextures.length = 0;
+            if (scenePerf) scenePerf.materialPhaseMs = performance.now() - __perfMaterialPhaseStart;
+            // Switch off: join the driver compiles here, before textures and
+            // geometry, which is the order this view used before the overlap.
+            if (!overlapGeometry) await joinPrewarms();
+            await planTextureSize(precompiled);
+            const __perfBindPhaseStart = scenePerf ? performance.now() : 0;
+            for (let i = 0; i < materialList.length; i += 1) {
+                const record = materialList[i];
+                const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
+                if (!materialHasSource(record)) continue; // handled in the first pass
+                const result = await makeMtlxMaterial(record);
+                if (result) {
+                    byPath.set(String(record.path || ''), result);
+                    materialRecords.set(String(record.path || ''), record);
+                    pendingTextures.push(...(result.pendingTextures || []));
+                }
+                report({ phase: 'material-bind', index: i + 1, total: materialList.length, label });
+            }
+            if (scenePerf) scenePerf.bindPhaseMs = performance.now() - __perfBindPhaseStart;
+            const __perfTexturePhaseStart = scenePerf ? performance.now() : 0;
+            await awaitTextureJobs(pendingTextures);
+            if (scenePerf) {
+                scenePerf.texturePhaseMs += performance.now() - __perfTexturePhaseStart;
+                const t = window.__mtlxTexturePerf;
+                if (t) {
+                    scenePerf.texture.decodeMs += t.decodeMs;
+                    scenePerf.texture.resizeMs += t.resizeMs;
+                    scenePerf.texture.count += t.count;
+                    // Upload (texImage2D + mipmap generation) is not timed
+                    // separately (it happens lazily at first draw, outside
+                    // this await); approximate it as the remainder of the
+                    // phase's wall time not spent decoding/resizing.
+                    scenePerf.texture.uploadMs = Math.max(0, scenePerf.texturePhaseMs - scenePerf.texture.decodeMs - scenePerf.texture.resizeMs);
+                    window.resetTexturePerf && window.resetTexturePerf();
+                }
+            }
+            // These jobs have settled; only variant jobs created during mesh
+            // partitioning belong to the later wait below.
+            pendingTextures.length = 0;
+        };
+        await compileAndBindMaterials();
         const udimVariantByMaterial = new Map();
         const udimMaterial = (info, code, label) => {
             if (!info || !info.udimRefs || !info.udimRefs.length) return info && info.material;
@@ -2528,7 +3711,7 @@ const createMtlxSceneView = async ({
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(ext)) {
                     const fallbackHit = hit.substituted && hit.originalBlob
                         ? { path: hit.originalPath, blob: hit.originalBlob } : null;
-                    pending.push(decodeUnboundedSceneTexture(hit.blob, ext, hit.path, fallbackHit).then((result) => {
+                    pending.push(decodeUnboundedSceneTexture(hit.blob, ext, hit.path, fallbackHit, entry.uniform.samplerModes).then((result) => {
                         if (!result) return;
                         const { tex, bytes } = result;
                         if (!reserveTexture(hit.path, true, bytes)) {
@@ -2556,10 +3739,75 @@ const createMtlxSceneView = async ({
             udimVariantByMaterial.set(key, material);
             return material;
         };
+        // Unbound meshes with a USD displayColor share ONE compiled fallback
+        // material and differ only by a cloned base_color uniform, so many
+        // distinct colors never trigger one shader generation each.
+        const displayColorVariantByColor = new Map();
+        const displayColorMaterial = (info, color) => {
+            if (!info || !info.compiled || !info.material) return info && info.material;
+            const rgb = Array.isArray(color) && color.length >= 3
+                ? [Number(color[0]) || 0, Number(color[1]) || 0, Number(color[2]) || 0] : null;
+            if (!rgb) return info.material;
+            const baseUniform = (info.compiled.introspected || []).find((u) => u && u.path && /\/base_color$/.test(String(u.path)))
+                || (info.compiled.introspected || []).find((u) => u && /base_color$/.test(String(u.name || '')));
+            if (!baseUniform || !info.material.uniforms[baseUniform.name]) return info.material;
+            const key = rgb.map((c) => c.toFixed(4)).join(',');
+            if (displayColorVariantByColor.has(key)) return displayColorVariantByColor.get(key);
+            const uniforms = sceneCloneUniforms(info.material.uniforms);
+            const slot = uniforms[baseUniform.name];
+            if (slot.value && typeof slot.value.set === 'function') slot.value.set(rgb[0], rgb[1], rgb[2]);
+            else slot.value = new THREE.Vector3(rgb[0], rgb[1], rgb[2]);
+            const material = new THREE.RawShaderMaterial({
+                vertexShader: info.compiled.vs,
+                fragmentShader: info.compiled.fs,
+                glslVersion: THREE.GLSL3,
+                uniforms,
+                side: THREE.DoubleSide,
+                transparent: false,
+                depthWrite: true,
+            });
+            material.userData.mtlxSceneCompiled = info.compiled;
+            material.userData.mtlxSceneSourceAsset = info.material.userData.mtlxSceneSourceAsset || '';
+            material.userData.mtlxSceneMaterialPath = info.materialPath || '';
+            material.userData.mtlxSceneDisplayColor = rgb;
+            const classification = sceneMaterialClassification(info.compiled, info.compiled.mtlxSceneSurfaceMetadata);
+            material.userData.mtlxSceneTransparent = !!classification.peel;
+            material.userData.mtlxScenePeel = !!classification.peel;
+            material.userData.mtlxSceneVolume = !!classification.volume;
+            material.userData.mtlxSceneThinWalled = classification.thinWalled;
+            material.userData.mtlxSceneRgbt = !!info.compiled.sceneRgbt;
+            material.userData.mtlxSceneRgbtPayload = !!info.compiled.payloadSupported;
+            material.userData.mtlxScenePrepassCoverage = classification.coverage;
+            material.userData.mtlxSceneFullyTransmissive = classification.coverage.mode === 'clear';
+            const baseTransfer = info.material.userData && info.material.userData.mtlxSceneTransfer;
+            attachTransferMaterial(material, baseTransfer ? baseTransfer.compiled : null, uniforms);
+            if (window.applyPeelMaterialMode) {
+                window.applyPeelMaterialMode(material, material.userData.mtlxScenePeel && sceneTransparencyEnabled());
+            }
+            materials.add(material);
+            invalidateTransparentMeshCache();
+            displayColorVariantByColor.set(key, material);
+            return material;
+        };
         const meshParts = (record, materialForPath) => {
             const positions = record.positions;
             const normals = record.normals;
             const uvs = record.uvs;
+            // A displayColor mesh always resolves to the same tinted
+            // variant regardless of which path (or group) it is bound
+            // through, so this wraps materialForPath instead of replacing it.
+            const meshDisplayColor = Array.isArray(record.displayColor) && record.displayColor.length >= 3
+                ? record.displayColor : null;
+            const resolveMaterial = (path, label) => {
+                if (meshDisplayColor) {
+                    const matRecord = materialRecords.get(String(path || ''));
+                    if (matRecord && matRecord.displayColorFallback) {
+                        const info = byPath.get(String(path || ''));
+                        if (info) return displayColorMaterial(info, meshDisplayColor);
+                    }
+                }
+                return materialForPath(path, label);
+            };
             const originalGroups = sceneArray(record.groups);
             const originalMaterialPaths = originalGroups.length
                 ? originalGroups.map((group) => group && (group.materialPath || record.materialPath))
@@ -2572,8 +3820,8 @@ const createMtlxSceneView = async ({
                 const geometry = sceneGeometry(record);
                 if (!geometry) return [];
                 const material = originalGroups.length
-                    ? originalMaterialPaths.map((path) => materialForPath(path, record.primPath || record.name))
-                    : materialForPath(record.materialPath, record.primPath || record.name);
+                    ? originalMaterialPaths.map((path) => resolveMaterial(path, record.primPath || record.name))
+                    : resolveMaterial(record.materialPath, record.primPath || record.name);
                 (Array.isArray(material) ? material : [material]).forEach((entry) => materials.add(entry));
                 return [{ geometry, material }];
             }
@@ -2613,6 +3861,11 @@ const createMtlxSceneView = async ({
                 buckets.forEach((bucket) => {
                     const vertexMap = new Map();
                     const outPositions = [], outNormals = [], outUvs = [], outIndices = [];
+                    const geomprops = Array.isArray(record.geomprops) ? record.geomprops.filter((stream) =>
+                        stream && stream.name && stream.data && stream.itemSize &&
+                        Number.isInteger(stream.itemSize) && stream.itemSize > 0 &&
+                        stream.data.length === (positions.length / 3) * stream.itemSize) : [];
+                    const outGeomprops = geomprops.map(() => []);
                     const addVertex = (sourceIndex) => {
                         if (vertexMap.has(sourceIndex)) return vertexMap.get(sourceIndex);
                         const n = vertexMap.size;
@@ -2625,6 +3878,10 @@ const createMtlxSceneView = async ({
                             // ordinary image coordinates.
                             outUvs.push(uvs[sourceIndex * 2], uvs[sourceIndex * 2 + 1]);
                         }
+                        geomprops.forEach((stream, streamIndex) => {
+                            const base = sourceIndex * stream.itemSize;
+                            for (let c = 0; c < stream.itemSize; c += 1) outGeomprops[streamIndex].push(stream.data[base + c]);
+                        });
                         vertexMap.set(sourceIndex, n);
                         return n;
                     };
@@ -2635,24 +3892,391 @@ const createMtlxSceneView = async ({
                     if (outNormals.length) geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(outNormals), 3));
                     else geometry.computeVertexNormals();
                     if (outUvs.length) geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(outUvs), 2));
+                    geomprops.forEach((stream, streamIndex) => {
+                        geometry.setAttribute('i_geomprop_' + stream.name, new THREE.BufferAttribute(new Float32Array(outGeomprops[streamIndex]), stream.itemSize));
+                    });
                     if (window.prepGeometry) window.prepGeometry(geometry);
                     const material = bucket.crossing ? sceneNeutralMaterial('UDIM UV crossing')
-                        : (bucket.tile ? udimMaterial(info, bucket.tile.code, materialPath) : materialForPath(materialPath, record.primPath || record.name));
+                        : (bucket.tile ? udimMaterial(info, bucket.tile.code, materialPath) : resolveMaterial(materialPath, record.primPath || record.name));
                     materials.add(material);
                     const bucketCompiled = material.userData && material.userData.mtlxSceneCompiled;
                     if (window.bindGeompropAttributes && bucketCompiled && bucketCompiled.geomprops) {
                         window.bindGeompropAttributes(geometry, bucketCompiled.geomprops, (text) => {
                             if (!warnings.includes(text)) warnings.push(text);
-                        });
+                        }, sceneGeompropConstants(record));
                     }
                     parts.push({ geometry, material });
                 });
             }
             return parts;
         };
+
+        // ---- Displacement (P9) ----
+        const materialIsDisplaced = (path) => {
+            const info = byPath.get(String(path || ''));
+            return !!(info && info.compiled && info.compiled.displacement);
+        };
+        const materialDisplacement = (material) => {
+            const compiled = material && material.userData && material.userData.mtlxSceneCompiled;
+            return compiled && compiled.displacement ? compiled.displacement : null;
+        };
+        // Material paths referenced by a record (its own materialPath, or
+        // one per group) that carry a MaterialX displacement network.
+        const recordDisplacedPaths = (record) => {
+            const groups = sceneArray(record.groups);
+            const paths = groups.length ? groups.map((g) => g && (g.materialPath || record.materialPath)) : [record.materialPath];
+            return new Set(paths.filter((p) => materialIsDisplaced(p)).map((p) => String(p || '')));
+        };
+        const DISPLACEMENT_MESH_TRIANGLE_LIMIT = 700000;
+        const DISPLACEMENT_STAGE_TRIANGLE_LIMIT = 6000000;
+        let displacementStageTriangleTotal = 0;
+        // Resolves the requested numeric override against the per-mesh and
+        // whole-stage triangle budgets, lowering it (never below 0) until it
+        // fits; returns the level actually used plus whether it was capped.
+        const resolveDisplacementLevel = (record, requestedLevel) => {
+            const cage = record.cage;
+            const base = cage || record;
+            const cornerCount = base.indices ? base.indices.length : (base.positions ? base.positions.length / 3 : 0);
+            const originalTriangles = Math.floor(cornerCount / 3);
+            let level = Math.max(0, Math.min(3, Math.round(Number(requestedLevel) || 0)));
+            let capped = false;
+            if (triangleLimitsEnabled) {
+                while (level > 0 && originalTriangles * (4 ** level) > DISPLACEMENT_MESH_TRIANGLE_LIMIT) { level--; capped = true; }
+                while (level > 0 && displacementStageTriangleTotal + originalTriangles * (4 ** level) > DISPLACEMENT_STAGE_TRIANGLE_LIMIT) { level--; capped = true; }
+            }
+            const triangles = originalTriangles * (4 ** level);
+            const allowed = !triangleLimitsEnabled || (triangles <= DISPLACEMENT_MESH_TRIANGLE_LIMIT
+                && displacementStageTriangleTotal + triangles <= DISPLACEMENT_STAGE_TRIANGLE_LIMIT);
+            if (allowed) displacementStageTriangleTotal += triangles;
+            return { level, capped: capped || !allowed, triangles, allowed };
+        };
+        // Re-subdivides the PRE-subdivision cage (or the authored mesh, when
+        // the worker never subdivided it) at `level`, instead of the
+        // worker's own subdivision. Never mutates `record` or `record.cage`.
+        const buildDisplacementEffectiveRecord = (record, level) => {
+            const cage = record.cage;
+            const base = cage || record;
+            const baseGroups = cage ? (Array.isArray(cage.subsets) ? cage.subsets : undefined) : sceneArray(record.groups);
+            if (level <= 0) {
+                return Object.assign({}, record, {
+                    positions: base.positions, indices: base.indices, normals: base.normals, uvs: base.uvs,
+                    geomprops: base.geomprops,
+                    groups: baseGroups && baseGroups.length ? baseGroups : undefined,
+                });
+            }
+            const meshIn = { positions: base.positions, indices: base.indices, normals: base.normals, uvs: base.uvs, geomprops: base.geomprops };
+            const subdivided = window.MtlxMeshSubdivision.subdivideMesh(meshIn, level, {});
+            if (!subdivided) return record;
+            const welded = window.MtlxMeshSubdivision.weldMesh(subdivided);
+            const scale = 4 ** level;
+            const scaledGroups = baseGroups && baseGroups.length
+                ? baseGroups.map((g) => (g ? Object.assign({}, g, { start: (Number(g.start) || 0) * scale, count: (Number(g.count) || 0) * scale }) : g))
+                : undefined;
+            return Object.assign({}, record, {
+                positions: welded.positions, indices: welded.indices, normals: welded.normals, uvs: welded.uvs,
+                geomprops: welded.geomprops,
+                groups: scaledGroups,
+            });
+        };
+        // For a UDIM tile material, substitutes the resolved tile blob under
+        // the displacement program's own <UDIM>-patterned uniform key, so
+        // bindDroppedTextures resolves THIS tile instead of the first one.
+        const buildDisplacementFileMap = (material, displacement) => {
+            const tileCode = material && material.userData && material.userData.mtlxSceneUdimTile;
+            if (tileCode == null) return fileMap;
+            const filenameUniforms = (displacement.introspected || [])
+                .filter((u) => u.type === 'filename' && typeof u.data === 'string' && /<UDIM>/i.test(u.data));
+            if (!filenameUniforms.length) return fileMap;
+            const override = Object.assign({}, fileMap);
+            for (const u of filenameUniforms) {
+                const tiles = sceneUdimTiles(u.data, fileMap);
+                const hit = tiles.get(Number(tileCode));
+                if (hit) override[u.data] = hit.blob;
+            }
+            return override;
+        };
+        // Restores position/normal/tangent/bitangent from the copies
+        // displaceRecordParts stashed before displacing. Returns false when
+        // there is nothing to restore (never displaced, or already restored).
+        const restoreDisplacementSource = (geometry) => {
+            const src = geometry.userData && geometry.userData.mtlxDisplacementSource;
+            if (!src) return false;
+            geometry.setAttribute('position', new THREE.BufferAttribute(src.positions.slice(), 3));
+            geometry.setAttribute('normal', new THREE.BufferAttribute(src.normals.slice(), 3));
+            if (src.tangents) {
+                const stride = Math.round(src.tangents.length / (src.positions.length / 3));
+                geometry.setAttribute('i_tangent', new THREE.BufferAttribute(src.tangents.slice(), stride));
+            }
+            if (src.bitangents) geometry.setAttribute('i_bitangent', new THREE.BufferAttribute(src.bitangents.slice(), 3));
+            geometry.computeBoundingBox();
+            geometry.computeBoundingSphere();
+            geometryRevision++;
+            return true;
+        };
+        // Tracks the single displacement-normals status line so a rebuild
+        // replaces it instead of appending a duplicate, mirroring
+        // replaceThicknessWarning's swap pattern.
+        let displacementNormalsNotice = null;
+        // Evaluates each displaced (part, material) pair once, then welds and
+        // averages the results BY POSITION across every part of the record
+        // so material/UDIM borders stay closed; failures warn and skip.
+        const displaceRecordParts = async (record, parts, worldMatrix) => {
+            parts.forEach((part) => { restoreDisplacementSource(part.geometry); });
+            const ranges = [];
+            parts.forEach((part, partIndex) => {
+                const geometry = part.geometry;
+                const posAttr = geometry.getAttribute('position');
+                if (!posAttr) return;
+                const index = geometry.getIndex();
+                const cornerCount = index ? index.count : posAttr.count;
+                const materialArray = Array.isArray(part.material) ? part.material : null;
+                const groups = geometry.groups && geometry.groups.length ? geometry.groups : null;
+                if (groups && materialArray) {
+                    groups.forEach((g) => {
+                        const material = materialArray[g.materialIndex];
+                        const disp = materialDisplacement(material);
+                        if (disp) ranges.push({ partIndex, material, disp, start: g.start, count: g.count });
+                    });
+                } else {
+                    const material = materialArray ? materialArray[0] : part.material;
+                    const disp = materialDisplacement(material);
+                    if (disp) ranges.push({ partIndex, material, disp, start: 0, count: cornerCount });
+                }
+            });
+            if (!ranges.length) return;
+
+            const evalResults = new Map();
+            for (const range of ranges) {
+                const key = range.partIndex + '|' + range.material.uuid;
+                if (evalResults.has(key)) continue;
+                const geometry = parts[range.partIndex].geometry;
+                const label = (range.material.userData && range.material.userData.mtlxSceneSourceAsset) || range.material.name || 'material';
+                const dispFileMap = buildDisplacementFileMap(range.material, range.disp);
+                let result;
+                const __perfDispStart = scenePerf ? performance.now() : 0;
+                // Joins this material's own background displacement prewarm
+                // (submitted in the material phase) so the compile below hits
+                // the driver cache instead of racing it.
+                let __perfDispWaitMs = 0;
+                if (range.disp && range.disp.prewarmPromise) {
+                    const __perfWaitStart = scenePerf ? performance.now() : 0;
+                    try { await range.disp.prewarmPromise; } catch (e) { /* prewarm never fails the evaluation */ }
+                    if (scenePerf) __perfDispWaitMs = performance.now() - __perfWaitStart;
+                }
+                try {
+                    result = await window.evaluateDisplacement({
+                        renderer, displacement: range.disp, geometry, worldMatrix,
+                        fileMap: dispFileMap, textureCache, textureQueue, maxTextureSize: plannedTextureSize,
+                        isAlive: () => !stopped,
+                    });
+                } catch (e) {
+                    result = { offsets: null, notices: ['Displacement evaluation failed: ' + (e && e.message ? e.message : String(e))] };
+                }
+                if (scenePerf) {
+                    const perf = (result && result.perf) || {};
+                    scenePerf.displacement.push({ label,
+                        srcGenMs: (range.disp && range.disp.genMs) || 0,
+                        prewarmWaitMs: __perfDispWaitMs,
+                        programCompileMs: perf.compileMs || 0,
+                        readbackMs: perf.readbackMs || 0,
+                        evalTotalMs: performance.now() - __perfDispStart });
+                }
+                evalResults.set(key, result);
+                for (const notice of (result && result.notices) || []) {
+                    warnings.push('Displacement: ' + label + ': ' + notice);
+                }
+            }
+
+            // The shared CPU displacement helper accepts one basis mode for
+            // an aggregate. Keep the first successfully evaluated mode and
+            // skip only ranges whose resolved mode conflicts, rather than
+            // silently interpreting scalar offsets as tangent vectors (or the
+            // reverse). A masked range stays undisplaced; weld averaging keeps
+            // its shared boundary closed.
+            let aggregateMode = null;
+            const compatibleRanges = [];
+            for (const range of ranges) {
+                const key = range.partIndex + '|' + range.material.uuid;
+                const result = evalResults.get(key);
+                if (!result || !result.offsets) continue;
+                const resolvedMode = sceneResolvedDisplacementMode(range.disp, result);
+                if (!aggregateMode) aggregateMode = resolvedMode;
+                if (resolvedMode === aggregateMode) {
+                    compatibleRanges.push(range);
+                    continue;
+                }
+                const label = (range.material.userData && range.material.userData.mtlxSceneSourceAsset)
+                    || range.material.name || 'material';
+                warnings.push('Displacement skipped for ' + label + ': this mesh mixes ' + aggregateMode
+                    + ' and ' + resolvedMode + ' displacement ranges, which require different bases');
+            }
+            if (!compatibleRanges.length || !aggregateMode) return;
+
+            let totalVertices = 0, totalCorners = 0;
+            const partVertexOffset = [];
+            parts.forEach((part) => {
+                const posAttr = part.geometry.getAttribute('position');
+                const index = part.geometry.getIndex();
+                partVertexOffset.push(totalVertices);
+                totalVertices += posAttr ? posAttr.count : 0;
+                totalCorners += index ? index.count : (posAttr ? posAttr.count : 0);
+            });
+            if (!totalVertices) return;
+            const hasTangents = parts.every((p) => p.geometry.getAttribute('i_tangent'));
+            const hasBitangents = hasTangents && parts.every((p) => p.geometry.getAttribute('i_bitangent'));
+            const positionsAll = new Float32Array(totalVertices * 3);
+            const normalsAll = new Float32Array(totalVertices * 3);
+            const tangentsAll = hasTangents ? new Float32Array(totalVertices * 3) : null;
+            const bitangentsAll = hasBitangents ? new Float32Array(totalVertices * 3) : null;
+            const indicesAll = new Uint32Array(totalCorners);
+            const offsetsAll = new Float32Array(totalVertices * 3);
+            const vertexMask = new Uint8Array(totalVertices);
+            let cornerCursor = 0;
+            parts.forEach((part, partIndex) => {
+                const geometry = part.geometry;
+                const posAttr = geometry.getAttribute('position');
+                const normAttr = geometry.getAttribute('normal');
+                const tanAttr = hasTangents ? geometry.getAttribute('i_tangent') : null;
+                const bitanAttr = hasBitangents ? geometry.getAttribute('i_bitangent') : null;
+                const index = geometry.getIndex();
+                const vOff = partVertexOffset[partIndex];
+                const n = posAttr ? posAttr.count : 0;
+                for (let v = 0; v < n; v++) {
+                    positionsAll[(vOff + v) * 3] = posAttr.getX(v);
+                    positionsAll[(vOff + v) * 3 + 1] = posAttr.getY(v);
+                    positionsAll[(vOff + v) * 3 + 2] = posAttr.getZ(v);
+                    if (normAttr) {
+                        normalsAll[(vOff + v) * 3] = normAttr.getX(v);
+                        normalsAll[(vOff + v) * 3 + 1] = normAttr.getY(v);
+                        normalsAll[(vOff + v) * 3 + 2] = normAttr.getZ(v);
+                    }
+                    if (tanAttr) {
+                        tangentsAll[(vOff + v) * 3] = tanAttr.getX(v);
+                        tangentsAll[(vOff + v) * 3 + 1] = tanAttr.getY(v);
+                        tangentsAll[(vOff + v) * 3 + 2] = tanAttr.getZ(v);
+                    }
+                    if (bitanAttr) {
+                        bitangentsAll[(vOff + v) * 3] = bitanAttr.getX(v);
+                        bitangentsAll[(vOff + v) * 3 + 1] = bitanAttr.getY(v);
+                        bitangentsAll[(vOff + v) * 3 + 2] = bitanAttr.getZ(v);
+                    }
+                }
+                const cornerCount = index ? index.count : n;
+                for (let c = 0; c < cornerCount; c++) indicesAll[cornerCursor + c] = (index ? index.getX(c) : c) + vOff;
+                cornerCursor += cornerCount;
+            });
+            // Analytic shading normals (see js/shared/mesh-displacement.js)
+            // need the same tangent-offset re-evaluations and frame that
+            // evaluateDisplacement already returns per range; aggregate them
+            // alongside offsetsAll only when every compatible range has them
+            // and the resolved mode is 'float' (the only mode they apply to).
+            const wantAnalyticAgg = aggregateMode === 'float' && compatibleRanges.every((range) => {
+                const key = range.partIndex + '|' + range.material.uuid;
+                const result = evalResults.get(key);
+                return result && result.offsetsTangent && result.offsetsBitangent && result.analyticFrame;
+            });
+            const offsetsTangentAll = wantAnalyticAgg ? new Float32Array(totalVertices * 3) : null;
+            const offsetsBitangentAll = wantAnalyticAgg ? new Float32Array(totalVertices * 3) : null;
+            const frameTangentAll = wantAnalyticAgg ? new Float32Array(totalVertices * 3) : null;
+            const frameBitangentAll = wantAnalyticAgg ? new Float32Array(totalVertices * 3) : null;
+            const frameEpsAll = wantAnalyticAgg ? new Float32Array(totalVertices) : null;
+
+            let anyValid = false;
+            for (const range of compatibleRanges) {
+                const key = range.partIndex + '|' + range.material.uuid;
+                const result = evalResults.get(key);
+                if (!result || !result.offsets) continue;
+                const geometry = parts[range.partIndex].geometry;
+                const index = geometry.getIndex();
+                const vOff = partVertexOffset[range.partIndex];
+                for (let c = range.start; c < range.start + range.count; c++) {
+                    const v = index ? index.getX(c) : c;
+                    const gv = vOff + v;
+                    if (vertexMask[gv]) continue;
+                    offsetsAll[gv * 3] = result.offsets[v * 3];
+                    offsetsAll[gv * 3 + 1] = result.offsets[v * 3 + 1];
+                    offsetsAll[gv * 3 + 2] = result.offsets[v * 3 + 2];
+                    if (wantAnalyticAgg) {
+                        offsetsTangentAll[gv * 3] = result.offsetsTangent[v * 3];
+                        offsetsTangentAll[gv * 3 + 1] = result.offsetsTangent[v * 3 + 1];
+                        offsetsTangentAll[gv * 3 + 2] = result.offsetsTangent[v * 3 + 2];
+                        offsetsBitangentAll[gv * 3] = result.offsetsBitangent[v * 3];
+                        offsetsBitangentAll[gv * 3 + 1] = result.offsetsBitangent[v * 3 + 1];
+                        offsetsBitangentAll[gv * 3 + 2] = result.offsetsBitangent[v * 3 + 2];
+                        frameTangentAll[gv * 3] = result.analyticFrame.tangent[v * 3];
+                        frameTangentAll[gv * 3 + 1] = result.analyticFrame.tangent[v * 3 + 1];
+                        frameTangentAll[gv * 3 + 2] = result.analyticFrame.tangent[v * 3 + 2];
+                        frameBitangentAll[gv * 3] = result.analyticFrame.bitangent[v * 3];
+                        frameBitangentAll[gv * 3 + 1] = result.analyticFrame.bitangent[v * 3 + 1];
+                        frameBitangentAll[gv * 3 + 2] = result.analyticFrame.bitangent[v * 3 + 2];
+                        frameEpsAll[gv] = result.analyticFrame.eps[v];
+                    }
+                    vertexMask[gv] = 1;
+                    anyValid = true;
+                }
+            }
+            if (!anyValid) return;
+            const mode = aggregateMode;
+            const computed = window.MtlxMeshDisplacement.computeDisplacedAttributes({
+                positions: positionsAll, normals: normalsAll, tangents: tangentsAll, bitangents: bitangentsAll,
+                indices: indicesAll, offsets: offsetsAll, mode, vertexMask,
+                offsetsTangent: offsetsTangentAll, offsetsBitangent: offsetsBitangentAll,
+                analyticFrame: wantAnalyticAgg ? { tangent: frameTangentAll, bitangent: frameBitangentAll, eps: frameEpsAll } : null,
+                displacementNormals: window.getDisplacementNormalsMode ? window.getDisplacementNormalsMode() : 'analytic',
+            });
+            // Surface the resolved normals mode/fallback count on `warnings`,
+            // which the capture diagnostics already forward verbatim, so a
+            // capture JSON can prove which path actually ran.
+            if (computed.stats) {
+                const nextNotice = '[info] Displacement normals: ' + computed.stats.normalsMode
+                    + ' (' + computed.stats.analyticFallbacks + ' fallback' + (computed.stats.analyticFallbacks === 1 ? '' : 's')
+                    + ' of ' + computed.stats.vertices + ' vertices)';
+                if (nextNotice !== displacementNormalsNotice) {
+                    if (displacementNormalsNotice) {
+                        const index = warnings.indexOf(displacementNormalsNotice);
+                        if (index >= 0) warnings.splice(index, 1);
+                    }
+                    warnings.push(nextNotice);
+                    displacementNormalsNotice = nextNotice;
+                }
+            }
+            parts.forEach((part, partIndex) => {
+                const geometry = part.geometry;
+                const posAttr = geometry.getAttribute('position');
+                if (!posAttr) return;
+                const n = posAttr.count;
+                const vOff = partVertexOffset[partIndex];
+                let touched = false;
+                for (let v = 0; v < n; v++) { if (vertexMask[vOff + v]) { touched = true; break; } }
+                if (!touched) return;
+                const normAttr = geometry.getAttribute('normal');
+                const tanAttr = geometry.getAttribute('i_tangent');
+                const bitanAttr = geometry.getAttribute('i_bitangent');
+                geometry.userData.mtlxDisplacementSource = {
+                    positions: posAttr.array.slice(),
+                    normals: normAttr ? normAttr.array.slice() : new Float32Array(n * 3),
+                    tangents: tanAttr ? tanAttr.array.slice() : null,
+                    bitangents: bitanAttr ? bitanAttr.array.slice() : null,
+                };
+                const outPositions = computed.positions.slice(vOff * 3, (vOff + n) * 3);
+                const outNormals = computed.normals.slice(vOff * 3, (vOff + n) * 3);
+                geometry.setAttribute('position', new THREE.BufferAttribute(outPositions, 3));
+                geometry.setAttribute('normal', new THREE.BufferAttribute(outNormals, 3));
+                geometry.getAttribute('position').needsUpdate = true;
+                geometry.getAttribute('normal').needsUpdate = true;
+                geometry.deleteAttribute('i_tangent');
+                geometry.deleteAttribute('i_bitangent');
+                if (window.prepGeometry) window.prepGeometry(geometry);
+                geometry.computeBoundingBox();
+                geometry.computeBoundingSphere();
+                geometryRevision++;
+            });
+        };
         // A stage dome seeds rotation and exposure so the render matches the
         // authored lighting; the sidebar mirrors these through getDomeLight().
-        let envRotationRad = domeLight ? domeLight.rotationDeg * Math.PI / 180 : 0;
+        // The authored rotationDeg is a USD dome-light yaw, converted to the
+        // engine's mx_latlong yaw (see sceneDomeYawDegFromRotation above).
+        let envRotationRad = domeLight ? sceneDomeYawDegFromRotation(domeLight.rotationDeg) * Math.PI / 180 : 0;
         let envExposure = domeLight ? domeLight.exposure : 1;
         // Renders moments maps from the dominant stage/environment emitters.
         // Rebuilds happen when the camera, environment, or light controls
@@ -2779,7 +4403,7 @@ const createMtlxSceneView = async ({
             const out = [];
             if (!sceneRoot) return out;
             scene.traverse((object) => {
-                if (!object.isMesh || !object.visible || !object.geometry) return;
+                if (!object.isMesh || !object.visible || !object.geometry || !sceneObjectCastsShadow(object)) return;
                 const mats = Array.isArray(object.material) ? object.material : [object.material];
                 for (const material of mats) {
                     if (!sceneMaterialIsStaticTransmitter(material)) continue;
@@ -3225,7 +4849,7 @@ const createMtlxSceneView = async ({
                 meshes.push(o);
                 totalVerts += pos.count;
             });
-            const key = keyParts.join('|');
+            const key = geometryRevision + '|' + keyParts.join('|');
             if (shadowReceiverCache.key === key) {
                 receiverSampleInfo = { count: shadowReceiverCache.points.length, cached: true };
                 return shadowReceiverCache.points;
@@ -3454,7 +5078,7 @@ const createMtlxSceneView = async ({
             const shadowCallbacks = [];
             scene.traverse((object) => {
                 const clearTransmission = sceneObjectPrepassCoverage(object) === 0;
-                if (object.isMesh && object.visible && ((object.userData && object.userData.excludeFromFrame) || clearTransmission || transmitterObjects.has(object))) {
+                if (object.isMesh && object.visible && (!sceneObjectCastsShadow(object) || (object.userData && object.userData.excludeFromFrame) || clearTransmission || transmitterObjects.has(object))) {
                     hidden.push({ object, visible: object.visible });
                     object.visible = false;
                 } else if (object.isMesh && object.visible) {
@@ -4434,6 +6058,205 @@ const createMtlxSceneView = async ({
             if (warnings.indexOf(note) < 0) warnings.push(note);
             return result;
         };
+        // Builds the current shading-time lighting closure for the bounce
+        // bake: the SAME env matrix / key light rotation the ordinary light
+        // loop uses, so the bake and the real shading agree on which way is
+        // "up" in the rotated dome frame. Returns null (safe-fail) whenever
+        // the convolved irradiance readback is unavailable.
+        const currentBounceLighting = () => {
+            // The convolved irradiance readback (env.irradianceConvolvedData)
+            // is otherwise only populated lazily, the first time a material
+            // compiles (makeMtlxMaterial) or the environment is re-applied
+            // (applyMaterialEnvironment). buildSkyBounceVolume can run
+            // earlier than either, during the initial geometry rebuild
+            // (rebuildGeometryDerivedState), which made the bake silently
+            // and permanently a no-op (ready:false, no [info] baked line,
+            // no error) on every fresh Scene load -- caught only by a
+            // headed on/off capture pair coming back byte-identical, not by
+            // any source-text check. Ensure it here too.
+            if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env);
+            const exposure = typeof envExposure !== 'undefined' ? envExposure : (domeLight ? domeLight.exposure : 1);
+            const rotRad = typeof envRotationRad !== 'undefined' ? envRotationRad : 0;
+            const envMatrix = new THREE.Matrix4().makeRotationY(Math.PI / 2 + rotRad);
+            const keyDirWorld = (env && env.keyLight && env.keyLight.direction)
+                ? env.keyLight.direction.clone().applyMatrix4(new THREE.Matrix4().makeRotationY(-rotRad))
+                : null;
+            const eStored = makeEStoredSampler(env, exposure, envMatrix, keyDirWorld);
+            if (!eStored) return null;
+            return { eStored };
+        };
+        // Turns a shadeBounce() result into the live DataTexture3D/scale/tint
+        // state and disposes the previous texture. Shared by
+        // buildSkyBounceVolume (first bake) and reshadeSkyBounce (re-shade
+        // only, on an environment change).
+        const adoptSkyBounceShaded = (shaded, dim, min, size, cell, ms) => {
+            if (skyBounceTexture) { try { skyBounceTexture.dispose(); } catch (e) {} }
+            const texture = new THREE.DataTexture3D(shaded.data, dim[0], dim[1], dim[2]);
+            texture.format = THREE.RGBAFormat;
+            texture.type = THREE.UnsignedByteType;
+            texture.minFilter = THREE.LinearFilter;
+            texture.magFilter = THREE.LinearFilter;
+            texture.wrapS = THREE.ClampToEdgeWrapping;
+            texture.wrapT = THREE.ClampToEdgeWrapping;
+            texture.wrapR = THREE.ClampToEdgeWrapping;
+            texture.unpackAlignment = 1;
+            texture.needsUpdate = true;
+            skyBounceTexture = texture;
+            skyBounceCell = cell;
+            skyBounceMin = new THREE.Vector3(min[0], min[1], min[2]);
+            skyBounceSize = new THREE.Vector3(size[0], size[1], size[2]);
+            skyBounceScale = shaded.scale;
+            skyBounceTint = new THREE.Vector3(shaded.tint[0], shaded.tint[1], shaded.tint[2]);
+            skyBounceInfo = { dim: dim.slice(), cell, ms };
+        };
+        // Re-runs ONLY the shading pass (js/usd-scene-skyvis.js's
+        // shadeBounce) against the cached geometry pass, on a dome yaw,
+        // exposure or environment change: v3-design.md section 7's split,
+        // avoiding a full re-march (28600 cells x 32 rays) for something
+        // that only changes what each hit's irradiance evaluates to.
+        const reshadeSkyBounce = () => {
+            if (!bounceEnabled || !skyBounceGeometry || !skyBounceVoxels || !window.UsdSceneSkyVisibility) return;
+            const lighting = currentBounceLighting();
+            if (!lighting) return;
+            const started = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+            let shaded = null;
+            try {
+                shaded = window.UsdSceneSkyVisibility.shadeBounce(skyBounceGeometry, skyBounceVoxels, lighting);
+            } catch (error) {
+                const note = 'Diffuse bounce re-shade failed: ' + (error && error.message || error);
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return;
+            }
+            if (!shaded) return;
+            const dim = skyBounceVoxels.dim, min = skyBounceVoxels.min;
+            const size = [dim[0] * skyBounceVoxels.cell, dim[1] * skyBounceVoxels.cell, dim[2] * skyBounceVoxels.cell];
+            const ms = ((typeof performance !== 'undefined' && performance.now) ? performance.now() - started : 0);
+            adoptSkyBounceShaded(shaded, dim, min, size, skyBounceVoxels.cell, ms);
+        };
+        // Bakes the one-bounce diffuse irradiance volume: GEOMETRY (per-cell
+        // hits, blocked fraction, blocker sky visibility) on the SAME grid
+        // the sky bake used (skyResult is required; this never voxelizes the
+        // stage on its own for the sky term), plus a first SHADING pass
+        // against the current environment. Voxelizes its own copy of the
+        // stage WITH per-mesh RGB albedo and per-cell average normals, since
+        // the sky bake's own voxel grid does not carry either.
+        const buildSkyBounceVolume = (stageBox, skyResult) => {
+            skyBounceGeometry = null;
+            skyBounceVoxels = null;
+            if (!bounceEnabled || !window.UsdSceneSkyVisibility || !window.buildSkyBounce || !THREE.DataTexture3D) {
+                if (skyBounceTexture) { try { skyBounceTexture.dispose(); } catch (e) {} }
+                skyBounceTexture = null; skyBounceMin = null; skyBounceSize = null; skyBounceCell = 0;
+                skyBounceScale = 0; skyBounceTint = new THREE.Vector3(1, 1, 1); skyBounceInfo = null;
+                return null;
+            }
+            if (!skyResult || !skyResult.data || !skyResult.voxels) {
+                const note = '[info] Diffuse bounce bake skipped: no sky visibility bake to share a grid with';
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            if (!sceneRoot || !stageBox || stageBox.isEmpty()) return null;
+            const meshes = [];
+            sceneRoot.traverse((object) => {
+                if (!object.isMesh || !object.geometry) return;
+                if (object.userData && object.userData.excludeFromFrame) return;
+                const opacity = sceneObjectPrepassCoverage(object);
+                if (opacity === 0) return;
+                meshes.push({ geometry: object.geometry, matrixWorld: object.matrixWorld, opacity, albedo: sceneBounceAlbedo(object) });
+            });
+            if (!meshes.length) {
+                const note = '[info] Diffuse bounce bake skipped: no eligible meshes';
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            const started = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+            const lighting = currentBounceLighting();
+            if (!lighting) {
+                const note = '[info] Diffuse bounce bake skipped: convolved irradiance unavailable (WebGL1, missing float colour buffer, or SH irradiance selected)';
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            let result = null;
+            try {
+                const voxels = window.UsdSceneSkyVisibility.voxelizeStage(meshes, stageBox, { resolution: skyResult.voxels.resolution, albedo: true, normals: true });
+                if (voxels && lighting) {
+                    result = window.buildSkyBounce(meshes, stageBox, { voxels, visibility: skyResult.data, rays: 32, lighting });
+                    if (result) { skyBounceVoxels = voxels; skyBounceGeometry = result.geometry; }
+                }
+            } catch (error) {
+                const note = 'Diffuse bounce bake failed: ' + (error && error.message || error);
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            if (!result) return null;
+            const ms = ((typeof performance !== 'undefined' && performance.now) ? performance.now() - started : 0);
+            adoptSkyBounceShaded(result, result.dim, result.min, result.size, result.cell, ms);
+            const note = '[info] Diffuse bounce baked at ' + result.dim.join('x') + ' in ' + Math.round(ms) + ' ms';
+            if (warnings.indexOf(note) < 0) warnings.push(note);
+            return result;
+        };
+        // Static local environment capture: six 256x256 renders of the live
+        // (already-lit) stage from a probe at its centre, with every
+        // material's own local-env term forced to 0 so the capture cannot
+        // recurse, reprojected to a 512x256 lat-long map and GGX-prefiltered
+        // by the same mip-to-alpha convention as the dome's own chain. See
+        // js/usd-scene-localenv.js and
+        // scratchpad/displacement-verified/reflections/design.md section 5.
+        // Safe-fail: any missing dependency or thrown error leaves the
+        // texture null, which is an exact no-op at the shader (strength
+        // forced to 0 in applyLocalEnv below).
+        const buildLocalEnvCapture = (box) => {
+            if (localEnvTexture) { try { localEnvTexture.dispose(); } catch (e) {} }
+            localEnvTexture = null; localEnvMips = 1; localEnvProbe = null;
+            localEnvBoxMin = null; localEnvBoxMax = null; localEnvParallax = 0; localEnvInfo = null;
+            if (!localEnvEnabled || !window.UsdSceneLocalEnv || !window.UsdSceneLocalEnv.capture) return null;
+            if (!sceneRoot || !renderer || !box || box.isEmpty()) return null;
+            let result = null;
+            try {
+                result = window.UsdSceneLocalEnv.capture(renderer, scene, {
+                    stageBox: box,
+                    sceneRadius,
+                    materials,
+                    beginSceneLinear,
+                });
+            } catch (error) {
+                const note = 'Local reflection capture failed: ' + (error && error.message || error);
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            if (!result || !result.texture) return null;
+            localEnvTexture = result.texture;
+            localEnvMips = result.mips || 1;
+            localEnvProbe = result.probe || null;
+            localEnvBoxMin = result.boxMin || null;
+            localEnvBoxMax = result.boxMax || null;
+            localEnvParallax = result.parallax ? 1 : 0;
+            localEnvInfo = { ms: result.ms || 0, coverage: result.coverage || 0 };
+            const note = '[info] Local reflection capture baked in ' + Math.round(result.ms || 0) + ' ms';
+            if (warnings.indexOf(note) < 0) warnings.push(note);
+            return result;
+        };
+        // Pushes the baked local environment capture onto every live
+        // material without a rebuild. Strength is forced to 0 whenever the
+        // setting is off or nothing has been baked yet, which makes the
+        // injected mx_local_env_mix's early return an exact no-op.
+        const applyLocalEnv = () => {
+            for (const material of materials) {
+                const u = material.uniforms;
+                if (!u) continue;
+                if (u.u_localEnvRadiance) u.u_localEnvRadiance.value = (localEnvEnabled && localEnvTexture) ? localEnvTexture : (window.getDummyTexWhite ? window.getDummyTexWhite() : u.u_localEnvRadiance.value);
+                if (u.u_localEnvMips) u.u_localEnvMips.value = localEnvMips;
+                if (u.u_localEnvStrength) u.u_localEnvStrength.value = (localEnvEnabled && localEnvTexture) ? localEnvStrength : 0;
+                if (u.u_localEnvProbe && localEnvProbe) u.u_localEnvProbe.value.copy(localEnvProbe);
+                if (u.u_localEnvBoxMin && localEnvBoxMin) u.u_localEnvBoxMin.value.copy(localEnvBoxMin);
+                if (u.u_localEnvBoxMax && localEnvBoxMax) u.u_localEnvBoxMax.value.copy(localEnvBoxMax);
+                if (u.u_localEnvParallax) u.u_localEnvParallax.value = localEnvParallax;
+            }
+        };
+        // Marks the capture stale without rebuilding inline; renderFrame
+        // consumes this once per dirty event, so an environment-rotation
+        // slider or a material replacement never re-triggers six face
+        // renders per frame while it is being dragged.
+        const markLocalEnvDirty = () => { localEnvDirty = true; };
         // Pushes the baked volume onto every live material without a rebuild.
         const applySkyVisibility = () => {
             for (const material of materials) {
@@ -4458,6 +6281,23 @@ const createMtlxSceneView = async ({
                 if (u.u_aoVolumeSize && aoVolumeSize) u.u_aoVolumeSize.value.copy(aoVolumeSize);
                 if (u.u_aoVolumeCell) u.u_aoVolumeCell.value = aoVolumeCell;
                 if (u.u_aoVolumeStrength) u.u_aoVolumeStrength.value = aoEnabled ? aoStrength : 0;
+            }
+        };
+        // Pushes the baked bounce volume onto every live material. Strength
+        // and the scale are both 0 whenever the setting is off or nothing is
+        // baked yet, which makes the injected mx_diffuse_bounce_add()
+        // early-return an exact no-op.
+        const applySkyBounce = () => {
+            for (const material of materials) {
+                const u = material.uniforms;
+                if (!u) continue;
+                if (u.u_skyBounceMap) u.u_skyBounceMap.value = (bounceEnabled && skyBounceTexture) ? skyBounceTexture : (window.getDummyTex3DWhite ? window.getDummyTex3DWhite() : u.u_skyBounceMap.value);
+                if (u.u_skyBounceMin && skyBounceMin) u.u_skyBounceMin.value.copy(skyBounceMin);
+                if (u.u_skyBounceSize && skyBounceSize) u.u_skyBounceSize.value.copy(skyBounceSize);
+                if (u.u_skyBounceCell) u.u_skyBounceCell.value = skyBounceCell;
+                if (u.u_skyBounceStrength) u.u_skyBounceStrength.value = (bounceEnabled && skyBounceTexture) ? bounceStrength : 0;
+                if (u.u_bounceScale) u.u_bounceScale.value = (bounceEnabled && skyBounceTexture) ? skyBounceScale : 0;
+                if (u.u_bounceTint && skyBounceTint) u.u_bounceTint.value.copy(skyBounceTint);
             }
         };
         const applyShadowMatrix = () => {
@@ -4533,6 +6373,7 @@ const createMtlxSceneView = async ({
         };
         const applyMaterialEnvironment = () => {
             if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
+            if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env);
             const radiance = env && env.radiance;
             if (radiance && radiance.isTexture && (radiance.minFilter !== THREE.LinearMipmapLinearFilter || !radiance.generateMipmaps)) {
                 console.warn('usd-scene-renderer: env.radiance lost its mip chain (minFilter or generateMipmaps reset), restoring it.');
@@ -4551,6 +6392,8 @@ const createMtlxSceneView = async ({
             shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
+            skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
+            localEnvMap: localEnvEnabled ? localEnvTexture : null, localEnvMips, localEnvStrength, localEnvProbe, localEnvBoxMin, localEnvBoxMax, localEnvParallax,
                     envTilt,
                     thicknessScale, refractionTwoSided: true, sceneRadius,
                     envRotationRad, envExposure,
@@ -4559,7 +6402,7 @@ const createMtlxSceneView = async ({
                     lightScales: diagnosticLightScales(),
                 });
                 for (const [name, slot] of Object.entries(next)) {
-                    if (!(/^(?:u_env|u_lightData$|u_numActiveLightSources$)/).test(name) || !material.uniforms[name]) continue;
+                    if (!(/^(?:u_env|u_localEnv|u_lightData$|u_numActiveLightSources$)/).test(name) || !material.uniforms[name]) continue;
                     const current = material.uniforms[name].value;
                     if ((current && current.isTexture) || (slot.value && slot.value.isTexture)) material.uniforms[name].value = slot.value;
                     else if (current && typeof current.copy === 'function' && slot.value && typeof slot.value.copy === 'function') current.copy(slot.value);
@@ -4602,6 +6445,20 @@ const createMtlxSceneView = async ({
             scene.traverse((obj) => {
                 if (obj.material && obj.material.toneMapped) obj.material.needsUpdate = true;
             });
+        };
+        // Fast path for a global display-transform-only change (item 4): push
+        // uniforms and the renderer tone-mapping chunk (pushDisplaySettings),
+        // then refresh whatever the environment bridge bakes for it (the
+        // studio backdrop gradient, the only piece keyed to the global
+        // transform rather than the uniform). No material regen, no texture
+        // cache drop. The peel pipeline's finalMat reads its display
+        // transform from a uniform at render time (see createPeelPipeline in
+        // mtlx-engine.js), so it needs no disposal here.
+        applyDisplayTransformFast = () => {
+            pushDisplaySettings();
+            if (environmentBridge && typeof environmentBridge.refreshDisplayTransform === 'function') {
+                environmentBridge.refreshDisplayTransform();
+            }
         };
         renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
         // r128's blend-state cache otherwise corrupts VSM and PMREM passes;
@@ -4732,114 +6589,219 @@ const createMtlxSceneView = async ({
                 environmentBridge.setEnvExposure(envExposure);
             }
         }
-        for (let i = 0; i < stage.meshes.length; i++) {
-            if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
-            const record = stage.meshes[i];
-            if (!record || !record.positions || record.positions.length < 3) {
-                warnings.push('Skipped mesh without valid positions: ' + String(record && (record.primPath || record.name) || i));
-                continue;
-            }
-            const instanceMatrices = sceneInstanceMatrices(record.instanceMatrices);
-            if (record.instanceMatricesInvalid) {
-                warnings.push('Skipped PointInstancer mesh with invalid instance matrices: ' + String(record.primPath || record.name || i));
-                continue;
-            }
-            if (record.instanceMatrices != null && !instanceMatrices.length) continue;
-            const parts = meshParts(record, materialForPath);
-            if (!parts.length) { warnings.push('Skipped mesh without triangle faces: ' + String(record.primPath || record.name || i)); continue; }
-            // An explicit empty matrix array means the PointInstancer has no
-            // visible instances.  Only ordinary meshes with the field absent
-            // get the single parent-matrix draw.
-            const drawMatrices = record.instanceMatrices != null ? instanceMatrices : [null];
-            const parentMatrix = sceneMatrix(record.matrix);
-            parts.forEach((part, partIndex) => {
-                geometries.add(part.geometry);
-                const partMaterials = Array.isArray(part.material) ? part.material : [part.material];
-                partMaterials.forEach((material) => materials.add(material));
-                if (window.bindGeompropAttributes) {
+        let stageBox = new THREE.Box3();
+        // Builds (or rebuilds) every mesh record into sceneRoot: density
+        // override + displacement, then meshParts + one THREE.Mesh per
+        // instance. Removing old prims/geometries first makes this re-callable.
+        const buildSceneMeshes = async () => {
+            prims.forEach((object) => sceneRoot.remove(object));
+            prims.length = 0;
+            geometries.forEach((g) => { try { g.dispose(); } catch (e) {} });
+            geometries.clear();
+            displacementStageTriangleTotal = 0;
+            for (let i = 0; i < stage.meshes.length; i++) {
+                if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
+                const record = stage.meshes[i];
+                if (!record || !record.positions || record.positions.length < 3) {
+                    warnings.push('Skipped mesh without valid positions: ' + String(record && (record.primPath || record.name) || i));
+                    continue;
+                }
+                const instanceMatrices = sceneInstanceMatrices(record.instanceMatrices);
+                if (record.instanceMatricesInvalid) {
+                    warnings.push('Skipped PointInstancer mesh with invalid instance matrices: ' + String(record.primPath || record.name || i));
+                    continue;
+                }
+                if (record.instanceMatrices != null && !instanceMatrices.length) continue;
+                const displacedPaths = recordDisplacedPaths(record);
+                const displacementOn = displacedPaths.size && window.getDisplacementEnabled && window.getDisplacementEnabled();
+                let displacementAllowed = true;
+                let effectiveRecord = record;
+                if (displacementOn && displacementSubdivisionOverride !== 'follow') {
+                    const { level, capped, triangles, allowed } = resolveDisplacementLevel(record, displacementSubdivisionOverride);
+                    displacementAllowed = allowed;
+                    if (!allowed) {
+                        warnings.push('Displacement skipped for ' + String(record.primPath || record.name || 'mesh')
+                            + ': ' + triangles + ' triangles exceed the scene displacement budget');
+                    } else if (capped) {
+                        warnings.push('Displacement subdivision capped at level ' + level + ' for '
+                            + String(record.primPath || record.name || 'mesh') + ' to stay under the triangle budget');
+                    }
+                    effectiveRecord = buildDisplacementEffectiveRecord(record, level);
+                } else if (displacementOn) {
+                    const corners = effectiveRecord.indices ? effectiveRecord.indices.length
+                        : (effectiveRecord.positions ? effectiveRecord.positions.length / 3 : 0);
+                    const triangles = Math.floor(corners / 3);
+                    displacementAllowed = !triangleLimitsEnabled || (triangles <= DISPLACEMENT_MESH_TRIANGLE_LIMIT
+                        && displacementStageTriangleTotal + triangles <= DISPLACEMENT_STAGE_TRIANGLE_LIMIT);
+                    if (displacementAllowed) displacementStageTriangleTotal += triangles;
+                    else warnings.push('Displacement skipped for ' + String(record.primPath || record.name || 'mesh')
+                        + ': ' + triangles + ' triangles exceed the scene displacement budget');
+                }
+                const parts = meshParts(effectiveRecord, materialForPath);
+                if (!parts.length) { warnings.push('Skipped mesh without triangle faces: ' + String(record.primPath || record.name || i)); continue; }
+                // An explicit empty matrix array means the PointInstancer has no
+                // visible instances.  Only ordinary meshes with the field absent
+                // get the single parent-matrix draw.
+                const drawMatrices = record.instanceMatrices != null ? instanceMatrices : [null];
+                const parentMatrix = sceneMatrix(record.matrix);
+                // The standalone displacement program reads the same geomprop
+                // attributes and constant fallbacks as the surface shader.
+                parts.forEach((part) => {
+                    if (!window.bindGeompropAttributes) return;
+                    const materialsForPart = Array.isArray(part.material) ? part.material : [part.material];
                     const seen = new Map();
-                    for (const material of partMaterials) {
+                    for (const material of materialsForPart) {
                         const compiled = material.userData && material.userData.mtlxSceneCompiled;
-                        for (const gp of (compiled && compiled.geomprops) || []) seen.set(gp.name, gp);
+                        for (const gp of (compiled && compiled.displacement && compiled.displacement.geomprops)
+                            || (compiled && compiled.geomprops) || []) seen.set(gp.name, gp);
                     }
-                    if (seen.size) {
-                        window.bindGeompropAttributes(part.geometry, Array.from(seen.values()), (text) => {
-                            if (!warnings.includes(text)) warnings.push(text);
-                        });
-                    }
-                }
-                if (part.material.userData && part.material.userData.mtlxScenePendingTextures) {
-                    pendingTextures.push(...part.material.userData.mtlxScenePendingTextures);
-                    delete part.material.userData.mtlxScenePendingTextures;
-                }
-                drawMatrices.forEach((instanceMatrix, instanceIndex) => {
-                    const object = new THREE.Mesh(part.geometry, part.material);
-                    const partSuffix = parts.length > 1 ? '-part-' + partIndex : '';
-                    const instanceSuffix = instanceMatrix ? '-instance-' + instanceIndex : '';
-                    object.name = String(record.name || record.primPath || ('mesh-' + i)) + partSuffix + instanceSuffix;
-                    // The generated MeshUpdate path identifies the prototype
-                    // geometry.  Use the owner path for selection and retain
-                    // the generated path/index for diagnostics and picking.
-                    object.userData.primPath = String(record.instanceOwnerPath || record.primPath || '');
-                    object.userData.geometryPath = String(record.primPath || '');
-                    object.userData.instanceIndex = instanceMatrix ? instanceIndex : undefined;
-                    object.userData.materialPath = String(record.materialPath || '');
-                    object.matrixAutoUpdate = false;
-                    const worldMatrix = parentMatrix.clone();
-                    if (instanceMatrix) worldMatrix.multiply(sceneMatrix(instanceMatrix));
-                    object.matrix.copy(worldMatrix);
-                    object.castShadow = true;
-                    object.receiveShadow = true;
-                    object.updateMatrixWorld(true);
-                    object.onBeforeRender = () => {
-                        const currentMaterials = Array.isArray(object.material) ? object.material : [object.material];
-                        currentMaterials.forEach((material) => applyObjectUniforms(material, object));
-                        if (applyObjectThickness) applyObjectThickness(object, currentMaterials);
-                    };
-                    sceneRoot.add(object);
-                    prims.push(object);
+                    if (seen.size) window.bindGeompropAttributes(part.geometry, Array.from(seen.values()), (message) => {
+                        if (!warnings.includes(message)) warnings.push(message);
+                    }, sceneGeompropConstants(effectiveRecord));
                 });
-            });
-            const geometryLabel = String(record.primPath || '').split('/').filter(Boolean).pop() || String(record.name || '');
-            report({ phase: 'geometry', index: i + 1, total: stage.meshes.length, primPath: String(record.primPath || ''), label: geometryLabel });
-        }
-        await awaitTextureJobs(pendingTextures);
-        if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
-        const stageBox = new THREE.Box3().setFromObject(sceneRoot);
-        if (!stageBox.isEmpty()) {
-            sceneRadius = stageBox.getBoundingSphere(new THREE.Sphere()).radius;
-            // Materials were built during the geometry pass, before real
-            // bounds existed; applyMaterialEnvironment's copy filter does not
-            // reach this uniform, so push it onto every material directly.
-            for (const material of materials) {
-                if (material.uniforms && material.uniforms.u_sceneRadius) material.uniforms.u_sceneRadius.value = sceneRadius;
+                if (displacementOn && displacementAllowed) {
+                    // Parts share one geometry across instances, so this pass
+                    // evaluates against the first instance transform. Object-
+                    // space displacement is exact; world-space displacement on
+                    // differently transformed instances is an explicit preview
+                    // limitation until instances own distinct geometries.
+                    if (drawMatrices.length > 1) {
+                        const warning = 'Displacement on instanced mesh ' + String(record.primPath || record.name || i)
+                            + ' is evaluated from its first instance transform';
+                        if (!warnings.includes(warning)) warnings.push(warning);
+                    }
+                    const firstWorld = parentMatrix.clone();
+                    if (drawMatrices[0]) firstWorld.multiply(sceneMatrix(drawMatrices[0]));
+                    await displaceRecordParts(effectiveRecord, parts, firstWorld);
+                }
+                if (stopped || !isMounted()) {
+                    parts.forEach((part) => { try { part.geometry.dispose(); } catch (e) {} });
+                    return;
+                }
+                parts.forEach((part, partIndex) => {
+                    geometries.add(part.geometry);
+                    const partMaterials = Array.isArray(part.material) ? part.material : [part.material];
+                    partMaterials.forEach((material) => materials.add(material));
+                    if (window.bindGeompropAttributes) {
+                        const seen = new Map();
+                        for (const material of partMaterials) {
+                            const compiled = material.userData && material.userData.mtlxSceneCompiled;
+                            for (const gp of (compiled && compiled.geomprops) || []) seen.set(gp.name, gp);
+                        }
+                        if (seen.size) {
+                            window.bindGeompropAttributes(part.geometry, Array.from(seen.values()), (text) => {
+                                if (!warnings.includes(text)) warnings.push(text);
+                            }, sceneGeompropConstants(effectiveRecord));
+                        }
+                    }
+                    if (part.material.userData && part.material.userData.mtlxScenePendingTextures) {
+                        pendingTextures.push(...part.material.userData.mtlxScenePendingTextures);
+                        delete part.material.userData.mtlxScenePendingTextures;
+                    }
+                    drawMatrices.forEach((instanceMatrix, instanceIndex) => {
+                        const object = new THREE.Mesh(part.geometry, part.material);
+                        const partSuffix = parts.length > 1 ? '-part-' + partIndex : '';
+                        const instanceSuffix = instanceMatrix ? '-instance-' + instanceIndex : '';
+                        object.name = String(record.name || record.primPath || ('mesh-' + i)) + partSuffix + instanceSuffix;
+                        // The generated MeshUpdate path identifies the prototype
+                        // geometry.  Use the owner path for selection and retain
+                        // the generated path/index for diagnostics and picking.
+                        object.userData.primPath = String(record.instanceOwnerPath || record.primPath || '');
+                        object.userData.geometryPath = String(record.primPath || '');
+                        object.userData.instanceIndex = instanceMatrix ? instanceIndex : undefined;
+                        object.userData.materialPath = String(record.materialPath || '');
+                        object.userData.castsShadow = record.castsShadow !== false;
+                        // Fallback albedo source for the diffuse bounce bake
+                        // (sceneBounceAlbedo): the same authored constant
+                        // sceneGeompropConstants above already reads.
+                        if (Array.isArray(effectiveRecord.displayColor)) object.userData.displayColor = effectiveRecord.displayColor;
+                        object.matrixAutoUpdate = false;
+                        const worldMatrix = parentMatrix.clone();
+                        if (instanceMatrix) worldMatrix.multiply(sceneMatrix(instanceMatrix));
+                        object.matrix.copy(worldMatrix);
+                        object.castShadow = true;
+                        object.receiveShadow = true;
+                        object.updateMatrixWorld(true);
+                        object.onBeforeRender = () => {
+                            const currentMaterials = Array.isArray(object.material) ? object.material : [object.material];
+                            currentMaterials.forEach((material) => applyObjectUniforms(material, object));
+                            if (applyObjectThickness) applyObjectThickness(object, currentMaterials);
+                        };
+                        sceneRoot.add(object);
+                        prims.push(object);
+                    });
+                });
+                const geometryLabel = String(record.primPath || '').split('/').filter(Boolean).pop() || String(record.name || '');
+                report({ phase: 'geometry', index: i + 1, total: stage.meshes.length, primPath: String(record.primPath || ''), label: geometryLabel });
             }
-        }
-        if (environmentBridge && typeof environmentBridge.updateBounds === 'function') {
-            environmentBridge.updateBounds(stageBox);
-        }
-        // Now that the stage has real bounds, redo the light split with the
-        // distances it needs. The info lines from the first pass are already
-        // deduped by primPath, so this only adds ones that actually changed.
-        if (!stageBox.isEmpty()) convertLights(stageBox.getCenter(new THREE.Vector3()));
+            const __perfTexturePhaseStart2 = scenePerf ? performance.now() : 0;
+            await awaitTextureJobs(pendingTextures);
+            if (scenePerf) {
+                scenePerf.texturePhaseMs += performance.now() - __perfTexturePhaseStart2;
+                const t = window.__mtlxTexturePerf;
+                if (t) {
+                    scenePerf.texture.decodeMs += t.decodeMs;
+                    scenePerf.texture.resizeMs += t.resizeMs;
+                    scenePerf.texture.count += t.count;
+                    scenePerf.texture.uploadMs = Math.max(0, scenePerf.texturePhaseMs - scenePerf.texture.decodeMs - scenePerf.texture.resizeMs);
+                    window.resetTexturePerf && window.resetTexturePerf();
+                }
+            }
+            if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
+            geometryRevision++;
+        };
+        const __perfGeometryStart = scenePerf ? performance.now() : 0;
+        await buildSceneMeshes();
+        if (scenePerf) scenePerf.geometryPhaseMs = performance.now() - __perfGeometryStart;
+        // Stage box, bounds, sky/AO bakes and the shadow map: factored so a
+        // later displacement-subdivision-override rebuild can redo them
+        // without repeating the mesh pass; lights convert on the first build only.
         // Geometry and lights are final here, so draw the map once before the
         // first frame rather than leaving the opening frames unshadowed.
         // Materials were built during the geometry pass, before the volume
         // existed, so push it onto them once it does.
-        const rendererStepTotal = 4 + (shadowsEnabled ? 1 : 0);
+        const rendererStepTotal = 5 + (shadowsEnabled ? 1 : 0);
         let rendererStepIndex = 0;
         const reportRendererStep = (step) => {
             rendererStepIndex += 1;
             report({ phase: 'renderer', status: 'step', step, index: rendererStepIndex, total: rendererStepTotal });
         };
-        reportRendererStep('sky-visibility');
-        const skyBakeResult = buildSkyVisibilityVolume(stageBox);
-        applySkyVisibility();
-        reportRendererStep('occlusion-volume');
-        buildAoVolume(stageBox, skyBakeResult);
-        applyAoVolume();
-        if (shadowsEnabled) { reportRendererStep('shadow-atlas'); updateShadowMap(); }
-        applyMaterialEnvironment();
+        const rebuildGeometryDerivedState = (convertLightsOnce, emitProgress) => {
+            stageBox = new THREE.Box3().setFromObject(sceneRoot);
+            if (!stageBox.isEmpty()) {
+                sceneRadius = stageBox.getBoundingSphere(new THREE.Sphere()).radius;
+                // Materials were built during the geometry pass, before real
+                // bounds existed; applyMaterialEnvironment's copy filter does not
+                // reach this uniform, so push it onto every material directly.
+                for (const material of materials) {
+                    if (material.uniforms && material.uniforms.u_sceneRadius) material.uniforms.u_sceneRadius.value = sceneRadius;
+                }
+            }
+            if (environmentBridge && typeof environmentBridge.updateBounds === 'function') {
+                environmentBridge.updateBounds(stageBox);
+            }
+            // Now that the stage has real bounds, redo the light split with the
+            // distances it needs. The info lines from the first pass are already
+            // deduped by primPath, so this only adds ones that actually changed.
+            if (convertLightsOnce && !stageBox.isEmpty()) convertLights(stageBox.getCenter(new THREE.Vector3()));
+            // The bounds pass moves samples between emitters without changing
+            // how many there are, so this never fires; it is the guard that
+            // keeps the light tier honest if that ever stops holding.
+            if (compiledStageLightSlots != null && stageLights.length > compiledStageLightSlots) displayRevision += 1;
+            if (emitProgress) reportRendererStep('sky-visibility');
+            const skyBakeResult = buildSkyVisibilityVolume(stageBox);
+            applySkyVisibility();
+            if (emitProgress) reportRendererStep('occlusion-volume');
+            buildAoVolume(stageBox, skyBakeResult);
+            applyAoVolume();
+            if (emitProgress) reportRendererStep('bounce-volume');
+            buildSkyBounceVolume(stageBox, skyBakeResult);
+            applySkyBounce();
+            markLocalEnvDirty();
+            if (shadowsEnabled) { if (emitProgress) reportRendererStep('shadow-atlas'); updateShadowMap(); }
+            applyMaterialEnvironment();
+        };
+        rebuildGeometryDerivedState(true, true);
         const resize = () => {
             if (!renderer || !container || resizeSuspended) return;
             const w = Math.max(1, container.clientWidth || 640);
@@ -4848,12 +6810,29 @@ const createMtlxSceneView = async ({
             camera.aspect = w / h;
             camera.updateProjectionMatrix();
         };
+        // Auto-framing measures displaced meshes at their undisplaced positions,
+        // so a stage frames the same whether displacement is on or off at load.
+        const framingBox = () => {
+            const box = new THREE.Box3();
+            const point = new THREE.Vector3();
+            sceneRoot.updateMatrixWorld(true);
+            sceneRoot.traverse((object) => {
+                if (!object.isMesh || !object.geometry) return;
+                const source = object.geometry.userData && object.geometry.userData.mtlxDisplacementSource;
+                const positions = source && source.positions;
+                if (!positions || !positions.length) { box.expandByObject(object); return; }
+                for (let i = 0; i + 2 < positions.length; i += 3) {
+                    box.expandByPoint(point.set(positions[i], positions[i + 1], positions[i + 2]).applyMatrix4(object.matrixWorld));
+                }
+            });
+            return box;
+        };
         const frameAll = () => {
             // Backdrops/skyboxes are deliberately excluded from framing.
             // A USD camera may have left a non-default fov/aperture-derived
             // fov behind; the auto-framing entry always uses the plain 45.
             camera.fov = 45;
-            const box = new THREE.Box3().setFromObject(sceneRoot);
+            const box = framingBox();
             if (box.isEmpty()) return;
             const center = box.getCenter(new THREE.Vector3());
             const size = box.getSize(new THREE.Vector3());
@@ -4885,7 +6864,7 @@ const createMtlxSceneView = async ({
             if (!domeEnv || !domeLight || stopped) return false;
             env = domeEnv;
             if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(domeEnv);
-            setEnvRotation(domeLight.rotationDeg * Math.PI / 180);
+            setEnvRotation(sceneDomeYawDegFromRotation(domeLight.rotationDeg) * Math.PI / 180);
             setEnvExposure(domeLight.exposure);
             return true;
         };
@@ -4934,6 +6913,10 @@ const createMtlxSceneView = async ({
             camera.quaternion.copy(quaternion);
             camera.updateProjectionMatrix();
             if (controls) {
+                const limits = clearAppliedStudioCameraLimits(
+                    controls, studioPolarApplied, studioDistanceApplied, !!selectedCameraPath);
+                studioPolarApplied = limits.polarApplied;
+                studioDistanceApplied = limits.distanceApplied;
                 controls.target.copy(target);
                 controls.update();
             }
@@ -4989,6 +6972,7 @@ const createMtlxSceneView = async ({
                 rebuildingProvisional = provisional;
                 const rebuildPending = [];
                 const oldMaterials = Array.from(materials);
+                resetGeneratedFeatures();
                 for (const [path, record] of materialRecords) {
                     const result = await makeMtlxMaterial(record, true);
                     if (result) {
@@ -5011,6 +6995,8 @@ const createMtlxSceneView = async ({
                 const replacements = new Map();
                 const oldUdimCache = new Map(udimVariantByMaterial);
                 udimVariantByMaterial.clear();
+                const oldDisplayColorCache = new Map(displayColorVariantByColor);
+                displayColorVariantByColor.clear();
                 for (const oldMaterial of oldMaterials) {
                     const data = oldMaterial && oldMaterial.userData;
                     const path = data && data.mtlxSceneMaterialPath;
@@ -5018,7 +7004,9 @@ const createMtlxSceneView = async ({
                     if (!info || !info.compiled) continue;
                     let next = info.material;
                     const tile = data.mtlxSceneUdimTile;
+                    const displayColor = data.mtlxSceneDisplayColor;
                     if (tile != null) next = udimMaterial(info, tile, data.mtlxSceneSourceAsset || path);
+                    else if (displayColor) next = displayColorMaterial(info, displayColor);
                     if (next) {
                         replacements.set(oldMaterial, next);
                         provisional.add(next);
@@ -5039,6 +7027,8 @@ const createMtlxSceneView = async ({
                     rebuildingProvisional = null;
                     udimVariantByMaterial.clear();
                     oldUdimCache.forEach((value, key) => udimVariantByMaterial.set(key, value));
+                    displayColorVariantByColor.clear();
+                    oldDisplayColorCache.forEach((value, key) => displayColorVariantByColor.set(key, value));
                     continue;
                 }
                 // Partial refresh: a stage with one un-compilable material used
@@ -5059,6 +7049,8 @@ const createMtlxSceneView = async ({
                     rebuildingProvisional = null;
                     udimVariantByMaterial.clear();
                     oldUdimCache.forEach((value, key) => udimVariantByMaterial.set(key, value));
+                    displayColorVariantByColor.clear();
+                    oldDisplayColorCache.forEach((value, key) => displayColorVariantByColor.set(key, value));
                     displayDirty = false;
                     report({ phase: 'display-transform', status: 'error', value: targetMode, error: 'no material regenerated' });
                     return;
@@ -5089,11 +7081,19 @@ const createMtlxSceneView = async ({
                 oldMaterials.forEach((material) => {
                     if (!liveNew.has(material) && replacements.has(material)) disposeMaterial(material);
                 });
+                // Texture-size/budget and display rebuilds replace compiled
+                // material records. Re-bake displacement from those latest
+                // programs and sampler modes before compiling the scene.
+                if (Array.from(byPath.values()).some((info) => info && info.compiled && info.compiled.displacement)) {
+                    await requestSceneRebuild();
+                    if (stopped || !isMounted()) return;
+                }
                 updateRendererDisplayTransform();
                 if (environmentBridge && typeof environmentBridge.refreshDisplayTransform === 'function') {
                     environmentBridge.refreshDisplayTransform();
                 }
                 applyMaterialEnvironment();
+                markLocalEnvDirty();
                 displayDirty = targetRevision !== displayRevision;
                 if (!displayDirty) {
                     rebuildingProvisional = null;
@@ -5122,18 +7122,35 @@ const createMtlxSceneView = async ({
             });
             return displayRebuildPromise;
         };
+        // First point that can touch a surface program on the visible renderer:
+        // the display rebuild below calls renderer.compile(). Every earlier step
+        // draws with depth-override or dedicated materials only.
+        await joinPrewarms(true);
         resize();
         frameAll();
+        const globalTransformDriftedAtCreation = creationDisplayTransform !== (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb');
+        // With the switch on, displayRevision only ever moves for a
+        // genuinely generation-affecting change (markDisplayRegenDirty), so
+        // a transform-only drift here is safe to take the cheap path too.
         displayDirty = creationDisplayRevision !== displayRevision
-            || creationDisplayTransform !== (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb');
+            || (!fastDisplaySwitch && globalTransformDriftedAtCreation);
         if (displayDirty) await queueDisplayRebuild();
+        else if (fastDisplaySwitch && globalTransformDriftedAtCreation && applyDisplayTransformFast) {
+            applyDisplayTransformFast();
+            report({ phase: 'display-transform', status: 'ready', value: window.getDisplayTransform ? window.getDisplayTransform() : 'srgb' });
+        }
         // Force the actual display renderer to link every scene program before
         // advertising the view as ready. Three may report a GLSL failure via
         // console and leave no public exception, so turn missing material
         // program handles into per-material diagnostics.
         try {
             reportRendererStep('gpu-program');
+            // Normally already drained above; still here for the case where a
+            // late material compile queued a submit after that join.
+            await joinPrewarms();
+            const __perfGpuProgramStart = scenePerf ? performance.now() : 0;
             renderer.compile(scene, camera);
+            if (scenePerf) scenePerf.gpuProgramMs = performance.now() - __perfGpuProgramStart;
             reportBadPrograms(materials, '');
         } catch (error) {
             warnings.push('USD scene GPU program compilation failed: ' + String(error && error.message || error));
@@ -5161,6 +7178,14 @@ const createMtlxSceneView = async ({
         }
         if (window.ResizeObserver) { resizeObserver = new ResizeObserver(resize); resizeObserver.observe(container); }
         reportRendererStep('first-frame');
+        if (scenePerf) {
+            scenePerf.stageLightSamples = stageLights.length;
+            scenePerf.stageLightSlots = compiledStageLightSlots;
+            scenePerf.distinctPrograms = new Set(scenePerf.materials.map((m) => m.srcHash)).size;
+            scenePerf.distinctProgramsNamesStripped = new Set(scenePerf.materials.map((m) => m.stripHash)).size;
+            window.__mtlxScenePerf = scenePerf;
+            console.log('[mtlx-perf] scene materials: ' + JSON.stringify(scenePerf));
+        }
         report({ phase: 'renderer', status: 'ready', warnings: warnings.slice() });
         // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
         // engine.js:4804-4819): the orbit target sits above the floor, so a
@@ -5168,6 +7193,13 @@ const createMtlxSceneView = async ({
         // the distance grows. Re-derived per frame from that distance.
         const applyStudioPolarClamp = () => {
             if (!controls) return;
+            if (!shouldClampStudioCamera(selectedCameraPath)) {
+                const limits = clearAppliedStudioCameraLimits(
+                    controls, studioPolarApplied, studioDistanceApplied, true);
+                studioPolarApplied = limits.polarApplied;
+                studioDistanceApplied = limits.distanceApplied;
+                return;
+            }
             const studio = window.MtlxStudio;
             const maxPolar = (studio && Number(studio.studioMaxPolar)) || Math.PI * 0.54;
             if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) {
@@ -5191,6 +7223,13 @@ const createMtlxSceneView = async ({
         // the top-down clamp still stays under the studio ceiling.
         const applyStudioDistanceClamp = () => {
             if (!controls) return;
+            if (!shouldClampStudioCamera(selectedCameraPath)) {
+                const limits = clearAppliedStudioCameraLimits(
+                    controls, studioPolarApplied, studioDistanceApplied, true);
+                studioPolarApplied = limits.polarApplied;
+                studioDistanceApplied = limits.distanceApplied;
+                return;
+            }
             if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) {
                 if (studioDistanceApplied) { controls.maxDistance = Infinity; studioDistanceApplied = false; }
                 return;
@@ -5253,6 +7292,14 @@ const createMtlxSceneView = async ({
             // sync to hidden keep-alive views) cannot re-allocate transient
             // targets. setActive(true) renders the catch-up frame itself.
             if (!active) return;
+            // Consumed once per dirty event rather than every frame: the
+            // capture is six extra draws plus a prefilter chain, so this
+            // must not re-run while an environment slider is being dragged.
+            if (localEnvDirty) {
+                localEnvDirty = false;
+                buildLocalEnvCapture(stageBox);
+                applyLocalEnv();
+            }
             ensureShadowCurrent();
             const callerTarget = renderer.getRenderTarget();
             const outputSize = callerTarget
@@ -5388,6 +7435,17 @@ const createMtlxSceneView = async ({
         };
         const render = () => {
             if (stopped || !active) { raf = 0; return; }
+            // Perf-gated frame timing: the first 120 frames after the scene is
+            // ready, averaged, so a feature's per-frame cost is measurable.
+            if (scenePerf && scenePerf.frameSamples < 120) {
+                const __now = performance.now();
+                if (scenePerf.lastFrameAt) {
+                    scenePerf.frameSamples += 1;
+                    scenePerf.frameTotalMs += __now - scenePerf.lastFrameAt;
+                    scenePerf.frameAvgMs = scenePerf.frameTotalMs / scenePerf.frameSamples;
+                }
+                scenePerf.lastFrameAt = __now;
+            }
             if (window.MTLX_CLOCK && typeof window.clockTick === 'function') window.clockTick(performance.now());
             if (environmentBridge && environmentBridge.update) environmentBridge.update();
             applyStudioPolarClamp();
@@ -5414,6 +7472,8 @@ const createMtlxSceneView = async ({
             env = next;
             if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(next);
             applyMaterialEnvironment();
+            reshadeSkyBounce(); applySkyBounce();
+            markLocalEnvDirty();
             if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return true;
         };
@@ -5421,14 +7481,30 @@ const createMtlxSceneView = async ({
             envRotationRad = Number(radians) || 0;
             if (environmentBridge && environmentBridge.setEnvRotation) environmentBridge.setEnvRotation(envRotationRad);
             applyMaterialEnvironment();
+            reshadeSkyBounce(); applySkyBounce();
+            markLocalEnvDirty();
             if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return envRotationRad;
         };
         // Stage lights are live: both controls only re-push uniforms, no
         // recompile, because the slots were reserved at generation time.
+        // A feature the live materials were never generated with needs them
+        // rebuilt (about 1 to 2 s each). Turning one OFF needs nothing: the
+        // larger shader stays and its uniforms already hold the feature inert.
+        const regenerateForFeatures = () => {
+            if (!featureGatedShaders()) return false;
+            if ((!shadowsEnabled || generatedFeatures.shadows)
+                && (!aoEnabled || generatedFeatures.ao)
+                && (!skyVisEnabled || generatedFeatures.skyVis)) return false;
+            displayDirty = true;
+            displayRevision += 1;
+            if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            return true;
+        };
         const setShadowsEnabled = (on) => {
             shadowsEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_SHADOWS_KEY, shadowsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            regenerateForFeatures();
             updateShadowMap();
             applyShadowMatrix();
             applyMaterialEnvironment();
@@ -5484,6 +7560,37 @@ const createMtlxSceneView = async ({
             renderFrame();
             return sceneDisplayTransform;
         };
+        // Recompiles every material (same displayRevision rebuild path as
+        // setTextureMaxSize) because the setting changes what shader-gen
+        // sees, unlike the display transform's plain uniform swap.
+        const getSceneMaterialWorkspace = () => materialWorkspace;
+        const setSceneMaterialWorkspace = (space) => {
+            if (!SCENE_MATERIAL_WORKSPACE_VALUES.includes(space) || space === materialWorkspace) return materialWorkspace;
+            materialWorkspace = space;
+            try {
+                if (window.top === window) localStorage.setItem(SCENE_MATERIAL_WORKSPACE_KEY, materialWorkspace);
+            } catch (e) { /* privacy mode */ }
+            displayDirty = true;
+            displayRevision += 1;
+            if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            return materialWorkspace;
+        };
+        // Recompiles every material for the same reason setSceneMaterialWorkspace
+        // does: this changes what the fragment patch pass sees (patchSpecularAA
+        // in mtlx-engine.js), a shader source-text change, not a uniform.
+        const getSceneSpecularAA = () => specularAAEnabled;
+        const setSceneSpecularAA = (on) => {
+            const next = !!on;
+            if (next === specularAAEnabled) return specularAAEnabled;
+            specularAAEnabled = next;
+            try {
+                if (window.top === window) localStorage.setItem(SCENE_SPECULAR_AA_KEY, specularAAEnabled ? '1' : '0');
+            } catch (e) { /* privacy mode */ }
+            displayDirty = true;
+            displayRevision += 1;
+            if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            return specularAAEnabled;
+        };
         const setSkyVisibility = (on) => {
             const next = !!on;
             if (next === skyVisEnabled) return skyVisEnabled;
@@ -5494,9 +7601,12 @@ const createMtlxSceneView = async ({
                 const box = new THREE.Box3().setFromObject(sceneRoot);
                 const skyResult = buildSkyVisibilityVolume(box);
                 if (aoEnabled && !aoVolumeTexture) buildAoVolume(box, skyResult);
+                if (bounceEnabled && !skyBounceTexture) buildSkyBounceVolume(box, skyResult);
             }
+            regenerateForFeatures();
             applySkyVisibility();
             applyAoVolume();
+            applySkyBounce();
             renderFrame();
             return skyVisEnabled;
         };
@@ -5505,6 +7615,7 @@ const createMtlxSceneView = async ({
             try { if (window.top === window) localStorage.setItem(SCENE_SKYVIS_STRENGTH_KEY, String(skyVisStrength)); } catch (e) { /* privacy mode */ }
             applySkyVisibility();
             applyAoVolume();
+            applySkyBounce();
             renderFrame();
             return skyVisStrength;
         };
@@ -5518,7 +7629,9 @@ const createMtlxSceneView = async ({
             aoEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_AO_KEY, aoEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
             if (!aoEnabled) { applyAmbientOcclusion(null); disposeAoResources(); }
+            regenerateForFeatures();
             applyAoVolume();
+            applySkyBounce();
             return aoEnabled;
         };
         const setAmbientOcclusionStrength = (value) => {
@@ -5526,6 +7639,7 @@ const createMtlxSceneView = async ({
             aoStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
             try { if (window.top === window) localStorage.setItem(SCENE_AO_STRENGTH_KEY, String(aoStrength)); } catch (e) { /* privacy mode */ }
             applyAoVolume();
+            applySkyBounce();
             return aoStrength;
         };
         const getAmbientOcclusion = () => ({
@@ -5537,6 +7651,38 @@ const createMtlxSceneView = async ({
                 cell: aoVolumeCell,
                 ms: aoVolumeInfo ? aoVolumeInfo.ms : null,
             },
+        });
+        const setSceneBounceEnabled = (on) => {
+            const next = !!on;
+            if (next === bounceEnabled) return bounceEnabled;
+            bounceEnabled = next;
+            try { if (window.top === window) localStorage.setItem(SCENE_BOUNCE_KEY, bounceEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            // Turning it back on has to re-bake: the volume is dropped when
+            // off. Needs the sky bake's own volume and RGBA data, so rebuild
+            // that first when it is not already held.
+            if (bounceEnabled && !skyBounceTexture && sceneRoot) {
+                const box = new THREE.Box3().setFromObject(sceneRoot);
+                const skyResult = (skyVisEnabled && skyVisTexture)
+                    ? buildSkyVisibilityVolume(box) : null;
+                if (skyResult) buildSkyBounceVolume(box, skyResult);
+            }
+            applySkyBounce();
+            renderFrame();
+            return bounceEnabled;
+        };
+        const setSceneBounceStrength = (value) => {
+            const next = Number(value);
+            bounceStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
+            try { if (window.top === window) localStorage.setItem(SCENE_BOUNCE_STRENGTH_KEY, String(bounceStrength)); } catch (e) { /* privacy mode */ }
+            applySkyBounce();
+            renderFrame();
+            return bounceStrength;
+        };
+        const getSceneBounce = () => ({
+            enabled: bounceEnabled,
+            strength: bounceStrength,
+            ready: !!skyBounceTexture,
+            info: skyBounceInfo ? Object.assign({}, skyBounceInfo) : null,
         });
         const setScreenSpaceReflections = (on) => {
             ssrEnabled = !SCENE_SSR_PARKED && !!on;
@@ -5569,6 +7715,35 @@ const createMtlxSceneView = async ({
                 reason: (!historyValid && encodedFallback) ? 'encoded-fallback: scene-linear presentation is unavailable' : null,
             };
         };
+        // Local environment reflections: enabling re-bakes only if nothing
+        // is captured yet (the texture is kept, not dropped, while off, so
+        // re-enabling within the same stage is instant).
+        const setLocalReflections = (on) => {
+            const next = !SCENE_LOCAL_ENV_PARKED && !!on;
+            if (next === localEnvEnabled) return localEnvEnabled;
+            localEnvEnabled = next;
+            try { if (window.top === window) localStorage.setItem(SCENE_LOCAL_ENV_KEY, localEnvEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            if (localEnvEnabled && !localEnvTexture) markLocalEnvDirty();
+            applyLocalEnv();
+            renderFrame();
+            return localEnvEnabled;
+        };
+        const setLocalReflectionStrength = (value) => {
+            const next = Number(value);
+            localEnvStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
+            try { if (window.top === window) localStorage.setItem(SCENE_LOCAL_ENV_STRENGTH_KEY, String(localEnvStrength)); } catch (e) { /* privacy mode */ }
+            applyLocalEnv();
+            renderFrame();
+            return localEnvStrength;
+        };
+        const getLocalReflections = () => ({
+            enabled: localEnvEnabled,
+            ready: !!localEnvTexture,
+            strength: localEnvStrength,
+            coverage: localEnvInfo ? localEnvInfo.coverage : null,
+            ms: localEnvInfo ? localEnvInfo.ms : null,
+            reason: !localEnvEnabled ? 'off' : (localEnvTexture ? null : 'not baked'),
+        });
         const setStageLightsEnabled = (on) => {
             stageLightsEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_KEY, stageLightsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
@@ -5595,6 +7770,8 @@ const createMtlxSceneView = async ({
             envExposure = Math.max(0, Number(value) || 0);
             if (environmentBridge && environmentBridge.setEnvExposure) environmentBridge.setEnvExposure(envExposure);
             applyMaterialEnvironment();
+            reshadeSkyBounce(); applySkyBounce();
+            markLocalEnvDirty();
             if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return envExposure;
         };
@@ -5646,6 +7823,95 @@ const createMtlxSceneView = async ({
             return sceneOptions.textureMaxBytes;
         };
         const getTextureBudgetBytes = () => sceneOptions.textureMaxBytes;
+        // Rebuilds every mesh and its geometry-derived state from the
+        // already-loaded `stage` in memory: no worker round trip. Rapid
+        // toggles are serialized and coalesced so async displacement readback
+        // cannot interleave two geometry owners.
+        const sceneRebuildQueue = createSceneRebuildQueue({
+            build: buildSceneMeshes,
+            commit: async () => {
+                if (stopped || !isMounted()) return;
+                rebuildGeometryDerivedState(false, false);
+                invalidateTransparentMeshCache();
+                renderFrame();
+            },
+            isStopped: () => stopped || !isMounted(),
+            onError: (error) => {
+                const detail = error && error.message || String(error);
+                warnings.push('Displacement rebuild failed: ' + detail);
+                report({ phase: 'geometry', status: 'error', error: detail });
+            },
+        });
+        const requestSceneRebuild = () => sceneRebuildQueue.request();
+        const getDisplacementSubdivisionOverride = () => displacementSubdivisionOverride;
+        // Changes the Scene's own displacement-subdivision override and
+        // rebuilds through requestSceneRebuild (never the plain Subdivision
+        // setting's full worker reload).
+        const setDisplacementSubdivisionOverride = (value) => {
+            const next = value === 'follow' || SCENE_DISPLACEMENT_SUBDIVISION_VALUES.includes(Number(value))
+                ? (value === 'follow' ? 'follow' : Number(value)) : SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
+            if (next === displacementSubdivisionOverride) return displacementSubdivisionOverride;
+            displacementSubdivisionOverride = next;
+            setStoredSceneDisplacementSubdivision(next);
+            requestSceneRebuild();
+            return displacementSubdivisionOverride;
+        };
+        const getTriangleLimits = () => triangleLimitsEnabled;
+        // Changes the Scene's own displacement triangle budgets and rebuilds
+        // through requestSceneRebuild; the worker-side subdivision budgets
+        // need a full reload and are handled by the caller.
+        const setTriangleLimits = (value) => {
+            const next = value !== false;
+            if (next === triangleLimitsEnabled) return triangleLimitsEnabled;
+            triangleLimitsEnabled = next;
+            setStoredSceneTriangleLimits(next);
+            requestSceneRebuild();
+            return triangleLimitsEnabled;
+        };
+        // Single entry point for the quality-preset UI: applies any subset of
+        // the governed values by calling the setters above (never duplicating
+        // their logic). When reload is coming, queueDisplayRebuild is pulled
+        // out so those setters cannot start a shader rebuild the reload discards.
+        const applySceneSettings = (partial) => {
+            if (!partial || typeof partial !== 'object') return { reload: false, rebuild: false, geometry: false };
+            const has = (key) => Object.prototype.hasOwnProperty.call(partial, key);
+            const reload = SCENE_SETTINGS_RELOAD_KEYS.some(has);
+            const savedQueue = queueDisplayRebuild;
+            if (reload) queueDisplayRebuild = null;
+            const beforeRevision = displayRevision;
+            try {
+                if (has('textureMaxSize')) setTextureMaxSize(partial.textureMaxSize);
+                if (has('textureBudgetGib')) setTextureBudgetBytes(Number(partial.textureBudgetGib) * GIB);
+                if (has('shadows')) setShadowsEnabled(!!partial.shadows);
+                if (has('ao')) setAmbientOcclusionEnabled(!!partial.ao);
+                if (has('skyVis')) setSkyVisibility(!!partial.skyVis);
+                if (has('specularAA')) setSceneSpecularAA(!!partial.specularAA);
+                if (has('bounce')) setSceneBounceEnabled(!!partial.bounce);
+                if (has('localReflections')) setLocalReflections(!!partial.localReflections);
+                if (has('triangleLimits')) setTriangleLimits(!!partial.triangleLimits);
+                if (has('displacementSubdivision')) setDisplacementSubdivisionOverride(partial.displacementSubdivision);
+                if (has('subdivision')) setStoredSceneSubdivisionLevel(Number(partial.subdivision));
+                if (has('displacement') && window.setDisplacementEnabled) window.setDisplacementEnabled(!!partial.displacement);
+                if (has('transparency') && window.setUsdSceneTransparency) window.setUsdSceneTransparency(!!partial.transparency);
+            } finally {
+                queueDisplayRebuild = savedQueue;
+            }
+            // The reload discards this handle; clear the latch so nothing
+            // still holding a reference (e.g. a late wake()) can start a
+            // rebuild the reload is about to make wasted work.
+            if (reload) displayDirty = false;
+            const rebuild = !reload && displayRevision !== beforeRevision;
+            const geometry = !reload && !rebuild && SCENE_SETTINGS_GEOMETRY_KEYS.some(has);
+            if (rebuild && queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            return { reload, rebuild, geometry };
+        };
+        // Called by setDisplacementEnabled/setPreviewSubdivisionLevel through
+        // LIVE_VIEWS; Scene ignores previewSubdivision (its own select
+        // covers that) and only acts on the shared enabled flag.
+        const refreshDisplacement = () => {
+            if (stopped) return;
+            requestSceneRebuild();
+        };
         if (textureStats.ktx2Substituted > 0) {
             warnings.push('[info] ' + textureStats.ktx2Substituted + ' texture' + (textureStats.ktx2Substituted === 1 ? '' : 's')
                 + ' loaded from KTX2 sibling' + (textureStats.ktx2Substituted === 1 ? '' : 's'));
@@ -5664,8 +7930,12 @@ const createMtlxSceneView = async ({
             setStageLightsEnabled, setStageLightsEv, getStageLights,
             setShadowsEnabled, getShadows, setShadowDiagnostic, getShadowDiagnostic, getTransparentPrims,
             setAmbientOcclusionEnabled, setAmbientOcclusionStrength, getAmbientOcclusion,
+            setSceneBounceEnabled, setSceneBounceStrength, getSceneBounce,
             setScreenSpaceReflections, setScreenSpaceReflectionStrength, setScreenSpaceReflectionMaxRoughness, getScreenSpaceReflections,
+            setLocalReflections, setLocalReflectionStrength, getLocalReflections,
             getSceneDisplayTransform, setSceneDisplayTransform,
+            getSceneMaterialWorkspace, setSceneMaterialWorkspace,
+            getSceneSpecularAA, setSceneSpecularAA,
             setSkyVisibility, setSkyVisibilityStrength, getSkyVisibility,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture
@@ -5679,6 +7949,13 @@ const createMtlxSceneView = async ({
             setTextureMaxSize,
             getTextureBudgetBytes,
             setTextureBudgetBytes,
+            getDisplacementSubdivisionOverride,
+            setDisplacementSubdivisionOverride,
+            getTriangleLimits,
+            setTriangleLimits,
+            applySceneSettings,
+            refreshDisplacement,
+            whenDisplacementSettled: () => sceneRebuildQueue.whenSettled(),
             getTextureStats: () => ({
                 textureMaxSize: sceneOptions.textureMaxSize,
                 plannedTextureSize,
@@ -5763,6 +8040,13 @@ const createMtlxSceneView = async ({
                 },
             }),
             selectPrim: (primPath) => prims.find((o) => o.userData.primPath === primPath) || null,
+            // Module-level SCENE_COMPILE_CACHE stats (shared across every
+            // view/reload, not just this one), for probes and diagnostics.
+            getCompileCacheStats: () => {
+                let bytes = 0;
+                for (const entry of SCENE_COMPILE_CACHE.values()) bytes += entry.bytes;
+                return { entries: SCENE_COMPILE_CACHE.size, bytes, hits: sceneCompileCacheHits, misses: sceneCompileCacheMisses };
+            },
             // Resolved document plus the loose files it references, for the
             // graph/shaderball preview panel. UDIM refs match every file
             // starting with the prefix before <UDIM>.
@@ -5925,6 +8209,7 @@ const createMtlxSceneView = async ({
             dispose: () => {
                 if (stopped) return;
                 stopped = true;
+                sceneRebuildQueue.cancel();
                 disposeShadowResources();
                 disposeAoResources();
                 disposePrepassResources();
@@ -6063,6 +8348,11 @@ const createMtlxSceneView = async ({
                 const normal = (worldNormal.isVector3 ? worldNormal.clone() : new THREE.Vector3(worldNormal[0], worldNormal[1], worldNormal[2])).normalize();
                 const volume = probeBakedVisibility(aoVolumeTexture, aoVolumeMin, aoVolumeSize, aoVolumeCell, point, normal);
                 const sky = probeBakedVisibility(skyVisTexture, skyVisMin, skyVisSize, skyVisCell, point, normal);
+                // Unlike sky/volume (whose absence means "fully visible", 1),
+                // an unbaked bounce means "no bounce term", 0: probeBaked
+                // Visibility's generic no-texture fallback of 1 would read as
+                // maximum bounce, which is backwards for an additive term.
+                const bounce = skyBounceTexture ? probeBakedVisibility(skyBounceTexture, skyBounceMin, skyBounceSize, skyBounceCell, point, normal) : 0;
                 let ssao = { ao: 1, confidence: 0, x: -1, y: -1 };
                 if (aoBlurTarget && camera) {
                     const clip = point.clone().project(camera);
@@ -6075,7 +8365,7 @@ const createMtlxSceneView = async ({
                         ssao = { ao: buf[0] / 255, confidence: buf[1] / 255, x, y };
                     }
                 }
-                return { volume, sky, ssao };
+                return { volume, sky, ssao, bounce };
             },
             __shadowDebug: () => {
                 if (!shadowTarget) return { ready: false };

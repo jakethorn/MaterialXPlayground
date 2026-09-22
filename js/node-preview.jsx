@@ -307,8 +307,8 @@
             // PNG snapshot named after the node + geometry — best-effort,
             // same as before (the hook's takeScreenshot has no internal
             // try/catch).
-            const takeScreenshot = () => {
-                try { takeScreenshotRaw(); } catch (e) { /* best-effort */ }
+            const takeScreenshot = async () => {
+                try { await takeScreenshotRaw(); } catch (e) { /* best-effort */ }
             };
             // Metadata for the .mtlx export (node element type, kind).
             const exportMetaRef = React.useRef(null);
@@ -1124,6 +1124,9 @@
                         const buildView = () => createMtlxRenderView({
                             canvas, mx, gen, genContext, renderable, lightData,
                             label: nodeName,
+                            // Many small previews mount at once; a tighter
+                            // budget keeps displaced subdivision cheap here.
+                            triangleBudget: 250000,
                             needsLighting,
                             geomName: geom,
                             // Fixed authored camera for the full scene
@@ -1135,6 +1138,9 @@
                             isMounted: () => mounted,
                             isActive: () => activeRef.current,
                             debugKind: kind,
+                            // Sliders here write uniforms with no regeneration
+                            // path, so a constified input would be uneditable.
+                            allowConstInputs: false,
                         });
                         let view;
                         try {
@@ -1226,6 +1232,7 @@
                                     const sourceView = await createMtlxRenderView({
                                         canvas: srcCanvas, mx, gen, genContext, renderable: sourceRenderable, lightData,
                                         label: nodeName + ' (source)',
+                                        triangleBudget: 250000,
                                         needsLighting,
                                         geomName: geom,
                                         sceneOrbit: false,
@@ -1234,6 +1241,7 @@
                                         isMounted: () => mounted,
                                         isActive: () => activeRef.current,
                                         debugKind: kind,
+                                        allowConstInputs: false,
                                     });
                                     if (!sourceView || !mounted) {
                                         if (sourceView) sourceView.dispose();
@@ -1578,7 +1586,10 @@
             // color picker, vector → per-component number fields.
             const renderControl = (p) => {
                 const cur = values[p.uniform] !== undefined ? values[p.uniform] : p.def;
-                const numCls = 'w-16 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[11px] font-mono text-gray-200';
+                // No fixed width: numberFieldStyle below sizes this from
+                // its own min/max/step so a longer float never clips under
+                // the native spinner (px-1 = 0.25rem/side, border = 1px/side).
+                const numCls = 'flex-none bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[11px] font-mono text-gray-200';
                 // Read-only input (e.g. a geometric default like Vworld) —
                 // shown so the input isn't "missing", but not editable.
                 if (p.readonly) {
@@ -1690,19 +1701,34 @@
                 if (p.type === 'float' || p.type === 'integer') {
                     const step = p.type === 'integer' ? 1 : Math.max((p.max - p.min) / 200, 0.001);
                     const parse = (s) => (p.type === 'integer' ? parseInt(s, 10) : parseFloat(s));
+                    // p.def is the nodedef's own default, already in hand —
+                    // right click resets to it, same as SliderField.
+                    const resetParam = rangeResetOnContextMenu({
+                        defaultValue: p.def, min: p.min, max: p.max,
+                        commit: (v) => onParamChange(p, parse(v)),
+                    });
+                    const hasDefault = p.def != null && Number.isFinite(Number(p.def));
                     return (
                         <div className="flex items-center gap-2">
                             <input
                                 type="range" className="flex-1 accent-blue-500 min-w-0"
                                 min={p.min} max={p.max} step={step} value={Number(cur)}
+                                title={hasDefault ? 'Right click to reset' : undefined}
                                 onChange={(e) => onParamChange(p, parse(e.target.value))}
+                                onContextMenu={resetParam}
                             />
                             <input
                                 type="number" className={numCls} step={step} value={Number(cur)}
+                                style={numberFieldStyle({
+                                    min: p.min, max: p.max, value: cur,
+                                    decimals: Math.min(decimalsFromStep(step), 4),
+                                    paddingRem: 0.5, borderPx: 2,
+                                })}
                                 onChange={(e) => {
                                     const n = parse(e.target.value);
                                     if (!isNaN(n)) onParamChange(p, n);
                                 }}
+                                onContextMenu={resetParam}
                                 onBlur={(e) => { e.target.value = String(Number(cur)); }}
                             />
                         </div>
@@ -1863,6 +1889,9 @@
                     onScreenshot={takeScreenshot}
                     isFullscreen={isFullscreen}
                     onToggleFullscreen={toggleFullscreenView}
+                    // Docs node previews render a single node's output, not
+                    // a full material, so mesh displacement never applies.
+                    hideDisplacementSettings
                     containerClassName={compact ? 'absolute top-2 right-2 z-20 flex items-center gap-1.5' : undefined}
                     buttonClassName={compact ? ((active) => 'w-7 h-7 flex-none flex items-center justify-center rounded transition-colors ' + (active ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-gray-700 hover:bg-gray-600 text-gray-200')) : undefined}
                 />

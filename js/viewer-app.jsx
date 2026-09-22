@@ -479,9 +479,9 @@
             // The hook's takeScreenshot has no internal try/catch (the
             // previewers swallow failures silently); here it surfaces as
             // an error banner instead, so the wrapping stays local.
-            const takeScreenshot = () => {
+            const takeScreenshot = async () => {
                 try {
-                    takeScreenshotRaw();
+                    await takeScreenshotRaw();
                 } catch (e) {
                     setError('Save PNG preview failed: ' + errMsg(e));
                 }
@@ -981,6 +981,7 @@
                             renderable: target.node,
                             lightData: loaded.lightData,
                             label: target.name,
+                            materialName: target.name,
                             needsLighting: true,
                             geomName: geom,
                             // Constrained orbit for the full scene; ignored for other geoms.
@@ -1042,6 +1043,16 @@
                     }
                 };
             }, [renderables, chosenMat, geom, customKey, glEpoch, displayTransform, heightToNormalTexel]);
+
+            React.useEffect(() => {
+                const onDisplacementStatus = (e) => {
+                    const view = viewRef.current;
+                    if (!view || !e.detail || e.detail.view !== view) return;
+                    setMaterialNotices(view.notices && view.notices.length ? view.notices : null);
+                };
+                window.addEventListener('mtlx-displacement-status', onDisplacementStatus);
+                return () => window.removeEventListener('mtlx-displacement-status', onDisplacementStatus);
+            }, []);
 
             // Backs the Scene card's transparency-forcing toggle (browser
             // only): local mirror of the engine's persisted value, replacing
@@ -1412,12 +1423,14 @@
                         <SliderField
                             label="Environment rotation" unit="deg"
                             value={envUI.rotation} min={0} max={360} step={1}
+                            defaultValue={0}
                             onSlider={(v) => setEnvRotationDeg(Number(v))}
                             onNumber={(v) => setEnvRotationDeg(Number(v))}
                         />
                         <SliderField
                             label="Exposure" unit="EV"
                             value={linearToEv(envUI.exposure)} min={EV_MIN} max={EV_MAX} step={EV_STEP}
+                            defaultValue={0}
                             onSlider={(v) => setEnvExposureVal(evToLinear(v))}
                             onNumber={(v) => setEnvExposureVal(evToLinear(v))}
                         />
@@ -1489,6 +1502,7 @@
                         <div className="mt-1 text-[11px] text-gray-400">
                             Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
                         </div>
+                            <DisplacementSettingsRows labelClassName="text-xs font-medium text-gray-400" />
                     </SectionCard>
 
                     {texReport && texReport.missing.length > 0 && (
