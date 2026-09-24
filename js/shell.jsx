@@ -205,6 +205,8 @@ const VIEW_DEPS = {
             'js/graph/reorder-list.jsx',
             'js/graph/scope-list.jsx',
             'js/graph/slx-syntax.jsx',
+            'js/graph/slx-language.jsx',
+            'js/graph/slx-assist.jsx',
             'js/graph/code-view.jsx',
             'js/graph/definition-panel.jsx',
             'js/graph/texture-convert.jsx',

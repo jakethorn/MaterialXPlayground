@@ -1192,7 +1192,9 @@
             // collapses params/legend to chips; narrow->wide restores the
             // stash. A manual re-open while narrow sticks until next crossing.
             const prevNarrowRef = React.useRef(narrow);
-            const preNarrowOpenRef = React.useRef({ params: true, legend: true, left: true, code: false });
+            // (`code` starts as it was saved: a page that first lays out
+            // narrow would otherwise close a code view left open.)
+            const preNarrowOpenRef = React.useRef({ params: true, legend: true, left: true, code: codeViewOpen });
             React.useEffect(() => {
                 const was = prevNarrowRef.current;
                 prevNarrowRef.current = narrow;
@@ -3796,16 +3798,14 @@
                 // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [codeViewOpen, parsed, slxCode]);
 
-            // The code view underlines standard library calls, so it needs
-            // the node catalog the Tab palette also uses (cached; loaded
-            // here too rather than only when the palette first opens).
+            // The code view's function library (underlines, completion,
+            // parameter hints, hover), built from the node catalog the Tab
+            // palette also uses and the node docs; loaded once it's opened.
+            const [slxLibrary, setSlxLibrary] = React.useState(null);
             React.useEffect(() => {
-                if (!CODE_VIEW_ON || !codeViewOpen || catalog) return;
-                buildNodeCatalog().then(setCatalog).catch(() => { /* no underlines; the palette reports its own load errors */ });
-            }, [codeViewOpen, catalog]);
-            const stdlibFunctionNames = React.useMemo(
-                () => (catalog ? new Set(catalog.map((c) => c.category)) : null),
-                [catalog]);
+                if (!CODE_VIEW_ON || !codeViewOpen || slxLibrary) return;
+                loadSlxLibrary().then(setSlxLibrary).catch(() => { /* no assists; the palette reports catalog load errors */ });
+            }, [codeViewOpen, slxLibrary]);
 
             // Export dialog's onExport: routes to .mtlx/.zip through the
             // same exportBusyRef-guarded wrappers as the toolbar. Errors
@@ -7599,7 +7599,7 @@
                                 modified={slxCode != null && slxBaseline != null && slxCode !== slxBaseline}
                                 busy={slxBusy}
                                 message={slxMessage}
-                                stdlibFunctions={stdlibFunctionNames}
+                                library={slxLibrary}
                                 onCodeChange={onSlxCodeChange}
                                 onCompile={compileFromCodeView}
                                 onDecompile={decompileToCodeView}

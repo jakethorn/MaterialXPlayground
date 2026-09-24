@@ -46,6 +46,8 @@
             { keys: 'Ctrl/Cmd + Z', desc: 'Undo the last document edit', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + Shift + Z (or Ctrl/Cmd + Y)', desc: 'Redo', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + Enter', desc: 'In the ShadingLanguageX view: compile the code into the node graph', group: 'keyboard', browserOnly: true },
+            { keys: 'Ctrl + Space', desc: 'In the ShadingLanguageX view: show suggestions (they also appear as you type; Enter or Tab inserts one)', group: 'keyboard', browserOnly: true },
+            { keys: 'Ctrl + Shift + Space', desc: 'In the ShadingLanguageX view: show parameter hints for the call around the cursor (Up/Down steps through its signatures)', group: 'keyboard', browserOnly: true },
             { keys: 'Ctrl/Cmd + S', desc: 'Save the document back to the open .mtlx file', group: 'keyboard', vscodeOnly: true },
         ];
 

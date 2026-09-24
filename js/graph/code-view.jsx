@@ -66,6 +66,13 @@
             error: '#f14c4c', // compile error squiggles
             caret: '#aeafad',
             selection: '#264f78',
+            // The assist popups (js/graph/slx-assist.jsx): function and
+            // parameter names in signatures, the active parameter and the
+            // typed characters in a suggestion, the selected suggestion.
+            func: '#dcdcaa',
+            param: '#9cdcfe',
+            highlight: '#2aaaff',
+            assistSelected: '#04395e',
         };
         (() => {
             if (typeof document === 'undefined' || document.getElementById('slx-syntax-theme')) return;
@@ -91,6 +98,17 @@
                 // invisible, the highlighted layer drawn over it shows it.
                 '.slx-input{color:transparent;caret-color:' + t.caret + ';}',
                 '.slx-input::selection{background:' + t.selection + ';}',
+                '.slx-assist-type{color:' + t.type + ';}',
+                '.slx-assist-func{color:' + t.func + ';}',
+                '.slx-assist-param{color:' + t.param + ';}',
+                '.slx-assist-active{color:' + t.highlight + ';font-weight:700;}',
+                '.slx-assist-match{color:' + t.highlight + ';font-weight:700;}',
+                '.slx-assist-selected{background:' + t.assistSelected + ';}',
+                '.slx-kind-function{color:' + t.func + ';}',
+                '.slx-kind-variable{color:' + t.param + ';}',
+                '.slx-kind-keyword{color:' + t.keyword + ';}',
+                '.slx-kind-type{color:' + t.type + ';}',
+                '.slx-kind-directive{color:' + t.directive + ';}',
             ].join('');
             document.head.appendChild(st);
         })();
@@ -99,10 +117,10 @@
 
         // tokenizeSlx() output as HTML for the highlighted layer: a span
         // per coloured token, plain text between them.
-        const highlightSlx = (text, stdlibFunctions) => {
+        const highlightSlx = (text, tokens) => {
             let html = '';
             let at = 0;
-            for (const token of tokenizeSlx(text, stdlibFunctions)) {
+            for (const token of tokens) {
                 let cls = null;
                 let attrs = '';
                 if (token.type === 'function') {
@@ -209,8 +227,11 @@
         //   value, onChange(text)  controlled text
         //   onSubmit()             Ctrl/Cmd+Enter
         //   readOnly, placeholder
-        //   stdlibFunctions        Set of standard library node names
-        //                          (underlined when called), or null
+        //   library                js/graph/slx-language.jsx's function
+        //                          library (loadSlxLibrary), or null while
+        //                          it loads: its node names are underlined
+        //                          when called, and it feeds completion,
+        //                          parameter hints and the hover card
         //   onOpenNodeDocs(name)   Ctrl/Cmd+click on an underlined call
         //   diagnostics            { source, items: [{ line, message }] }
         //                          or null: errors in `source` (the code
@@ -220,16 +241,18 @@
         //                          diagnostics object replaces them
         //   apiRef                 filled with { focus(), revealLine(n),
         //                          revealDiagnostic(i) }
-        function SlxCodeEditor({ value, onChange, onSubmit, readOnly, placeholder, stdlibFunctions, onOpenNodeDocs, diagnostics, apiRef }) {
+        function SlxCodeEditor({ value, onChange, onSubmit, readOnly, placeholder, library, onOpenNodeDocs, diagnostics, apiRef }) {
             const taRef = React.useRef(null);
             const gutterRef = React.useRef(null);
             const backdropRef = React.useRef(null);
             const codeClipRef = React.useRef(null);
             const codeRef = React.useRef(null);
 
-            const highlighted = React.useMemo(
-                () => ({ __html: highlightSlx(value, stdlibFunctions) }),
-                [value, stdlibFunctions]);
+            const stdlibNames = library ? library.names : null;
+            const tokens = React.useMemo(() => tokenizeSlx(value, stdlibNames), [value, stdlibNames]);
+            const tokensRef = React.useRef(null);
+            tokensRef.current = { text: value, tokens };
+            const highlighted = React.useMemo(() => ({ __html: highlightSlx(value, tokens) }), [value, tokens]);
 
             // Where each diagnostic sits in the current text, as
             // { start, end, item } character ranges: placed on its line in
@@ -297,7 +320,11 @@
             React.useEffect(() => {
                 const ta = taRef.current;
                 if (!ta) return;
-                const onSelection = () => { if (document.activeElement === ta) updateCaret(); };
+                const onSelection = () => {
+                    if (document.activeElement !== ta) return;
+                    updateCaret();
+                    refreshAssistRef.current({ kind: 'caret' });
+                };
                 ta.addEventListener('selectionchange', onSelection);
                 document.addEventListener('selectionchange', onSelection);
                 return () => {
@@ -377,7 +404,10 @@
             React.useEffect(() => {
                 const ta = taRef.current;
                 if (!ta) return;
-                const ro = new ResizeObserver(syncScroll);
+                const ro = new ResizeObserver(() => {
+                    syncScroll();
+                    placeAssistRef.current();
+                });
                 ro.observe(ta);
                 return () => ro.disconnect();
             }, []);
@@ -392,12 +422,232 @@
                 // A value swap can also move scrollTop without a scroll
                 // event reaching the other layers.
                 syncScroll();
+                // How the text changed, noted by onChange; nothing noted
+                // means it was replaced from outside.
+                refreshAssist(pendingAssistRef.current || { kind: 'external' });
+                pendingAssistRef.current = null;
             }, [value]);
 
             const emitChange = (text) => {
                 emittedRef.current = text;
                 onChange(text);
             };
+
+            // ---- Completion and parameter hints (VS Code style) ----------
+            // completion: the open suggestion list, for the word starting at
+            //   wordStart: { wordStart, typed, context, explicit, items (all
+            //   offered), entries (matching, best first), index }
+            // hints: parameter hints for the call around the caret:
+            //   { ctx (slxCallContext), sigs, index, manual (stepped to by
+            //   hand, so kept), active, description }
+            // Both are recomputed from the text and caret (refreshAssist)
+            // after every edit and caret move, and mirrored in refs for the
+            // event handlers in between renders.
+            const [completion, setCompletion] = React.useState(null);
+            const [hints, setHints] = React.useState(null);
+            const completionRef = React.useRef(null);
+            const hintsRef = React.useRef(null);
+            const setAssist = (nextCompletion, nextHints) => {
+                completionRef.current = nextCompletion;
+                hintsRef.current = nextHints;
+                setCompletion(nextCompletion);
+                setHints(nextHints);
+            };
+            // How onChange saw the text change, for the layout effect
+            // above to act on; programmaticRef marks this editor's own
+            // insertions (a picked suggestion), which trigger nothing.
+            const pendingAssistRef = React.useRef(null);
+            const programmaticRef = React.useRef(false);
+            // Tokens and declared symbols of the text the assists last
+            // looked at (the render's tokens when the text is the same).
+            const assistDataRef = React.useRef({ text: null, tokens: null, symbols: null });
+            const assistData = (text) => {
+                if (assistDataRef.current.text !== text) {
+                    const rendered = tokensRef.current;
+                    assistDataRef.current = {
+                        text, symbols: null,
+                        tokens: rendered.text === text ? rendered.tokens : tokenizeSlx(text, stdlibNames),
+                    };
+                }
+                return assistDataRef.current;
+            };
+            const symbolsOf = (data) => data.symbols || (data.symbols = slxFileSymbols(data.text, data.tokens));
+            // A function's signatures: the code's own definitions, then the
+            // library's. Null if neither knows it.
+            const lookupFunction = (name, data) => {
+                const own = symbolsOf(data).functions.get(name) || [];
+                const lib = library ? library.functions.get(name) : null;
+                const sigs = own.concat(lib ? lib.sigs : []);
+                return sigs.length ? { sigs, description: lib ? lib.description : '' } : null;
+            };
+            const filterCompletion = (base, typed) => ({
+                ...base, typed, index: 0,
+                entries: slxFilterCompletions(base.items, typed).slice(0, 200),
+            });
+
+            // trigger.kind: 'word' (typed a letter, digit or _), 'char'
+            // (typed trigger.char), 'delete', 'edit' (anything else),
+            // 'caret' (moved), 'external' (text replaced from outside),
+            // 'complete' (Ctrl+Space), 'hints' (Ctrl+Shift+Space).
+            const refreshAssist = (trigger) => {
+                const ta = taRef.current;
+                if (!ta || readOnly || trigger.kind === 'external' || document.activeElement !== ta) {
+                    if (completionRef.current || hintsRef.current) setAssist(null, null);
+                    return;
+                }
+                const text = ta.value;
+                const caret = ta.selectionStart;
+                const collapsed = caret === ta.selectionEnd;
+                const data = assistData(text);
+
+                // Suggestions open as a word is typed (or on Ctrl+Space),
+                // follow it as it grows or shrinks, and close once the caret
+                // leaves it or nothing matches.
+                let comp = completionRef.current;
+                const explicit = trigger.kind === 'complete';
+                let wordStart = caret;
+                while (wordStart > 0 && /\w/.test(text[wordStart - 1])) wordStart--;
+                const typed = text.slice(wordStart, caret);
+                if (!collapsed || /^\d/.test(typed)) {
+                    comp = null;
+                } else if (comp && !explicit) {
+                    if (wordStart !== comp.wordStart || (!typed && !comp.explicit)) comp = null;
+                    else if (typed !== comp.typed) comp = filterCompletion(comp, typed);
+                } else if (explicit || (trigger.kind === 'word' && typed)) {
+                    const context = slxCompletionContext(text, data.tokens, wordStart, explicit);
+                    comp = context ? filterCompletion({
+                        wordStart, context, explicit,
+                        items: slxCompletionItems(context, library, context === 'code' ? symbolsOf(data) : null),
+                    }, typed) : null;
+                }
+                if (comp && !comp.entries.length && !comp.explicit) comp = null;
+
+                // Hints open on `(` or `,` in a known call (or on
+                // Ctrl+Shift+Space) and follow the caret until it leaves
+                // every known call.
+                let help = hintsRef.current;
+                const wantHints = trigger.kind === 'hints'
+                    || (trigger.kind === 'char' && (trigger.char === '(' || trigger.char === ','));
+                if (help || wantHints) {
+                    const ctx = collapsed ? slxCallContext(text, data.tokens, caret) : null;
+                    const fn = ctx && !ctx.method ? lookupFunction(ctx.name, data) : null;
+                    if (!fn) {
+                        help = null;
+                    } else {
+                        const same = !!help && help.ctx.nameStart === ctx.nameStart && help.ctx.name === ctx.name;
+                        const manual = same && help.manual && help.sigs.length === fn.sigs.length;
+                        const index = manual ? help.index : slxPickSignature(fn.sigs, ctx);
+                        const active = slxActiveParam(fn.sigs[index], ctx);
+                        const unchanged = same && help.index === index && help.active === active
+                            && help.ctx.argIndex === ctx.argIndex && help.ctx.argName === ctx.argName
+                            && help.ctx.template === ctx.template
+                            && help.sigs.length === fn.sigs.length && help.description === fn.description;
+                        if (!unchanged) help = { ctx, sigs: fn.sigs, index, manual, active, description: fn.description };
+                    }
+                }
+                if (comp !== completionRef.current || help !== hintsRef.current) setAssist(comp, help);
+            };
+            const refreshAssistRef = React.useRef(refreshAssist);
+            refreshAssistRef.current = refreshAssist;
+
+            const acceptCompletion = (item) => {
+                const ta = taRef.current;
+                const comp = completionRef.current;
+                if (!ta || !comp) return;
+                setAssist(null, hintsRef.current);
+                ta.setSelectionRange(comp.wordStart, ta.selectionStart);
+                programmaticRef.current = true;
+                insertText(item.label);
+                programmaticRef.current = false;
+            };
+            const cycleHints = (step) => {
+                const help = hintsRef.current;
+                if (!help) return;
+                const n = help.sigs.length;
+                const index = (help.index + step + n) % n;
+                setAssist(completionRef.current, { ...help, index, manual: true, active: slxActiveParam(help.sigs[index], help.ctx) });
+            };
+
+            // Where the popups go, in viewport pixels: the list under the
+            // word being completed, the hints above the caret's line (or
+            // under it, near the top of the screen, with the list below
+            // them). Hidden while their line is scrolled out of view.
+            // Recomputed on every change, scroll and resize.
+            const completionElRef = React.useRef(null);
+            const hintsElRef = React.useRef(null);
+            const charWidthRef = React.useRef(0);
+            const offsetPoint = (text, offset) => {
+                const ta = taRef.current;
+                if (!charWidthRef.current) {
+                    const probe = document.createElement('span');
+                    probe.className = CODE_TEXT_CLASS + ' slx-input';
+                    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;';
+                    probe.textContent = 'x'.repeat(100);
+                    ta.parentNode.appendChild(probe);
+                    charWidthRef.current = probe.getBoundingClientRect().width / 100 || 7;
+                    probe.remove();
+                }
+                let line = 0;
+                for (let i = text.indexOf('\n'); i !== -1 && i < offset; i = text.indexOf('\n', i + 1)) line++;
+                let col = 0;
+                for (let i = text.lastIndexOf('\n', offset - 1) + 1; i < offset; i++) {
+                    col = text[i] === '\t' ? (Math.floor(col / CODE_TAB_SIZE) + 1) * CODE_TAB_SIZE : col + 1;
+                }
+                const box = ta.getBoundingClientRect();
+                const areaTop = box.top + ta.clientTop;
+                const top = areaTop + CODE_PAD_Y + line * CODE_LINE_HEIGHT - ta.scrollTop;
+                return {
+                    left: box.left + ta.clientLeft + parseFloat(getComputedStyle(ta).paddingLeft) + col * charWidthRef.current - ta.scrollLeft,
+                    top, bottom: top + CODE_LINE_HEIGHT,
+                    visible: top >= areaTop - 1 && top + CODE_LINE_HEIGHT <= areaTop + ta.clientHeight + 1,
+                };
+            };
+            const placeAssist = () => {
+                const ta = taRef.current;
+                const comp = completionRef.current;
+                const help = hintsRef.current;
+                if (!ta || (!comp && !help)) return;
+                const margin = 8;
+                const place = (el, left, top, visible) => {
+                    el.style.left = Math.max(margin, Math.min(left, window.innerWidth - margin - el.offsetWidth)) + 'px';
+                    el.style.top = top + 'px';
+                    el.style.visibility = visible ? '' : 'hidden';
+                };
+                const caretPt = offsetPoint(ta.value, ta.selectionStart);
+                let hintsBelow = null; // the hints' bottom edge, when they're under the line
+                const hintsEl = hintsElRef.current;
+                if (help && hintsEl) {
+                    let top = caretPt.top - 2 - hintsEl.offsetHeight;
+                    if (top < margin) {
+                        top = caretPt.bottom + 2;
+                        hintsBelow = top + hintsEl.offsetHeight;
+                    }
+                    place(hintsEl, offsetPoint(ta.value, help.ctx.nameStart).left, top, caretPt.visible);
+                }
+                const listEl = completionElRef.current;
+                if (comp && listEl) {
+                    let top = hintsBelow != null ? hintsBelow + 2 : caretPt.bottom + 2;
+                    if (top + listEl.offsetHeight > window.innerHeight - margin && hintsBelow == null) {
+                        top = Math.max(margin, caretPt.top - 2 - listEl.offsetHeight);
+                    }
+                    // Line the labels up with the word (past the kind badge).
+                    place(listEl, offsetPoint(ta.value, comp.wordStart).left - 25, top, caretPt.visible);
+                }
+            };
+            const placeAssistRef = React.useRef(placeAssist);
+            placeAssistRef.current = placeAssist;
+            // Placed again whenever they change size: their content changes,
+            // and the Tailwind CDN styles a class it hasn't seen before
+            // only after the element shows (a first measurement can be
+            // before its max-width applies).
+            React.useLayoutEffect(() => {
+                placeAssist();
+                const els = [completionElRef.current, hintsElRef.current].filter(Boolean);
+                if (!els.length) return undefined;
+                const ro = new ResizeObserver(() => placeAssistRef.current());
+                els.forEach((el) => ro.observe(el));
+                return () => ro.disconnect();
+            }, [completion, hints]);
 
             // The underlined standard library call under a viewport point:
             // its span in the highlighted layer, or null. The textarea
@@ -434,19 +684,19 @@
 
             // Link hover, VS Code style: while Ctrl/Cmd is held, the call
             // under the pointer takes the link colour and the pointer
-            // cursor; resting on one shows a tooltip explaining the click.
-            // Plain DOM on the highlighted layer, no re-render: it tracks
-            // every mouse move. The tooltip is state, set only as it shows
-            // or hides.
+            // cursor; resting on one shows its hover card (signatures,
+            // description, how to open its docs). Plain DOM on the
+            // highlighted layer, no re-render: it tracks every mouse move.
+            // The card is state, set only as it shows or hides.
             const hoverRef = React.useRef({
                 x: 0, y: 0, inside: false, modifier: false, link: null,
-                // The call the tooltip is for (pending or shown), its delay
+                // The call the card is for (pending or shown), its delay
                 // timer, whether it's showing, and whether it's held back
                 // until the pointer moves (after a click or a keystroke,
                 // like native tooltips).
                 tipSpan: null, tipTimer: null, tipShown: false, tipSuppressed: false,
             });
-            const [tip, setTip] = React.useState(null); // { name, left, top, above }
+            const [tip, setTip] = React.useState(null); // { name, left, lineTop, lineBottom }
             const tipRef = React.useRef(null);
             const hideTip = () => {
                 const h = hoverRef.current;
@@ -458,16 +708,14 @@
                     setTip(null);
                 }
             };
-            // Over the call's line, or under it when that would leave the
-            // editor; left-aligned with the call.
+            // Anchored to the call's line box (placed by the layout effect
+            // below, once its size is known).
             const showTip = (span) => {
-                const clip = codeClipRef.current;
-                if (!span.isConnected || !clip) return;
+                if (!span.isConnected) return;
                 const r = span.getBoundingClientRect();
                 const pad = (CODE_LINE_HEIGHT - r.height) / 2;
-                const above = r.top - pad - 28 >= clip.getBoundingClientRect().top;
                 hoverRef.current.tipShown = true;
-                setTip({ name: span.dataset.node, left: r.left, top: above ? r.top - pad - 2 : r.bottom + pad + 2, above });
+                setTip({ name: span.dataset.node, left: r.left, lineTop: r.top - pad, lineBottom: r.bottom + pad });
             };
             // Pointer now over `span` (or none). Once a tooltip is showing,
             // moving straight onto another call switches it at once.
@@ -482,12 +730,22 @@
                 if (warm) showTip(span);
                 else h.tipTimer = setTimeout(() => showTip(span), CODE_HOVER_DELAY_MS);
             };
-            // Keep a wide tooltip on screen.
+            // Over the call's line (under it when there's no room above),
+            // left-aligned with the call, kept on screen; placed again as
+            // it changes size, like the other popups (placeAssist).
             React.useLayoutEffect(() => {
                 const el = tipRef.current;
-                if (!el) return;
-                const overflow = el.getBoundingClientRect().right - (window.innerWidth - 8);
-                if (overflow > 0) el.style.left = Math.max(8, tip.left - overflow) + 'px';
+                if (!el || !tip) return undefined;
+                const place = () => {
+                    let top = tip.lineTop - 2 - el.offsetHeight;
+                    if (top < 8) top = tip.lineBottom + 2;
+                    el.style.left = Math.max(8, Math.min(tip.left, window.innerWidth - 8 - el.offsetWidth)) + 'px';
+                    el.style.top = top + 'px';
+                };
+                place();
+                const ro = new ResizeObserver(place);
+                ro.observe(el);
+                return () => ro.disconnect();
             }, [tip]);
             const updateHover = () => {
                 const h = hoverRef.current;
@@ -578,11 +836,66 @@
                 }
             };
 
+            // Keys for the open suggestion list and parameter hints, first.
+            // True when the key was theirs.
+            const assistKeyDown = (e) => {
+                const comp = completionRef.current;
+                const help = hintsRef.current;
+                const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+                if (e.key === ' ' && e.ctrlKey && !e.altKey && !e.metaKey) {
+                    refreshAssist({ kind: e.shiftKey ? 'hints' : 'complete' });
+                    return true;
+                }
+                if (comp) {
+                    const steps = { ArrowDown: 1, ArrowUp: -1, PageDown: 8, PageUp: -8 };
+                    if (plain && steps[e.key]) {
+                        const n = comp.entries.length;
+                        if (n) {
+                            const step = steps[e.key];
+                            const index = Math.abs(step) === 1
+                                ? (comp.index + step + n) % n
+                                : Math.max(0, Math.min(n - 1, comp.index + step));
+                            setAssist({ ...comp, index }, help);
+                        }
+                        return true;
+                    }
+                    if (plain && (e.key === 'Enter' || e.key === 'Tab')) {
+                        const entry = comp.entries[comp.index];
+                        // Enter after a word typed out in full is a new line.
+                        if (entry && !(e.key === 'Enter' && entry.item.label === comp.typed)) {
+                            acceptCompletion(entry.item);
+                            return true;
+                        }
+                        setAssist(null, help);
+                        return false; // on to the new line / tab
+                    }
+                    if (e.key === 'Escape') {
+                        setAssist(null, help);
+                        return true;
+                    }
+                }
+                if (help) {
+                    if (plain && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && help.sigs.length > 1) {
+                        cycleHints(e.key === 'ArrowDown' ? 1 : -1);
+                        return true;
+                    }
+                    if (e.key === 'Escape') {
+                        setAssist(completionRef.current, null);
+                        return true;
+                    }
+                }
+                return false;
+            };
+
             const onKeyDown = (e) => {
                 // Typing hides the tooltip; Ctrl/Cmd (the link modifier)
                 // and the other modifiers on their own don't.
                 if (e.key !== 'Control' && e.key !== 'Meta' && e.key !== 'Shift' && e.key !== 'Alt') suppressTip();
                 if (e.nativeEvent.isComposing) return;
+                if (!readOnly && assistKeyDown(e)) {
+                    e.preventDefault();
+                    return;
+                }
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                     e.preventDefault();
                     if (onSubmit) onSubmit();
@@ -643,9 +956,24 @@
                         <textarea
                             ref={taRef}
                             value={value}
-                            onChange={(e) => emitChange(e.target.value)}
+                            onChange={(e) => {
+                                // Note what kind of edit this was for the
+                                // assists (refreshAssist, after the render).
+                                const ne = e.nativeEvent || {};
+                                let trigger = { kind: 'edit' };
+                                if (programmaticRef.current) {
+                                    // A picked suggestion: triggers nothing.
+                                } else if (ne.inputType === 'insertText' && typeof ne.data === 'string' && ne.data.length === 1) {
+                                    trigger = /\w/.test(ne.data) ? { kind: 'word' } : { kind: 'char', char: ne.data };
+                                } else if (/^delete/.test(ne.inputType || '')) {
+                                    trigger = { kind: 'delete' };
+                                }
+                                pendingAssistRef.current = trigger;
+                                emitChange(e.target.value);
+                            }}
                             onKeyDown={onKeyDown}
-                            onScroll={() => { syncScroll(); hideTip(); updateHover(); }}
+                            onBlur={() => setAssist(null, null)}
+                            onScroll={() => { syncScroll(); hideTip(); updateHover(); placeAssist(); }}
                             onMouseMove={onMouseMove}
                             onMouseLeave={onMouseLeave}
                             onMouseDown={onMouseDown}
@@ -683,18 +1011,19 @@
                             </div>
                         </div>
                     </div>
-                    {/* Portaled so the panel's overflow can't clip it (and
-                        into the fullscreen element when there is one). */}
-                    {tip && ReactDOM.createPortal(
-                        <div
-                            ref={tipRef}
-                            role="tooltip"
-                            className="fixed z-[80] pointer-events-none px-2 py-1 rounded border border-gray-600 bg-gray-800 shadow-lg text-[11px] text-gray-300 whitespace-nowrap"
-                            style={{ left: tip.left, top: tip.top, transform: tip.above ? 'translateY(-100%)' : undefined }}
-                        >
-                            <span className="font-mono text-gray-100">{tip.name}</span>: Ctrl/Cmd + click to open its documentation
-                        </div>,
-                        fullscreenPortalRoot())}
+                    {/* The popups (js/graph/slx-assist.jsx), portaled out of
+                        the panel and placed by placeAssist and the hover
+                        card's layout effect. */}
+                    {tip && <SlxHoverCard name={tip.name} fn={library ? library.functions.get(tip.name) : null} elRef={tipRef} />}
+                    {hints && <SlxParameterHints help={hints} onCycle={cycleHints} elRef={hintsElRef} />}
+                    {completion && (
+                        <SlxCompletionList
+                            entries={completion.entries}
+                            index={completion.index}
+                            onPick={(i) => acceptCompletion(completion.entries[i].item)}
+                            elRef={completionElRef}
+                        />
+                    )}
                 </div>
             );
         }
@@ -704,12 +1033,12 @@
         // `busy` is 'compile' | 'decompile' | null; `message` is
         // { kind: 'ok' | 'error', text, source } | null, `source` being set
         // on errors whose line numbers are into that code (mxslc's own
-        // compile errors): those get squiggled. `stdlibFunctions` and
-        // `onOpenNodeDocs` are passed through to SlxCodeEditor. `canvasRef`
-        // is the graph canvas beside the panel, measured so the panel never
-        // crowds it out.
+        // compile errors): those get squiggled. `library` (the function
+        // library, or null while it loads) and `onOpenNodeDocs` are passed
+        // through to SlxCodeEditor. `canvasRef` is the graph canvas beside
+        // the panel, measured so the panel never crowds it out.
         function SlxCodeView({
-            code, modified, busy, message, stdlibFunctions,
+            code, modified, busy, message, library,
             onCodeChange, onCompile, onDecompile, onCollapse, onOpenNodeDocs, canvasRef,
         }) {
             const editorApiRef = React.useRef(null);
@@ -829,7 +1158,7 @@
                                 onSubmit={() => { if (!busy && !loading) onCompile(); }}
                                 readOnly={loading}
                                 placeholder={loading ? '' : 'Write your ShadingLanguageX code then click Compile to build the node graph.'}
-                                stdlibFunctions={stdlibFunctions}
+                                library={library}
                                 onOpenNodeDocs={onOpenNodeDocs}
                                 diagnostics={diagnostics}
                                 apiRef={editorApiRef}
