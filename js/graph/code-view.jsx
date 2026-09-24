@@ -56,6 +56,7 @@
             // Standard library calls are underlined rather than coloured
             // (they'll link to the node's documentation).
             stdlibUnderline: 'rgba(212, 212, 212, 0.5)',
+            error: '#f14c4c', // compile error squiggles
             caret: '#aeafad',
             selection: '#264f78',
         };
@@ -67,12 +68,17 @@
             const st = document.createElement('style');
             st.id = 'slx-syntax-theme';
             st.textContent = [
-                // Both layers: no ligatures, so a token boundary (a span
+                // Every layer: no ligatures, so a token boundary (a span
                 // edge in .slx-code only) can never shape glyphs differently.
-                '.slx-code,.slx-input{font-variant-ligatures:none;font-kerning:none;}',
+                '.slx-code,.slx-input,.slx-marks{font-variant-ligatures:none;font-kerning:none;}',
                 '.slx-code{color:' + t.text + ';}',
                 ...tokenRules,
                 '.slx-code .slx-stdlib{text-decoration:underline;text-decoration-color:' + t.stdlibUnderline + ';text-underline-offset:2px;}',
+                // The squiggle layer's text is invisible, only its wavy
+                // underlines show; offset a little further than the stdlib
+                // underline so the two don't run into each other.
+                '.slx-marks{color:transparent;}',
+                '.slx-marks .slx-error{text-decoration:underline wavy;text-decoration-color:' + t.error + ';text-decoration-thickness:1px;text-decoration-skip-ink:none;text-underline-offset:3px;}',
                 // The textarea keeps the caret and selection; its text is
                 // invisible, the highlighted layer drawn over it shows it.
                 '.slx-input{color:transparent;caret-color:' + t.caret + ';}',
@@ -107,9 +113,11 @@
             return html + escapeCodeHtml(text.slice(at));
         };
 
-        // mxslc diagnostics read "line N: <message>" (1-based).
+        // mxslc diagnostics start a line with "line N: <message>" or
+        // "Scanning error on line N, ..." (1-based). Not "<file>, line N:",
+        // which is a line in some other file.
         const slxErrorLine = (message) => {
-            const m = /\bline (\d+)\b/.exec(message || '');
+            const m = /(?:^|\n)(?:Scanning error on )?line (\d+)\b/.exec(message || '');
             return m ? parseInt(m[1], 10) : null;
         };
 
@@ -125,6 +133,66 @@
             return offset;
         };
 
+        // 1-based `line` of `text` without its leading and trailing
+        // whitespace, as { start, end } (end exclusive); null if the line
+        // doesn't exist or is blank. mxslc reports lines, not columns, so
+        // this is what a squiggle underlines.
+        const lineContentRange = (text, line) => {
+            if (!(line >= 1)) return null;
+            let start = 0;
+            for (let i = 1; i < line; i++) {
+                const next = text.indexOf('\n', start);
+                if (next === -1) return null;
+                start = next + 1;
+            }
+            let end = text.indexOf('\n', start);
+            if (end === -1) end = text.length;
+            while (start < end && /\s/.test(text[start])) start++;
+            while (end > start && /\s/.test(text[end - 1])) end--;
+            return start < end ? { start, end } : null;
+        };
+
+        // Carry ranges ({ start, end, ... }) in `before` over to `after`,
+        // an edit of it, taking the edit as the single span that differs
+        // between their common prefix and suffix. Ranges clear of it
+        // shift; one it cuts into grows or shrinks, but text typed right
+        // at either edge stays outside; one it deletes outright is dropped.
+        const remapRanges = (ranges, before, after) => {
+            if (before === after || !ranges.length) return ranges;
+            const max = Math.min(before.length, after.length);
+            let prefix = 0;
+            while (prefix < max && before.charCodeAt(prefix) === after.charCodeAt(prefix)) prefix++;
+            let suffix = 0;
+            while (suffix < max - prefix
+                && before.charCodeAt(before.length - 1 - suffix) === after.charCodeAt(after.length - 1 - suffix)) suffix++;
+            // before[prefix, oldEnd) became after[prefix, newEnd).
+            const oldEnd = before.length - suffix;
+            const newEnd = after.length - suffix;
+            const delta = newEnd - oldEnd;
+            const out = [];
+            for (const r of ranges) {
+                const start = r.start < prefix ? r.start : r.start >= oldEnd ? r.start + delta : prefix;
+                const end = r.end <= prefix ? r.end : r.end > oldEnd ? r.end + delta : newEnd;
+                if (start < end) out.push({ ...r, start, end });
+            }
+            return out;
+        };
+
+        // The squiggle layer's HTML: the text up to the last mark, with
+        // each mark wrapped in a .slx-error span. Null when there's none.
+        const markupSquiggles = (text, marks) => {
+            if (!marks.length) return null;
+            let html = '';
+            let at = 0;
+            for (const m of [...marks].sort((a, b) => a.start - b.start)) {
+                if (m.start < at) continue; // overlaps the previous one
+                html += escapeCodeHtml(text.slice(at, m.start))
+                    + '<span class="slx-error">' + escapeCodeHtml(text.slice(m.start, m.end)) + '</span>';
+                at = m.end;
+            }
+            return { __html: html };
+        };
+
         // The text surface: a <textarea> whose own text is invisible, with
         // the syntax-highlighted copy drawn over it and the current-line
         // band under it. Editor features such as completion belong HERE so
@@ -135,8 +203,15 @@
         //   readOnly, placeholder
         //   stdlibFunctions        Set of standard library node names
         //                          (underlined when called), or null
-        //   apiRef                 filled with { focus(), revealLine(n) }
-        function SlxCodeEditor({ value, onChange, onSubmit, readOnly, placeholder, stdlibFunctions, apiRef }) {
+        //   diagnostics            { source, items: [{ line, message }] }
+        //                          or null: errors in `source` (the code
+        //                          as compiled), squiggled under their
+        //                          1-based line and carried through any
+        //                          edits made since, until the next
+        //                          diagnostics object replaces them
+        //   apiRef                 filled with { focus(), revealLine(n),
+        //                          revealDiagnostic(i) }
+        function SlxCodeEditor({ value, onChange, onSubmit, readOnly, placeholder, stdlibFunctions, diagnostics, apiRef }) {
             const taRef = React.useRef(null);
             const gutterRef = React.useRef(null);
             const backdropRef = React.useRef(null);
@@ -146,6 +221,35 @@
             const highlighted = React.useMemo(
                 () => ({ __html: highlightSlx(value, stdlibFunctions) }),
                 [value, stdlibFunctions]);
+
+            // Where each diagnostic sits in the current text, as
+            // { start, end, item } character ranges: placed on its line in
+            // the source it was reported for, then remapped through every
+            // edit since (so a squiggle stays on its code as lines are
+            // added above it). Keeps the last result to remap from; safe
+            // to run twice for the same inputs.
+            const marksStateRef = React.useRef({ diagnostics: null, text: '', marks: [] });
+            const marks = React.useMemo(() => {
+                const last = marksStateRef.current;
+                let next;
+                if (last.diagnostics !== diagnostics) {
+                    next = [];
+                    if (diagnostics) {
+                        for (const item of diagnostics.items) {
+                            const range = lineContentRange(diagnostics.source, item.line);
+                            if (range) next.push({ ...range, item });
+                        }
+                        next = remapRanges(next, diagnostics.source, value);
+                    }
+                } else if (last.text !== value) {
+                    next = remapRanges(last.marks, last.text, value);
+                } else {
+                    return last.marks;
+                }
+                marksStateRef.current = { diagnostics, text: value, marks: next };
+                return next;
+            }, [value, diagnostics]);
+            const squiggles = React.useMemo(() => markupSquiggles(value, marks), [value, marks]);
 
             const lineCount = React.useMemo(() => {
                 let n = 1;
@@ -204,20 +308,39 @@
                 () => gutterNumbers.slice(activeLine + 1).map((n) => '\n' + n).join(''),
                 [gutterNumbers, activeLine]);
 
+            // Select [start, end) and scroll its first line to mid-view.
+            const revealRange = (start, end) => {
+                const ta = taRef.current;
+                if (!ta) return;
+                let line = 0;
+                for (let i = ta.value.indexOf('\n'); i !== -1 && i < start; i = ta.value.indexOf('\n', i + 1)) line++;
+                ta.focus();
+                ta.setSelectionRange(start, end);
+                ta.scrollTop = Math.max(0, line * CODE_LINE_HEIGHT - ta.clientHeight / 2);
+                updateCaret();
+            };
+            const revealLine = (line) => {
+                const ta = taRef.current;
+                if (!ta) return;
+                const start = lineStartOffset(ta.value, line);
+                let end = ta.value.indexOf('\n', start);
+                if (end === -1) end = ta.value.length;
+                revealRange(start, end);
+            };
             if (apiRef) {
                 apiRef.current = {
                     focus: () => { if (taRef.current) taRef.current.focus(); },
-                    // Select the whole line and scroll it to mid-view.
-                    revealLine: (line) => {
-                        const ta = taRef.current;
-                        if (!ta) return;
-                        const start = lineStartOffset(ta.value, line);
-                        let end = ta.value.indexOf('\n', start);
-                        if (end === -1) end = ta.value.length;
-                        ta.focus();
-                        ta.setSelectionRange(start, end);
-                        ta.scrollTop = Math.max(0, (line - 1) * CODE_LINE_HEIGHT - ta.clientHeight / 2);
-                        updateCaret();
+                    // Select the whole line.
+                    revealLine,
+                    // Select diagnostics.items[index]'s squiggled code
+                    // wherever edits have moved it; its reported line if
+                    // that code has since been deleted.
+                    revealDiagnostic: (index) => {
+                        const item = diagnostics && diagnostics.items[index];
+                        if (!item) return;
+                        const mark = marks.find((m) => m.item === item);
+                        if (mark) revealRange(mark.start, mark.end);
+                        else revealLine(item.line);
                     },
                 };
             }
@@ -225,9 +348,10 @@
             // The other layers follow the textarea's scroll: the gutter by
             // scrollTop (it only scrolls vertically), the band by a
             // vertical transform (it spans the full width regardless of
-            // horizontal scroll) and the highlighted code by a transform in
-            // both axes. The code layer is also clipped to the textarea's
-            // client area so it never paints over the scrollbars.
+            // horizontal scroll) and the highlighted code (with its
+            // squiggles) by a transform in both axes. The code layer is
+            // also clipped to the textarea's client area so it never paints
+            // over the scrollbars.
             const syncScroll = () => {
                 const ta = taRef.current;
                 if (!ta) return;
@@ -355,12 +479,25 @@
                             style={{ paddingTop: CODE_PAD_Y, paddingBottom: CODE_PAD_Y, tabSize: CODE_TAB_SIZE }}
                         />
                         <div ref={codeClipRef} aria-hidden="true" className="absolute left-0 top-0 overflow-hidden pointer-events-none">
-                            <pre
-                                ref={codeRef}
-                                className={CODE_TEXT_CLASS + ' slx-code m-0 px-2 whitespace-pre'}
-                                style={{ paddingTop: CODE_PAD_Y, tabSize: CODE_TAB_SIZE }}
-                                dangerouslySetInnerHTML={highlighted}
-                            />
+                            {/* The highlighted code, and over it the error
+                                squiggles: the same text laid out the same
+                                way, invisible but for its wavy underlines.
+                                A layer of its own so a squiggle never has
+                                to split or nest in the token spans. */}
+                            <div ref={codeRef} className="relative">
+                                <pre
+                                    className={CODE_TEXT_CLASS + ' slx-code m-0 px-2 whitespace-pre'}
+                                    style={{ paddingTop: CODE_PAD_Y, tabSize: CODE_TAB_SIZE }}
+                                    dangerouslySetInnerHTML={highlighted}
+                                />
+                                {squiggles && (
+                                    <pre
+                                        className={CODE_TEXT_CLASS + ' slx-marks absolute left-0 top-0 m-0 px-2 whitespace-pre'}
+                                        style={{ paddingTop: CODE_PAD_Y, tabSize: CODE_TAB_SIZE }}
+                                        dangerouslySetInnerHTML={squiggles}
+                                    />
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -370,7 +507,9 @@
         // The docked panel: header, editor, status line and the two
         // actions. `code` is null until the first decompile lands.
         // `busy` is 'compile' | 'decompile' | null; `message` is
-        // { kind: 'ok' | 'error', text } | null. `stdlibFunctions` is passed
+        // { kind: 'ok' | 'error', text, source } | null, `source` being set
+        // on errors whose line numbers are into that code (mxslc's own
+        // compile errors): those get squiggled. `stdlibFunctions` is passed
         // through to SlxCodeEditor. `canvasRef` is the graph canvas beside
         // the panel, measured so the panel never crowds it out.
         function SlxCodeView({
@@ -379,7 +518,14 @@
         }) {
             const editorApiRef = React.useRef(null);
             const loading = code == null;
-            const errorLine = message && message.kind === 'error' ? slxErrorLine(message.text) : null;
+            // A new object only when the message changes: the editor keeps
+            // carrying the squiggle through edits until then.
+            const diagnostics = React.useMemo(() => {
+                if (!message || message.kind !== 'error' || message.source == null) return null;
+                const line = slxErrorLine(message.text);
+                return line != null ? { source: message.source, items: [{ line, message: message.text }] } : null;
+            }, [message]);
+            const errorLine = diagnostics ? diagnostics.items[0].line : null;
 
             // Width: the user's preferred width (seeded from localStorage,
             // set by dragging the handle on the panel's right edge, one
@@ -488,6 +634,7 @@
                                 readOnly={loading}
                                 placeholder={loading ? '' : 'Write your ShadingLanguageX code then click Compile to build the node graph.'}
                                 stdlibFunctions={stdlibFunctions}
+                                diagnostics={diagnostics}
                                 apiRef={editorApiRef}
                             />
                             {loading && (
@@ -503,7 +650,7 @@
                                     {errorLine != null && (
                                         <button
                                             type="button"
-                                            onClick={() => editorApiRef.current && editorApiRef.current.revealLine(errorLine)}
+                                            onClick={() => editorApiRef.current && editorApiRef.current.revealDiagnostic(0)}
                                             className="block mt-1 underline decoration-dotted underline-offset-2 hover:text-red-200"
                                         >
                                             Go to line {errorLine}

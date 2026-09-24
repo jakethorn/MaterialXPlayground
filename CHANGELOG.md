@@ -14,7 +14,7 @@ Notable changes to MaterialX Playground, newest first. Versions are calendar-bas
 
 ### Node Graph Editor
 
-- ShadingLanguageX code view: the document decompiled to editable SLX code in a panel docked beside the node list. Compile regenerates the node graph from the code (undoable), and Decompile refreshes the code from the graph. Not available in the VS Code extension.
+- ShadingLanguageX code view: the document decompiled to editable SLX code in a panel docked beside the node list. Compile regenerates the node graph from the code (undoable), and Decompile refreshes the code from the graph. The code is syntax highlighted, and a compile error squiggles the line it's on. Not available in the VS Code extension.
 
 ## 2026.8.0 (2026-08-01)
 

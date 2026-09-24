@@ -509,7 +509,7 @@
             // panel flags "modified" while slxCode differs from it.
             const [slxBaseline, setSlxBaseline] = React.useState(null);
             const [slxBusy, setSlxBusy] = React.useState(null); // 'compile' | 'decompile' | null
-            const [slxMessage, setSlxMessage] = React.useState(null); // { kind: 'ok' | 'error', text } | null
+            const [slxMessage, setSlxMessage] = React.useState(null); // { kind: 'ok' | 'error', text, source? } | null (see SlxCodeView)
             // Monotonic run id: a compile/decompile resolving after a newer
             // one started (or after a different document loaded) is dropped.
             const slxRunRef = React.useRef(0);
@@ -3747,8 +3747,10 @@
                 const id = ++slxRunRef.current;
                 setSlxBusy('compile');
                 setSlxMessage(null);
+                let compiled = false;
                 try {
                     const xml = await compileMxslcSource(source, null, 'the code view');
+                    compiled = true;
                     const p = await parseMtlxDocument(xml);
                     if (slxRunRef.current !== id) return;
                     // Land a still-debounced earlier edit as its own undo
@@ -3772,7 +3774,9 @@
                     setSlxMessage({ kind: 'ok', text: 'Compiled into the node graph.' });
                 } catch (e) {
                     if (slxRunRef.current !== id) return;
-                    setSlxMessage({ kind: 'error', text: errMsg(e) });
+                    // mxslc's own errors carry line numbers into `source`,
+                    // which the code view squiggles; later ones don't.
+                    setSlxMessage({ kind: 'error', text: errMsg(e), source: compiled ? null : source });
                 } finally {
                     if (slxRunRef.current === id) setSlxBusy(null);
                 }
