@@ -984,6 +984,7 @@ const slxTargetAvailable = () => typeof window.slxExportStages === 'function' &&
 // decimal under 10s, whole seconds under a minute, "Ymin Xs" past that.
 const formatDecompileDuration = ms => {
   const totalSec = ms / 1000;
+  if (totalSec < 0.1) return 'less than 0.1s';
   if (totalSec < 10) return totalSec.toFixed(1) + 's';
   const wholeSec = Math.round(totalSec);
   if (wholeSec < 60) return wholeSec + 's';
