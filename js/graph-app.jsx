@@ -7095,13 +7095,16 @@
                 }
                 const full = nodeDocsUrl(displayNode.data)
                     + (params.length ? '?' + params.join('&') : '');
-                setDocsDialog({
-                    hash: full.slice(full.indexOf('#')),
-                    fullUrl: full,
-                    label: displayNode.data.category,
-                });
+                showDocsDialog(full, displayNode.data.category);
+            };
+            const showDocsDialog = (full, label) => {
+                setDocsDialog({ hash: full.slice(full.indexOf('#')), fullUrl: full, label });
                 setDocsDialogOpen(true);
             };
+            // The same dialog for a node category alone (the code view's
+            // Ctrl/Cmd+click on a standard library call): a name-only link,
+            // which the docs resolve preferring the standard library.
+            const openCategoryDocs = (category) => showDocsDialog(nodeDocsUrl({ category }), category);
 
             // Header name editing — only real document elements (nodes,
             // nodegraphs, interface inputs, outputs) can be renamed.
@@ -7601,6 +7604,7 @@
                                 onCompile={compileFromCodeView}
                                 onDecompile={decompileToCodeView}
                                 onCollapse={() => setCodeViewOpen(false)}
+                                onOpenNodeDocs={openCategoryDocs}
                                 canvasRef={canvasHostRef}
                             />
                         )}

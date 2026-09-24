@@ -37,6 +37,10 @@
         // VS Code-style current-line band and line number.
         const CODE_CURRENT_LINE_CLASS = 'bg-white/[0.04] border-y border-white/[0.07]';
         const CODE_CURRENT_NUMBER_CLASS = 'text-gray-300';
+        // How long the pointer rests on a standard library call before its
+        // tooltip shows: VS Code's default hover delay. (A native `title`
+        // tooltip waits longer, and a page can't change that.)
+        const CODE_HOVER_DELAY_MS = 300;
 
         // Syntax colours (VS Code Dark+), keyed by js/graph/slx-syntax.jsx
         // token type; types not listed (identifiers, punctuation, user
@@ -53,9 +57,12 @@
             type: '#4ec9b0',
             directive: '#c586c0',
             attribute: '#dcdcaa',
-            // Standard library calls are underlined rather than coloured
-            // (they'll link to the node's documentation).
+            // Standard library calls are underlined rather than coloured:
+            // Ctrl/Cmd+click opens the node's documentation, and while
+            // Ctrl/Cmd is held the one under the pointer takes the link
+            // colour.
             stdlibUnderline: 'rgba(212, 212, 212, 0.5)',
+            link: '#4e94ce',
             error: '#f14c4c', // compile error squiggles
             caret: '#aeafad',
             selection: '#264f78',
@@ -74,6 +81,7 @@
                 '.slx-code{color:' + t.text + ';}',
                 ...tokenRules,
                 '.slx-code .slx-stdlib{text-decoration:underline;text-decoration-color:' + t.stdlibUnderline + ';text-underline-offset:2px;}',
+                '.slx-code .slx-stdlib.slx-link{color:' + t.link + ';text-decoration-color:currentColor;}',
                 // The squiggle layer's text is invisible, only its wavy
                 // underlines show; offset a little further than the stdlib
                 // underline so the two don't run into each other.
@@ -203,6 +211,7 @@
         //   readOnly, placeholder
         //   stdlibFunctions        Set of standard library node names
         //                          (underlined when called), or null
+        //   onOpenNodeDocs(name)   Ctrl/Cmd+click on an underlined call
         //   diagnostics            { source, items: [{ line, message }] }
         //                          or null: errors in `source` (the code
         //                          as compiled), squiggled under their
@@ -211,7 +220,7 @@
         //                          diagnostics object replaces them
         //   apiRef                 filled with { focus(), revealLine(n),
         //                          revealDiagnostic(i) }
-        function SlxCodeEditor({ value, onChange, onSubmit, readOnly, placeholder, stdlibFunctions, diagnostics, apiRef }) {
+        function SlxCodeEditor({ value, onChange, onSubmit, readOnly, placeholder, stdlibFunctions, onOpenNodeDocs, diagnostics, apiRef }) {
             const taRef = React.useRef(null);
             const gutterRef = React.useRef(null);
             const backdropRef = React.useRef(null);
@@ -390,6 +399,173 @@
                 onChange(text);
             };
 
+            // The underlined standard library call under a viewport point:
+            // its span in the highlighted layer, or null. The textarea
+            // takes the pointer, so this goes by the spans' boxes, each
+            // grown to its full line height (no dead gap between lines).
+            // Spans come in text order and never wrap, so their tops never
+            // decrease: binary search for the first one not above the point.
+            const stdlibSpanAt = (x, y) => {
+                const clip = codeClipRef.current;
+                const code = codeRef.current;
+                if (!clip || !code) return null;
+                const box = clip.getBoundingClientRect();
+                if (x < box.left || x >= box.right || y < box.top || y >= box.bottom) return null;
+                const spans = code.querySelectorAll('.slx-stdlib');
+                const lineBox = (span) => {
+                    const r = span.getBoundingClientRect();
+                    const pad = (CODE_LINE_HEIGHT - r.height) / 2;
+                    return { left: r.left, right: r.right, top: r.top - pad, bottom: r.bottom + pad };
+                };
+                let lo = 0;
+                let hi = spans.length;
+                while (lo < hi) {
+                    const mid = (lo + hi) >> 1;
+                    if (lineBox(spans[mid]).bottom <= y) lo = mid + 1;
+                    else hi = mid;
+                }
+                for (let i = lo; i < spans.length; i++) {
+                    const r = lineBox(spans[i]);
+                    if (r.top > y) break;
+                    if (x >= r.left && x < r.right) return spans[i];
+                }
+                return null;
+            };
+
+            // Link hover, VS Code style: while Ctrl/Cmd is held, the call
+            // under the pointer takes the link colour and the pointer
+            // cursor; resting on one shows a tooltip explaining the click.
+            // Plain DOM on the highlighted layer, no re-render: it tracks
+            // every mouse move. The tooltip is state, set only as it shows
+            // or hides.
+            const hoverRef = React.useRef({
+                x: 0, y: 0, inside: false, modifier: false, link: null,
+                // The call the tooltip is for (pending or shown), its delay
+                // timer, whether it's showing, and whether it's held back
+                // until the pointer moves (after a click or a keystroke,
+                // like native tooltips).
+                tipSpan: null, tipTimer: null, tipShown: false, tipSuppressed: false,
+            });
+            const [tip, setTip] = React.useState(null); // { name, left, top, above }
+            const tipRef = React.useRef(null);
+            const hideTip = () => {
+                const h = hoverRef.current;
+                clearTimeout(h.tipTimer);
+                h.tipTimer = null;
+                h.tipSpan = null;
+                if (h.tipShown) {
+                    h.tipShown = false;
+                    setTip(null);
+                }
+            };
+            // Over the call's line, or under it when that would leave the
+            // editor; left-aligned with the call.
+            const showTip = (span) => {
+                const clip = codeClipRef.current;
+                if (!span.isConnected || !clip) return;
+                const r = span.getBoundingClientRect();
+                const pad = (CODE_LINE_HEIGHT - r.height) / 2;
+                const above = r.top - pad - 28 >= clip.getBoundingClientRect().top;
+                hoverRef.current.tipShown = true;
+                setTip({ name: span.dataset.node, left: r.left, top: above ? r.top - pad - 2 : r.bottom + pad + 2, above });
+            };
+            // Pointer now over `span` (or none). Once a tooltip is showing,
+            // moving straight onto another call switches it at once.
+            const scheduleTip = (span) => {
+                const h = hoverRef.current;
+                if (h.tipSuppressed) span = null;
+                if (span === h.tipSpan) return;
+                const warm = h.tipShown;
+                hideTip();
+                if (!span) return;
+                h.tipSpan = span;
+                if (warm) showTip(span);
+                else h.tipTimer = setTimeout(() => showTip(span), CODE_HOVER_DELAY_MS);
+            };
+            // Keep a wide tooltip on screen.
+            React.useLayoutEffect(() => {
+                const el = tipRef.current;
+                if (!el) return;
+                const overflow = el.getBoundingClientRect().right - (window.innerWidth - 8);
+                if (overflow > 0) el.style.left = Math.max(8, tip.left - overflow) + 'px';
+            }, [tip]);
+            const updateHover = () => {
+                const h = hoverRef.current;
+                const ta = taRef.current;
+                const span = onOpenNodeDocs && h.inside ? stdlibSpanAt(h.x, h.y) : null;
+                const link = span && h.modifier ? span : null;
+                if (h.link !== link) {
+                    if (h.link) h.link.classList.remove('slx-link');
+                    if (link) link.classList.add('slx-link');
+                    h.link = link;
+                }
+                if (ta) {
+                    const cursor = link ? 'pointer' : '';
+                    if (ta.style.cursor !== cursor) ta.style.cursor = cursor;
+                }
+                scheduleTip(span);
+            };
+            const updateHoverRef = React.useRef(updateHover);
+            updateHoverRef.current = updateHover;
+            const onMouseMove = (e) => {
+                const h = hoverRef.current;
+                if (e.clientX !== h.x || e.clientY !== h.y) h.tipSuppressed = false;
+                Object.assign(h, { x: e.clientX, y: e.clientY, inside: true, modifier: e.ctrlKey || e.metaKey });
+                updateHover();
+            };
+            const onMouseLeave = () => {
+                hoverRef.current.inside = false;
+                updateHover();
+            };
+            // Hide the tooltip until the pointer next moves.
+            const suppressTip = () => {
+                hoverRef.current.tipSuppressed = true;
+                hideTip();
+            };
+            // Pressing or releasing Ctrl/Cmd over a call (focused or not),
+            // and leaving the window with it held.
+            React.useEffect(() => {
+                const onKey = (e) => {
+                    if (e.key !== 'Control' && e.key !== 'Meta') return;
+                    hoverRef.current.modifier = e.ctrlKey || e.metaKey;
+                    if (hoverRef.current.inside) updateHoverRef.current();
+                };
+                const onBlur = () => {
+                    hoverRef.current.modifier = false;
+                    updateHoverRef.current();
+                };
+                window.addEventListener('keydown', onKey);
+                window.addEventListener('keyup', onKey);
+                window.addEventListener('blur', onBlur);
+                return () => {
+                    window.removeEventListener('keydown', onKey);
+                    window.removeEventListener('keyup', onKey);
+                    window.removeEventListener('blur', onBlur);
+                    clearTimeout(hoverRef.current.tipTimer);
+                };
+            }, []);
+            // New highlighted HTML replaces the spans: find the one under
+            // the pointer again. (onScroll does the same as they move.)
+            React.useLayoutEffect(() => {
+                hoverRef.current.link = null;
+                updateHover();
+            }, [highlighted]);
+
+            // Ctrl/Cmd+click on a call opens its documentation. The
+            // mousedown is swallowed so the caret and selection stay put.
+            // (On macOS Ctrl+click is a right click, so it's Cmd+click.)
+            const linkUnder = (e) => ((e.ctrlKey || e.metaKey) && onOpenNodeDocs ? stdlibSpanAt(e.clientX, e.clientY) : null);
+            const onMouseDown = (e) => {
+                suppressTip();
+                if (e.button === 0 && linkUnder(e)) e.preventDefault();
+            };
+            const onClick = (e) => {
+                const span = e.button === 0 ? linkUnder(e) : null;
+                if (!span) return;
+                e.preventDefault();
+                onOpenNodeDocs(span.dataset.node);
+            };
+
             // execCommand keeps the browser's own undo stack intact (a
             // direct .value write would wipe it) and still fires the input
             // event React's onChange listens for.
@@ -403,6 +579,9 @@
             };
 
             const onKeyDown = (e) => {
+                // Typing hides the tooltip; Ctrl/Cmd (the link modifier)
+                // and the other modifiers on their own don't.
+                if (e.key !== 'Control' && e.key !== 'Meta' && e.key !== 'Shift' && e.key !== 'Alt') suppressTip();
                 if (e.nativeEvent.isComposing) return;
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                     e.preventDefault();
@@ -466,7 +645,11 @@
                             value={value}
                             onChange={(e) => emitChange(e.target.value)}
                             onKeyDown={onKeyDown}
-                            onScroll={syncScroll}
+                            onScroll={() => { syncScroll(); hideTip(); updateHover(); }}
+                            onMouseMove={onMouseMove}
+                            onMouseLeave={onMouseLeave}
+                            onMouseDown={onMouseDown}
+                            onClick={onClick}
                             readOnly={readOnly}
                             placeholder={placeholder}
                             aria-label="ShadingLanguageX code"
@@ -500,6 +683,18 @@
                             </div>
                         </div>
                     </div>
+                    {/* Portaled so the panel's overflow can't clip it (and
+                        into the fullscreen element when there is one). */}
+                    {tip && ReactDOM.createPortal(
+                        <div
+                            ref={tipRef}
+                            role="tooltip"
+                            className="fixed z-[80] pointer-events-none px-2 py-1 rounded border border-gray-600 bg-gray-800 shadow-lg text-[11px] text-gray-300 whitespace-nowrap"
+                            style={{ left: tip.left, top: tip.top, transform: tip.above ? 'translateY(-100%)' : undefined }}
+                        >
+                            <span className="font-mono text-gray-100">{tip.name}</span>: Ctrl/Cmd + click to open its documentation
+                        </div>,
+                        fullscreenPortalRoot())}
                 </div>
             );
         }
@@ -509,12 +704,13 @@
         // `busy` is 'compile' | 'decompile' | null; `message` is
         // { kind: 'ok' | 'error', text, source } | null, `source` being set
         // on errors whose line numbers are into that code (mxslc's own
-        // compile errors): those get squiggled. `stdlibFunctions` is passed
-        // through to SlxCodeEditor. `canvasRef` is the graph canvas beside
-        // the panel, measured so the panel never crowds it out.
+        // compile errors): those get squiggled. `stdlibFunctions` and
+        // `onOpenNodeDocs` are passed through to SlxCodeEditor. `canvasRef`
+        // is the graph canvas beside the panel, measured so the panel never
+        // crowds it out.
         function SlxCodeView({
             code, modified, busy, message, stdlibFunctions,
-            onCodeChange, onCompile, onDecompile, onCollapse, canvasRef,
+            onCodeChange, onCompile, onDecompile, onCollapse, onOpenNodeDocs, canvasRef,
         }) {
             const editorApiRef = React.useRef(null);
             const loading = code == null;
@@ -634,6 +830,7 @@
                                 readOnly={loading}
                                 placeholder={loading ? '' : 'Write your ShadingLanguageX code then click Compile to build the node graph.'}
                                 stdlibFunctions={stdlibFunctions}
+                                onOpenNodeDocs={onOpenNodeDocs}
                                 diagnostics={diagnostics}
                                 apiRef={editorApiRef}
                             />
