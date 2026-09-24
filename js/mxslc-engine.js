@@ -1,8 +1,8 @@
 // js/mxslc-engine.js — ShadingLanguageX (.mxsl) WASM compiler loader.
 //
 // Lazily loads the mxslc WebAssembly bindings (vendor/mxslc/JsMxslc.js,
-// fetched from a pinned ShadingLanguageX GitHub release by `npm run vendor`
-// — see the mxslc entries in scripts/vendor.mjs) and exposes two entry
+// fetched from a pinned ShadingLanguageX GitHub release by `npm run vendor`,
+// see the "mxslc" entry in scripts/vendor-deps.mjs) and exposes two entry
 // points to graph-app.jsx and viewer-app.jsx:
 //
 //   - expandMxsl(), used by ingest() the same way it already uses
@@ -29,34 +29,12 @@
 // is what lets the user disambiguate — no separate UI is needed for .mxsl
 // projects.
 
-let mxslcModulePromise = null;
-
-// Cached, lazy: the WASM module is only fetched the first time a .mxsl
-// file is actually opened (or a ShadingLanguageX export is requested),
-// not on every page load. A failed load is NOT cached, so a transient
-// network blip doesn't permanently break every subsequent attempt for
-// the rest of the session.
-const getMxslcModule = () => {
-    if (!mxslcModulePromise) {
-        // Absolute URL for the same reason as mtlx-engine.js's getMxEnv:
-        // WebKit resolves import() in a classic script against the script
-        // URL, not the document base, which breaks under a <base> tag.
-        // JsMxslc.js is built with -s EXPORT_ES6=1 (it uses `export default`
-        // and import.meta), so unlike mtlx-engine.js's MaterialX loader
-        // there's no classic-<script> fallback: it can only load as a module.
-        const factoryUrl = new URL('./vendor/mxslc/JsMxslc.js', document.baseURI).href;
-        mxslcModulePromise = import(factoryUrl)
-            .then((mod) => mod.default({
-                // .wasm and .data live next to the .js.
-                locateFile: (path) => './vendor/mxslc/' + path,
-            }))
-            .catch((e) => {
-                mxslcModulePromise = null;
-                throw e;
-            });
-    }
-    return mxslcModulePromise;
-};
+// Lazy: the WASM module is only fetched the first time a .mxsl file is
+// actually opened (or a ShadingLanguageX export is requested), not on
+// every page load. MtlxVendor.load caches the result and drops a failed
+// attempt from its own cache, so a transient network blip doesn't
+// permanently break every subsequent call for the rest of the session.
+const getMxslcModule = () => MtlxVendor.load('mxslc');
 
 // Compile one SLX source string to a MaterialX XML string. `files` is an
 // optional plain object mapping a relative path — exactly as it would
@@ -143,7 +121,14 @@ const stripCommonFolderPrefix = (keys) => {
 // "Original" button in the ShadingLanguageX export target) and what it was
 // originally named (rootKey, before it was re-keyed to compiledMtlxKey).
 // Omit it to just expand.
-const expandMxsl = async (map, origins) => {
+//
+// `failures`, if given, is a plain array this function pushes
+// {rootKey, message} onto for every root candidate that failed to
+// compile (message is the first line of the compiler error) — even
+// when other roots in the same drop succeeded. Callers use this to
+// surface a non-fatal warning naming the failed file(s) instead of
+// silently dropping them.
+const expandMxsl = async (map, origins, failures) => {
     const mxslKeys = Object.keys(map).filter((k) => /\.mxsl$/i.test(k));
     if (!mxslKeys.length) return map;
 
@@ -199,8 +184,10 @@ const expandMxsl = async (map, origins) => {
             // Not every root candidate necessarily compiles on its own
             // (e.g. the heuristic above can admit a genuine include as a
             // "root" when it's also never #include'd by anything else in
-            // the drop) — skip it and keep the ones that do.
+            // the drop) — skip it and keep the ones that do, but report
+            // the miss via `failures` so the caller can warn about it.
             lastError = e;
+            if (failures) failures.push({ rootKey, message: ((e && e.message) || String(e)).split('\n')[0] });
         }
     }
 

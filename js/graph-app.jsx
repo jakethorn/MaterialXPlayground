@@ -1415,17 +1415,24 @@
             const ingest = async (map, rootKey, additive) => {
                 setError(null);
                 const mxslOrigins = {}; // populated below, merged into mxslOriginalsRef after the replace/merge decision
+                const mxslFailures = []; // {rootKey, message} for .mxsl roots that failed to compile
                 try {
                     await expandZips(map);
                     // Compile any ShadingLanguageX (.mxsl) files to MaterialX
                     // XML and re-key them as .mtlx, so everything below (root-
                     // document detection, xi:include resolution, texture
                     // binding) treats them exactly like an authored .mtlx.
-                    await expandMxsl(map, mxslOrigins);
+                    await expandMxsl(map, mxslOrigins, mxslFailures);
                 } catch (e) {
                     setError(errMsg(e));
                     return;
                 }
+                // Some .mxsl roots may have compiled while others failed
+                // (expandMxsl only throws when none compile) - appended to
+                // whichever status message this ingest ends up showing.
+                const mxslWarn = mxslFailures.length
+                    ? ' (' + mxslFailures.map((f) => f.rootKey + ': ' + f.message).join('; ') + ')'
+                    : '';
                 const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
                 // Same session semantics as the material viewer: a .mtlx
                 // drop replaces the session (unless none existed yet, or
@@ -1459,7 +1466,7 @@
                 const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
                 setMtlxPaths(mtlx);
                 if (!mtlx.length) {
-                    setStatus('Files received — now drop the .mtlx or .mxsl document itself.');
+                    setStatus('Files received — now drop the .mtlx or .mxsl document itself.' + mxslWarn);
                     return;
                 }
                 if (droppedMtlx.length) {
@@ -1467,19 +1474,22 @@
                         // Added, not loaded: the existing multi-document
                         // dropdown (mtlxPaths) is how the user reaches them.
                         setStatus('Added ' + droppedMtlx.length + ' .mtlx document'
-                            + (droppedMtlx.length === 1 ? '' : 's') + ' to the session, pick one below to switch.');
+                            + (droppedMtlx.length === 1 ? '' : 's') + ' to the session, pick one below to switch.' + mxslWarn);
                         return;
                     }
                     const pick = (rootKey && mtlx.indexOf(rootKey) !== -1)
                         ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
-                    if (pick) loadDocument(pick, merged);
-                    else setStatus('This drop contains several .mtlx files — pick one below.');
+                    if (pick) await loadDocument(pick, merged);
+                    else setStatus('This drop contains several .mtlx files — pick one below.' + mxslWarn);
                 } else if (chosenMtlx) {
-                    loadDocument(chosenMtlx, merged); // includes may now resolve
+                    await loadDocument(chosenMtlx, merged); // includes may now resolve
                 } else {
-                    setStatus('Files added — pick a .mtlx below.');
+                    setStatus('Files added — pick a .mtlx below.' + mxslWarn);
                 }
+                // loadDocument clears status/error on success, so a partial
+                // .mxsl compile failure is surfaced here, after it settles.
+                if (mxslFailures.length) setError('Some .mxsl files did not compile' + mxslWarn);
             };
 
             // ---- VS Code external-edit soft reload ----------------------

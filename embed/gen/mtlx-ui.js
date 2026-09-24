@@ -976,6 +976,12 @@ const copyTextToClipboard = async text => {
   return ok;
 };
 
+// ShadingLanguageX needs js/mxslc-engine.js (never loaded by the embed
+// bundle, see embed/viewer.html) and its vendored compiler (never
+// packaged in the .vsix, see the "mxslc" vendor-deps.mjs entry) - so the
+// target is hidden rather than offered and then failing to generate.
+const slxTargetAvailable = () => typeof window.slxExportStages === 'function' && !window.__MTLX_VSCODE__;
+
 // Shader source export dialog. `generate()` (caller-supplied) does the
 // codegen; `runRef` is a monotonic id so a stale generate() resolving
 // after the user switched targets can't clobber the newer result.
@@ -987,7 +993,8 @@ function ShaderExportDialog({
   generate,
   overlayClassName
 }) {
-  const [targetKey, setTargetKey] = React.useState(() => EXPORT_TARGETS[0] && EXPORT_TARGETS[0].key || '');
+  const exportTargets = React.useMemo(() => EXPORT_TARGETS.filter(t => t.key !== 'slx' || slxTargetAvailable()), []);
+  const [targetKey, setTargetKey] = React.useState(() => exportTargets[0] && exportTargets[0].key || '');
   const [matIndex, setMatIndex] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
@@ -1006,7 +1013,7 @@ function ShaderExportDialog({
   // dialog has no unsaved input to preserve across a stray re-render).
   React.useEffect(() => {
     if (!open) return;
-    setTargetKey(EXPORT_TARGETS[0] && EXPORT_TARGETS[0].key || '');
+    setTargetKey(exportTargets[0] && exportTargets[0].key || '');
     setMatIndex(Math.max(0, Math.min(initialIndex, renderables.length - 1)));
     setStages(null);
     setError(null);
@@ -1053,7 +1060,7 @@ function ShaderExportDialog({
   };
   const handleDownload = async () => {
     if (!stages) return;
-    const target = EXPORT_TARGETS.find(t => t.key === targetKey);
+    const target = exportTargets.find(t => t.key === targetKey);
     const matName = renderables[matIndex] && renderables[matIndex].name || 'material';
     const base = (matName + '_' + targetKey).replace(/[^\w.-]+/g, '_');
     if (stages.length === 1) {
@@ -1110,7 +1117,7 @@ function ShaderExportDialog({
     className: "flex items-center gap-1.5 text-[11px] text-gray-400"
   }, /*#__PURE__*/React.createElement("span", null, "Target"), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: targetKey,
-    options: EXPORT_TARGETS.map(t => ({
+    options: exportTargets.map(t => ({
       value: t.key,
       label: t.label
     })),

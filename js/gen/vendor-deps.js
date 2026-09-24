@@ -42,6 +42,17 @@ window.MTLX_VENDOR_DEPS = {
     "version": "0.16.47",
     "licenseUrl": "https://github.com/KaTeX/KaTeX/blob/HEAD/LICENSE"
   },
+  "mxslc": {
+    "dir": "mxslc",
+    "name": "ShadingLanguageX compiler (mxslc)",
+    "version": "0.3.0",
+    "licenseUrl": "https://github.com/jakethorn/ShadingLanguageX/blob/mxslcxx-0.3.0/LICENSE",
+    "module": {
+      "entry": "JsMxslc.js",
+      "kind": "emscripten-esm"
+    },
+    "vscode": false
+  },
   "pako": {
     "dir": "pako",
     "name": "pako",

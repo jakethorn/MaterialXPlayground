@@ -176,4 +176,18 @@ export const VENDOR_DEPS = [
     },
     license: { url: "https://github.com/joaovbs96/USDBindings/releases/tag/v{version}", file: "LICENSE" },
   },
+  {
+    id: "mxslc",
+    name: "ShadingLanguageX compiler (mxslc)",
+    version: "0.3.0",
+    source: {
+      zip: "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-{version}/mxslc_JsMxslc_package.zip",
+      sha256: "390e23d6e21a7a112a2e6f5133ecd3394b7d44d6c5dbcf6cd5b40062768ba20a",
+    },
+    // The release zip ships no LICENSE file yet, so no license.file here.
+    license: { url: "https://github.com/jakethorn/ShadingLanguageX/blob/mxslcxx-{version}/LICENSE" },
+    fetchOnly: true,
+    vscode: false,
+    module: { entry: "JsMxslc.js", kind: "emscripten-esm" },
+  },
 ];

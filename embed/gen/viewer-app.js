@@ -621,7 +621,16 @@ function MaterialViewerApp({
   // from one (mxslOriginal, set in loadDocument()); "Decompiled"
   // decompiles the as-loaded XML, which is exactly what's on
   // screen since the viewer never edits the document.
-  const generateSlxExportStages = () => slxExportStages(loadedRef.current.sourceXml, mxslOriginal && mxslOriginal.source);
+  const generateSlxExportStages = () => {
+    // Bare `slxExportStages` would throw ReferenceError in the
+    // embed bundle, which never loads js/mxslc-engine.js; the
+    // target is hidden there (see mtlx-ui.jsx slxTargetAvailable),
+    // but guard directly too in case this is reached another way.
+    if (typeof window.slxExportStages !== 'function') {
+      return Promise.reject(new Error('ShadingLanguageX export is not available: js/mxslc-engine.js is not loaded.'));
+    }
+    return window.slxExportStages(loadedRef.current.sourceXml, mxslOriginal && mxslOriginal.source);
+  };
 
   // Picker onSelect ({ xml, name, files }): the exact same shape
   // handleImport (below) already handles for the 'mtlx-view-document'
@@ -640,6 +649,7 @@ function MaterialViewerApp({
   const ingest = async (map, rootKey) => {
     setError(null);
     const mxslOrigins = {}; // populated below, merged into mxslOriginalsRef after the replace/merge decision
+    const mxslFailures = []; // {rootKey, message} for .mxsl roots that failed to compile
     try {
       await expandZips(map);
       // Compile any ShadingLanguageX (.mxsl) files to MaterialX
@@ -650,12 +660,16 @@ function MaterialViewerApp({
       // load js/mxslc-engine.js.
       const mxslcAvailable = typeof window.expandMxsl === 'function';
       if (mxslcAvailable) {
-        await window.expandMxsl(map, mxslOrigins);
+        await window.expandMxsl(map, mxslOrigins, mxslFailures);
       }
     } catch (e) {
       reportError(errMsg(e));
       return;
     }
+    // Some .mxsl roots may have compiled while others failed
+    // (expandMxsl only throws when none compile) - appended to
+    // whichever status message this ingest ends up showing.
+    const mxslWarn = mxslFailures.length ? ' (' + mxslFailures.map(f => f.rootKey + ': ' + f.message).join('; ') + ')' : '';
     const droppedMtlx = Object.keys(map).filter(k => /\.mtlx$/i.test(k));
 
     // SESSION SEMANTICS: an .mtlx drop REPLACES the current
@@ -685,7 +699,7 @@ function MaterialViewerApp({
     const mtlx = Object.keys(merged).filter(k => /\.mtlx$/i.test(k));
     setMtlxPaths(mtlx);
     if (!mtlx.length) {
-      setStatus('Files received — now drop the .mtlx or .mxsl document itself.');
+      setStatus('Files received — now drop the .mtlx or .mxsl document itself.' + mxslWarn);
       return;
     }
     if (droppedMtlx.length) {
@@ -695,16 +709,19 @@ function MaterialViewerApp({
       // sibling .mtlx via xi:include.
       const pick = rootKey && mtlx.indexOf(rootKey) !== -1 ? rootKey : mtlx.length === 1 ? mtlx[0] : null;
       setChosenMtlx(pick);
-      if (pick) loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files — pick one in the Files panel.');
+      if (pick) await loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files — pick one in the Files panel.' + mxslWarn);
     } else if (chosenMtlx && viewRef.current) {
       // Textures added to a live view: rebind without regenerating.
       trackTexReport(bindDroppedTextures(viewRef.current, merged));
       setStatus(null);
     } else if (chosenMtlx) {
-      loadDocument(chosenMtlx, merged);
+      await loadDocument(chosenMtlx, merged);
     } else {
-      setStatus('Textures added — pick a .mtlx in the Files panel.');
+      setStatus('Textures added — pick a .mtlx in the Files panel.' + mxslWarn);
     }
+    // loadDocument clears status/error on success, so a partial
+    // .mxsl compile failure is surfaced here, after it settles.
+    if (mxslFailures.length) reportError('Some .mxsl files did not compile' + mxslWarn);
   };
 
   // ---- Page-wide drag & drop: files can drop anywhere, not just the
