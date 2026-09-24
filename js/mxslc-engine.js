@@ -88,9 +88,10 @@ const ensureMxslcWorker = () => {
 // SAME mxslc module compileMxslcSource uses (a completely separate WASM
 // module from the main MaterialX engine, see js/mtlx-engine.js, run off
 // the main thread in js/mxslc-worker.js). Used by the "Export Shader
-// Code..." dialog's ShadingLanguageX target. `signal`, if given and already
-// aborted or aborted while the call is in flight, terminates the worker
-// and rejects with an AbortError.
+// Code..." dialog's ShadingLanguageX target. Resolves { code, ms }, ms
+// being the worker's own decompile time so the dialog can show it.
+// `signal`, if given and already aborted or aborted while the call is in
+// flight, terminates the worker and rejects with an AbortError.
 const decompileMtlxToSlx = (xml, { signal } = {}) => {
     if (signal && signal.aborted) {
         return Promise.reject(new DOMException('ShadingLanguageX decompile aborted', 'AbortError'));
@@ -127,7 +128,7 @@ const decompileMtlxToSlx = (xml, { signal } = {}) => {
             settled = true;
             cleanup();
             if (msg.ok) {
-                resolve(msg.code);
+                resolve({ code: msg.code, ms: msg.ms });
             } else {
                 reject(new Error('ShadingLanguageX decompile error:\n' + msg.error));
             }

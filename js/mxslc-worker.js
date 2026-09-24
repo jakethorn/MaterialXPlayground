@@ -25,8 +25,10 @@ self.onmessage = async (event) => {
     if (op !== 'decompile') return;
     try {
         const mxslc = await loadMxslc(entryUrl);
+        const t0 = performance.now();
         const code = mxslc.decompileMtlxToSlx(xml);
-        self.postMessage({ id, ok: true, code });
+        const ms = performance.now() - t0;
+        self.postMessage({ id, ok: true, code, ms });
     } catch (e) {
         const msg = (e && e.message) || String(e);
         self.postMessage({ id, ok: false, error: msg });
