@@ -26,9 +26,9 @@
         };
 
         // Text metrics shared by every layer of the editor: the textarea,
-        // the line-number gutter and the backdrop under the textarea
-        // (current-line band, and later highlighted code). They must agree
-        // exactly or lines drift apart.
+        // the line-number gutter, the current-line band under the textarea
+        // and the highlighted code over it. They must agree exactly or
+        // lines drift apart.
         const CODE_LINE_HEIGHT = 18; // px
         const CODE_PAD_Y = 8; // px, top padding of every layer
         const CODE_TEXT_CLASS = 'font-mono text-[12px] leading-[18px]';
@@ -37,6 +37,75 @@
         // VS Code-style current-line band and line number.
         const CODE_CURRENT_LINE_CLASS = 'bg-white/[0.04] border-y border-white/[0.07]';
         const CODE_CURRENT_NUMBER_CLASS = 'text-gray-300';
+
+        // Syntax colours (VS Code Dark+), keyed by js/graph/slx-syntax.jsx
+        // token type; types not listed (identifiers, punctuation, user
+        // function calls) stay plain text. Colour only, never bold or
+        // italic: the highlighted layer must keep the textarea's glyph
+        // widths exactly.
+        const SLX_SYNTAX_THEME = {
+            text: '#d4d4d4',
+            comment: '#6a9955',
+            string: '#ce9178',
+            number: '#b5cea8',
+            constant: '#b5cea8', // true, false, null: the literal colour
+            keyword: '#569cd6',
+            type: '#4ec9b0',
+            directive: '#c586c0',
+            attribute: '#dcdcaa',
+            // Standard library calls are underlined rather than coloured
+            // (they'll link to the node's documentation).
+            stdlibUnderline: 'rgba(212, 212, 212, 0.5)',
+            caret: '#aeafad',
+            selection: '#264f78',
+        };
+        (() => {
+            if (typeof document === 'undefined' || document.getElementById('slx-syntax-theme')) return;
+            const t = SLX_SYNTAX_THEME;
+            const tokenRules = ['comment', 'string', 'number', 'constant', 'keyword', 'type', 'directive', 'attribute']
+                .map((type) => '.slx-code .slx-' + type + '{color:' + t[type] + ';}');
+            const st = document.createElement('style');
+            st.id = 'slx-syntax-theme';
+            st.textContent = [
+                // Both layers: no ligatures, so a token boundary (a span
+                // edge in .slx-code only) can never shape glyphs differently.
+                '.slx-code,.slx-input{font-variant-ligatures:none;font-kerning:none;}',
+                '.slx-code{color:' + t.text + ';}',
+                ...tokenRules,
+                '.slx-code .slx-stdlib{text-decoration:underline;text-decoration-color:' + t.stdlibUnderline + ';text-underline-offset:2px;}',
+                // The textarea keeps the caret and selection; its text is
+                // invisible, the highlighted layer drawn over it shows it.
+                '.slx-input{color:transparent;caret-color:' + t.caret + ';}',
+                '.slx-input::selection{background:' + t.selection + ';}',
+            ].join('');
+            document.head.appendChild(st);
+        })();
+
+        const escapeCodeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        // tokenizeSlx() output as HTML for the highlighted layer: a span
+        // per coloured token, plain text between them.
+        const highlightSlx = (text, stdlibFunctions) => {
+            let html = '';
+            let at = 0;
+            for (const token of tokenizeSlx(text, stdlibFunctions)) {
+                let cls = null;
+                let attrs = '';
+                if (token.type === 'function') {
+                    if (token.stdlib) {
+                        cls = 'slx-stdlib';
+                        attrs = ' data-node="' + text.slice(token.start, token.end) + '"';
+                    }
+                } else if (token.type !== 'identifier' && token.type !== 'punctuation') {
+                    cls = 'slx-' + token.type;
+                }
+                if (!cls) continue;
+                html += escapeCodeHtml(text.slice(at, token.start))
+                    + '<span class="' + cls + '"' + attrs + '>' + escapeCodeHtml(text.slice(token.start, token.end)) + '</span>';
+                at = token.end;
+            }
+            return html + escapeCodeHtml(text.slice(at));
+        };
 
         // mxslc diagnostics read "line N: <message>" (1-based).
         const slxErrorLine = (message) => {
@@ -56,18 +125,27 @@
             return offset;
         };
 
-        // The text surface. A plain <textarea> for now: syntax highlighting
-        // and completion belong HERE (a highlighted layer under a
-        // transparent textarea, or a real editor component) so that neither
-        // SlxCodeView nor graph-app.jsx has to change. Keep this contract:
+        // The text surface: a <textarea> whose own text is invisible, with
+        // the syntax-highlighted copy drawn over it and the current-line
+        // band under it. Editor features such as completion belong HERE so
+        // that neither SlxCodeView nor graph-app.jsx has to change. Keep
+        // this contract:
         //   value, onChange(text)  controlled text
         //   onSubmit()             Ctrl/Cmd+Enter
         //   readOnly, placeholder
+        //   stdlibFunctions        Set of standard library node names
+        //                          (underlined when called), or null
         //   apiRef                 filled with { focus(), revealLine(n) }
-        function SlxCodeEditor({ value, onChange, onSubmit, readOnly, placeholder, apiRef }) {
+        function SlxCodeEditor({ value, onChange, onSubmit, readOnly, placeholder, stdlibFunctions, apiRef }) {
             const taRef = React.useRef(null);
             const gutterRef = React.useRef(null);
             const backdropRef = React.useRef(null);
+            const codeClipRef = React.useRef(null);
+            const codeRef = React.useRef(null);
+
+            const highlighted = React.useMemo(
+                () => ({ __html: highlightSlx(value, stdlibFunctions) }),
+                [value, stdlibFunctions]);
 
             const lineCount = React.useMemo(() => {
                 let n = 1;
@@ -144,16 +222,32 @@
                 };
             }
 
-            // The gutter and the backdrop follow the textarea's scroll: the
-            // gutter by scrollTop (it only scrolls vertically), the backdrop
-            // by transform (its band spans the full width regardless of
-            // horizontal scroll).
+            // The other layers follow the textarea's scroll: the gutter by
+            // scrollTop (it only scrolls vertically), the band by a
+            // vertical transform (it spans the full width regardless of
+            // horizontal scroll) and the highlighted code by a transform in
+            // both axes. The code layer is also clipped to the textarea's
+            // client area so it never paints over the scrollbars.
             const syncScroll = () => {
                 const ta = taRef.current;
                 if (!ta) return;
                 if (gutterRef.current) gutterRef.current.scrollTop = ta.scrollTop;
                 if (backdropRef.current) backdropRef.current.style.transform = 'translateY(' + (-ta.scrollTop) + 'px)';
+                if (codeRef.current) codeRef.current.style.transform = 'translate(' + (-ta.scrollLeft) + 'px,' + (-ta.scrollTop) + 'px)';
+                if (codeClipRef.current) {
+                    codeClipRef.current.style.width = ta.clientWidth + 'px';
+                    codeClipRef.current.style.height = ta.clientHeight + 'px';
+                }
             };
+            // Panel resizes change the client area (and can move scroll)
+            // without a scroll event.
+            React.useEffect(() => {
+                const ta = taRef.current;
+                if (!ta) return;
+                const ro = new ResizeObserver(syncScroll);
+                ro.observe(ta);
+                return () => ro.disconnect();
+            }, []);
             React.useLayoutEffect(() => {
                 const ta = taRef.current;
                 if (ta && value !== emittedRef.current) {
@@ -224,10 +318,13 @@
                         style={{ paddingTop: CODE_PAD_Y, paddingBottom: CODE_PAD_Y + 24, minWidth: (String(lineCount).length + 2) + 'ch' }}
                     >{gutterBefore}<span className={CODE_CURRENT_NUMBER_CLASS}>{gutterNumbers[activeLine]}</span>{gutterAfter}</pre>
                     <div className="relative flex-1 min-w-0 flex overflow-hidden">
-                        {/* Backdrop: painted under the transparent textarea
-                            and moved with its scroll (syncScroll). Holds the
-                            current-line band; highlighted code would go here
-                            too, laid out with the same metrics. */}
+                        {/* Three layers, bottom to top, all following the
+                            textarea's scroll (syncScroll): the current-line
+                            band; the textarea itself, which draws only the
+                            caret and selection (.slx-input); and the
+                            highlighted code (.slx-code), which takes no
+                            pointer events. The code sits over the selection
+                            so selected text keeps its colours, as in VS Code. */}
                         <div aria-hidden="true" className="absolute inset-0 overflow-hidden pointer-events-none">
                             <div ref={backdropRef} className="relative">
                                 {caret.collapsed && (
@@ -239,7 +336,7 @@
                             </div>
                         </div>
                         {/* `relative` so it paints above the (positioned)
-                            backdrop. */}
+                            band layer. */}
                         <textarea
                             ref={taRef}
                             value={value}
@@ -254,9 +351,17 @@
                             autoComplete="off"
                             autoCorrect="off"
                             autoCapitalize="off"
-                            className={CODE_TEXT_CLASS + ' relative flex-1 min-w-0 m-0 px-2 resize-none overflow-auto custom-scrollbar bg-transparent text-gray-200 placeholder-gray-600 whitespace-pre focus:outline-none'}
+                            className={CODE_TEXT_CLASS + ' slx-input relative flex-1 min-w-0 m-0 px-2 resize-none overflow-auto custom-scrollbar bg-transparent placeholder-gray-600 whitespace-pre focus:outline-none'}
                             style={{ paddingTop: CODE_PAD_Y, paddingBottom: CODE_PAD_Y, tabSize: CODE_TAB_SIZE }}
                         />
+                        <div ref={codeClipRef} aria-hidden="true" className="absolute left-0 top-0 overflow-hidden pointer-events-none">
+                            <pre
+                                ref={codeRef}
+                                className={CODE_TEXT_CLASS + ' slx-code m-0 px-2 whitespace-pre'}
+                                style={{ paddingTop: CODE_PAD_Y, tabSize: CODE_TAB_SIZE }}
+                                dangerouslySetInnerHTML={highlighted}
+                            />
+                        </div>
                     </div>
                 </div>
             );
@@ -265,10 +370,11 @@
         // The docked panel: header, editor, status line and the two
         // actions. `code` is null until the first decompile lands.
         // `busy` is 'compile' | 'decompile' | null; `message` is
-        // { kind: 'ok' | 'error', text } | null. `canvasRef` is the graph
-        // canvas beside the panel, measured so the panel never crowds it out.
+        // { kind: 'ok' | 'error', text } | null. `stdlibFunctions` is passed
+        // through to SlxCodeEditor. `canvasRef` is the graph canvas beside
+        // the panel, measured so the panel never crowds it out.
         function SlxCodeView({
-            code, modified, busy, message,
+            code, modified, busy, message, stdlibFunctions,
             onCodeChange, onCompile, onDecompile, onCollapse, canvasRef,
         }) {
             const editorApiRef = React.useRef(null);
@@ -381,6 +487,7 @@
                                 onSubmit={() => { if (!busy && !loading) onCompile(); }}
                                 readOnly={loading}
                                 placeholder={loading ? '' : 'Write your ShadingLanguageX code then click Compile to build the node graph.'}
+                                stdlibFunctions={stdlibFunctions}
                                 apiRef={editorApiRef}
                             />
                             {loading && (

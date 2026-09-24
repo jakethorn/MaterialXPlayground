@@ -3792,6 +3792,17 @@
                 // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [codeViewOpen, parsed, slxCode]);
 
+            // The code view underlines standard library calls, so it needs
+            // the node catalog the Tab palette also uses (cached; loaded
+            // here too rather than only when the palette first opens).
+            React.useEffect(() => {
+                if (!CODE_VIEW_ON || !codeViewOpen || catalog) return;
+                buildNodeCatalog().then(setCatalog).catch(() => { /* no underlines; the palette reports its own load errors */ });
+            }, [codeViewOpen, catalog]);
+            const stdlibFunctionNames = React.useMemo(
+                () => (catalog ? new Set(catalog.map((c) => c.category)) : null),
+                [catalog]);
+
             // Export dialog's onExport: routes to .mtlx/.zip through the
             // same exportBusyRef-guarded wrappers as the toolbar. Errors
             // thrown here are caught by ExportDialog, keeping it open to retry.
@@ -7581,6 +7592,7 @@
                                 modified={slxCode != null && slxBaseline != null && slxCode !== slxBaseline}
                                 busy={slxBusy}
                                 message={slxMessage}
+                                stdlibFunctions={stdlibFunctionNames}
                                 onCodeChange={onSlxCodeChange}
                                 onCompile={compileFromCodeView}
                                 onDecompile={decompileToCodeView}
