@@ -60,30 +60,110 @@ const compileMxslcSource = async (source, files, label) => {
     }
 };
 
+// Decompiling a large graph (thousands of nodes) can run for minutes on
+// the mxslc WASM module, so it runs in a dedicated worker (js/mxslc-worker.js)
+// instead of the main thread: a worker is also the only way to actually
+// stop an in-flight call (terminate()), which an AbortSignal alone cannot
+// do for synchronous WASM. One worker is kept warm and reused across
+// decompiles; an aborted call terminates it and the next call boots a
+// fresh one.
+let mxslcWorker = null;
+let mxslcNextRequestId = 1;
+
+const discardMxslcWorker = () => {
+    if (mxslcWorker) {
+        try { mxslcWorker.terminate(); } catch (e) { /* already gone */ }
+    }
+    mxslcWorker = null;
+};
+
+const ensureMxslcWorker = () => {
+    if (!mxslcWorker) {
+        mxslcWorker = new Worker(new URL('js/mxslc-worker.js', document.baseURI), { type: 'module' });
+    }
+    return mxslcWorker;
+};
+
 // Decompile a MaterialX XML string to ShadingLanguageX source, via the
 // SAME mxslc module compileMxslcSource uses (a completely separate WASM
-// module from the main MaterialX engine — see js/mtlx-engine.js — so this
-// never touches `parsed.mx`). Used by the "Export Shader Code…" dialog's
-// ShadingLanguageX target.
-const decompileMtlxToSlx = async (xml) => {
-    const mxslc = await getMxslcModule();
-    try {
-        return mxslc.decompileMtlxToSlx(xml);
-    } catch (e) {
-        const msg = (e && e.message) || String(e);
-        throw new Error('ShadingLanguageX decompile error:\n' + msg);
+// module from the main MaterialX engine, see js/mtlx-engine.js, run off
+// the main thread in js/mxslc-worker.js). Used by the "Export Shader
+// Code..." dialog's ShadingLanguageX target. `signal`, if given and already
+// aborted or aborted while the call is in flight, terminates the worker
+// and rejects with an AbortError.
+const decompileMtlxToSlx = (xml, { signal } = {}) => {
+    if (signal && signal.aborted) {
+        return Promise.reject(new DOMException('ShadingLanguageX decompile aborted', 'AbortError'));
     }
+
+    let worker;
+    try {
+        worker = ensureMxslcWorker();
+    } catch (e) {
+        discardMxslcWorker();
+        const msg = (e && e.message) || String(e);
+        return Promise.reject(new Error('ShadingLanguageX decompile worker could not be created:\n' + msg));
+    }
+
+    const id = mxslcNextRequestId++;
+    const entryUrl = MtlxVendor.url('mxslc', 'JsMxslc.js');
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const onAbort = () => {
+            if (settled) return;
+            settled = true;
+            discardMxslcWorker(); // only way to stop a running WASM call
+            reject(new DOMException('ShadingLanguageX decompile aborted', 'AbortError'));
+        };
+        const cleanup = () => {
+            if (signal) signal.removeEventListener('abort', onAbort);
+            worker.removeEventListener('message', onMessage);
+            worker.removeEventListener('error', onError);
+        };
+        const onMessage = (event) => {
+            const msg = event.data;
+            if (!msg || msg.id !== id || settled) return;
+            settled = true;
+            cleanup();
+            if (msg.ok) {
+                resolve(msg.code);
+            } else {
+                reject(new Error('ShadingLanguageX decompile error:\n' + msg.error));
+            }
+        };
+        const onError = (event) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            discardMxslcWorker(); // worker is in an unknown state
+            reject(new Error('ShadingLanguageX decompile worker failed: ' + ((event && event.message) || 'unknown error')));
+        };
+        worker.addEventListener('message', onMessage);
+        worker.addEventListener('error', onError);
+        if (signal) signal.addEventListener('abort', onAbort, { once: true });
+        try {
+            worker.postMessage({ id, op: 'decompile', xml, entryUrl });
+        } catch (e) {
+            settled = true;
+            cleanup();
+            discardMxslcWorker();
+            reject(new Error('ShadingLanguageX decompile request could not cross Worker boundary:\n' + ((e && e.message) || String(e))));
+        }
+    });
 };
 
 // ShaderExportDialog stages for the ShadingLanguageX target, shared by the
-// graph editor and the viewer. Whole-document (mxslc's decompiler has no
-// concept of "just this material"). "Original" is the as-authored .mxsl
-// source, only when the document was compiled from one; "Decompiled" is
-// `xml` decompiled back to SLX.
+// graph editor and the viewer. Returns immediately: "Original" (the
+// as-authored .mxsl source, only when the document was compiled from one)
+// carries its code inline, but "Decompiled" is lazy: a `load(signal)`
+// the dialog calls when that stage is actually shown, so the instantly
+// available Original stage is never blocked behind the slow decompile,
+// and the caller controls when (and whether) it runs.
 const slxExportStages = async (xml, originalSource) => {
     const stages = [];
     if (originalSource != null) stages.push({ id: 'original', label: 'Original', code: originalSource });
-    stages.push({ id: 'decompiled', label: 'Decompiled', code: await decompileMtlxToSlx(xml) });
+    stages.push({ id: 'decompiled', label: 'Decompiled', load: (signal) => decompileMtlxToSlx(xml, { signal }) });
     return { stages };
 };
 
