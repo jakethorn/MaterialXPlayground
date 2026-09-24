@@ -819,10 +819,8 @@ const copyTextToClipboard = async (text) => {
     return ok;
 };
 
-// ShadingLanguageX needs js/mxslc-engine.js (never loaded by the embed
-// bundle, see embed/viewer.html) and its vendored compiler (never
-// packaged in the .vsix, see the "mxslc" vendor-deps.mjs entry) - so the
-// target is hidden rather than offered and then failing to generate.
+// ShadingLanguageX needs js/mxslc-engine.js, never loaded by the embed
+// bundle, and its vendored compiler, never packaged in the .vsix.
 const slxTargetAvailable = () => typeof window.slxExportStages === 'function' && !window.__MTLX_VSCODE__;
 
 // Shader source export dialog. `generate()` (caller-supplied) does the

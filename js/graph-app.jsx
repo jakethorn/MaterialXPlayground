@@ -1427,12 +1427,12 @@
                     setError(errMsg(e));
                     return;
                 }
-                // Some .mxsl roots may have compiled while others failed
-                // (expandMxsl only throws when none compile) - appended to
-                // whichever status message this ingest ends up showing.
+                // Some .mxsl roots may have compiled while others failed,
+                // appended to whichever status message this ingest shows.
                 const mxslWarn = mxslFailures.length
                     ? ' (' + mxslFailures.map((f) => f.rootKey + ': ' + f.message).join('; ') + ')'
                     : '';
+                let loadPromise = null;
                 const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
                 // Same session semantics as the material viewer: a .mtlx
                 // drop replaces the session (unless none existed yet, or
@@ -1480,16 +1480,18 @@
                     const pick = (rootKey && mtlx.indexOf(rootKey) !== -1)
                         ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
-                    if (pick) await loadDocument(pick, merged);
+                    if (pick) loadPromise = loadDocument(pick, merged);
                     else setStatus('This drop contains several .mtlx files — pick one below.' + mxslWarn);
                 } else if (chosenMtlx) {
-                    await loadDocument(chosenMtlx, merged); // includes may now resolve
+                    loadPromise = loadDocument(chosenMtlx, merged); // includes may now resolve
                 } else {
                     setStatus('Files added — pick a .mtlx below.' + mxslWarn);
                 }
-                // loadDocument clears status/error on success, so a partial
-                // .mxsl compile failure is surfaced here, after it settles.
-                if (mxslFailures.length) setError('Some .mxsl files did not compile' + mxslWarn);
+                // loadDocument clears status/error on success, surface a
+                // partial .mxsl compile failure after it settles.
+                if (mxslFailures.length) {
+                    Promise.resolve(loadPromise).then(() => setError('Some .mxsl files did not compile' + mxslWarn));
+                }
             };
 
             // ---- VS Code external-edit soft reload ----------------------

@@ -622,10 +622,8 @@ function MaterialViewerApp({
   // decompiles the as-loaded XML, which is exactly what's on
   // screen since the viewer never edits the document.
   const generateSlxExportStages = () => {
-    // Bare `slxExportStages` would throw ReferenceError in the
-    // embed bundle, which never loads js/mxslc-engine.js; the
-    // target is hidden there (see mtlx-ui.jsx slxTargetAvailable),
-    // but guard directly too in case this is reached another way.
+    // The embed bundle never loads js/mxslc-engine.js, so a
+    // bare `slxExportStages` reference would throw here.
     if (typeof window.slxExportStages !== 'function') {
       return Promise.reject(new Error('ShadingLanguageX export is not available: js/mxslc-engine.js is not loaded.'));
     }
@@ -666,10 +664,10 @@ function MaterialViewerApp({
       reportError(errMsg(e));
       return;
     }
-    // Some .mxsl roots may have compiled while others failed
-    // (expandMxsl only throws when none compile) - appended to
-    // whichever status message this ingest ends up showing.
+    // Some .mxsl roots may have compiled while others failed,
+    // appended to whichever status message this ingest shows.
     const mxslWarn = mxslFailures.length ? ' (' + mxslFailures.map(f => f.rootKey + ': ' + f.message).join('; ') + ')' : '';
+    let loadPromise = null;
     const droppedMtlx = Object.keys(map).filter(k => /\.mtlx$/i.test(k));
 
     // SESSION SEMANTICS: an .mtlx drop REPLACES the current
@@ -709,19 +707,21 @@ function MaterialViewerApp({
       // sibling .mtlx via xi:include.
       const pick = rootKey && mtlx.indexOf(rootKey) !== -1 ? rootKey : mtlx.length === 1 ? mtlx[0] : null;
       setChosenMtlx(pick);
-      if (pick) await loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files — pick one in the Files panel.' + mxslWarn);
+      if (pick) loadPromise = loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files — pick one in the Files panel.' + mxslWarn);
     } else if (chosenMtlx && viewRef.current) {
       // Textures added to a live view: rebind without regenerating.
       trackTexReport(bindDroppedTextures(viewRef.current, merged));
       setStatus(null);
     } else if (chosenMtlx) {
-      await loadDocument(chosenMtlx, merged);
+      loadPromise = loadDocument(chosenMtlx, merged);
     } else {
       setStatus('Textures added — pick a .mtlx in the Files panel.' + mxslWarn);
     }
-    // loadDocument clears status/error on success, so a partial
-    // .mxsl compile failure is surfaced here, after it settles.
-    if (mxslFailures.length) reportError('Some .mxsl files did not compile' + mxslWarn);
+    // loadDocument clears status/error on success, surface a
+    // partial .mxsl compile failure after it settles.
+    if (mxslFailures.length) {
+      Promise.resolve(loadPromise).then(() => reportError('Some .mxsl files did not compile' + mxslWarn));
+    }
   };
 
   // ---- Page-wide drag & drop: files can drop anywhere, not just the

@@ -29,11 +29,9 @@
 // is what lets the user disambiguate — no separate UI is needed for .mxsl
 // projects.
 
-// Lazy: the WASM module is only fetched the first time a .mxsl file is
-// actually opened (or a ShadingLanguageX export is requested), not on
-// every page load. MtlxVendor.load caches the result and drops a failed
-// attempt from its own cache, so a transient network blip doesn't
-// permanently break every subsequent call for the rest of the session.
+// Lazy: only fetched the first time a .mxsl file is opened or a
+// ShadingLanguageX export is requested. MtlxVendor.load caches the
+// result and drops a failed attempt from its cache automatically.
 const getMxslcModule = () => MtlxVendor.load('mxslc');
 
 // Compile one SLX source string to a MaterialX XML string. `files` is an
@@ -123,11 +121,8 @@ const stripCommonFolderPrefix = (keys) => {
 // Omit it to just expand.
 //
 // `failures`, if given, is a plain array this function pushes
-// {rootKey, message} onto for every root candidate that failed to
-// compile (message is the first line of the compiler error) — even
-// when other roots in the same drop succeeded. Callers use this to
-// surface a non-fatal warning naming the failed file(s) instead of
-// silently dropping them.
+// {rootKey, message} onto for every root candidate that fails to
+// compile, so callers can warn about the ones silently dropped.
 const expandMxsl = async (map, origins, failures) => {
     const mxslKeys = Object.keys(map).filter((k) => /\.mxsl$/i.test(k));
     if (!mxslKeys.length) return map;
@@ -184,9 +179,9 @@ const expandMxsl = async (map, origins, failures) => {
             // Not every root candidate necessarily compiles on its own
             // (e.g. the heuristic above can admit a genuine include as a
             // "root" when it's also never #include'd by anything else in
-            // the drop) — skip it and keep the ones that do, but report
-            // the miss via `failures` so the caller can warn about it.
+            // the drop) — skip it and keep the ones that do.
             lastError = e;
+            // Recorded for the caller, message trimmed to its first line.
             if (failures) failures.push({ rootKey, message: ((e && e.message) || String(e)).split('\n')[0] });
         }
     }
