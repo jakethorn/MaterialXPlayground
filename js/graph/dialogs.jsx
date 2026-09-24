@@ -44,6 +44,7 @@
             { keys: 'Ctrl/Cmd + Shift + G', desc: 'Ungroup the selected nodegraph (dissolve it, keeping connections) (with a nodegraph selected)', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + Z', desc: 'Undo the last document edit', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + Shift + Z (or Ctrl/Cmd + Y)', desc: 'Redo', group: 'keyboard' },
+            { keys: 'Ctrl/Cmd + Enter', desc: 'In the ShadingLanguageX view: compile the code into the node graph', group: 'keyboard', browserOnly: true },
             { keys: 'Ctrl/Cmd + S', desc: 'Save the document back to the open .mtlx file', group: 'keyboard', vscodeOnly: true },
         ];
 

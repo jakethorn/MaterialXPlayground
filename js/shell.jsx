@@ -204,6 +204,7 @@ const VIEW_DEPS = {
             'js/graph/panels.jsx',
             'js/graph/reorder-list.jsx',
             'js/graph/scope-list.jsx',
+            'js/graph/code-view.jsx',
             'js/graph/definition-panel.jsx',
             'js/graph/texture-convert.jsx',
         ],
