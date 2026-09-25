@@ -3722,7 +3722,11 @@
                 try {
                     const { xml, error } = await resolveDocXml();
                     if (xml == null) throw new Error('Could not build the document XML: ' + error);
-                    const code = await decompileMtlxToSlx(xml);
+                    // Resolves { code, ms } (it runs in js/mxslc-worker.js).
+                    // No abort signal: aborting terminates the one decompile
+                    // worker, which the export dialog may be using too; a
+                    // superseded run is just dropped below.
+                    const { code } = await decompileMtlxToSlx(xml);
                     if (slxRunRef.current !== id) return;
                     setSlxCode(code);
                     setSlxBaseline(code);
