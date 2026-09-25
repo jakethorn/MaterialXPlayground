@@ -380,16 +380,17 @@
             const [chosenMtlx, setChosenMtlx] = React.useState(null);
             const [parsed, setParsed] = React.useState(null); // { mx, doc, nodegraphs, label }
             // .mxsl provenance for the file map: {compiledMtlxKey: {source,
-            // filename}}, populated by expandMxsl() in ingest() (see
+            // filename, files}}, populated by expandMxsl() in ingest() (see
             // mxslc-engine.js). filename is the as-dropped .mxsl path
             // (before it was re-keyed to compiledMtlxKey). mxslOriginFor()
             // looks one path up; mxslOriginal mirrors it for the CURRENTLY
             // loaded document (set only at loadDocument()'s choke point),
-            // which the ShadingLanguageX export target's "Original" reads.
+            // which the ShadingLanguageX export target's "Original" and
+            // the code view read.
             const mxslOriginalsRef = React.useRef({});
             const mxslOriginFor = (path) => (path && Object.prototype.hasOwnProperty.call(mxslOriginalsRef.current, path)
                 ? { path, ...mxslOriginalsRef.current[path] } : null);
-            const [mxslOriginal, setMxslOriginal] = React.useState(null); // { path, source, filename } | null
+            const [mxslOriginal, setMxslOriginal] = React.useState(null); // { path, source, filename, files } | null
             const [scope, setScope] = React.useState('');     // '' = document root
             const [flow, setFlow] = React.useState({ nodes: [], edges: [] });
             // Live mirror, so a rebuild triggered from a ref-held handler
@@ -527,13 +528,18 @@
             // Called when a DIFFERENT document loads (loadDocument,
             // newDocument): the old code no longer describes the graph, so
             // it's dropped and re-decompiled. Compile and undo/redo keep it.
-            const resetCodeView = () => {
+            // `origin`: the document's .mxsl provenance (mxslOriginFor),
+            // whose as-authored source is shown instead of a decompile.
+            const resetCodeView = (origin) => {
                 slxRunRef.current++;
                 slxDecompileRef.current = null;
-                setSlxCode(null);
-                setSlxBaseline(null);
+                // The textarea turns CRLF into LF anyway; the baseline
+                // must match what it reports back.
+                const source = origin ? origin.source.replace(/\r\n?/g, '\n') : null;
+                setSlxCode(source);
+                setSlxBaseline(source);
                 setSlxBusy(null);
-                setSlxMessage(null);
+                setSlxMessage(origin ? { kind: 'ok', text: 'Loaded from ' + origin.filename + '.' } : null);
             };
             // Node list (left sidebar) filter/sort state.
             const [scopeListQuery, setScopeListQuery] = React.useState('');
@@ -1403,7 +1409,7 @@
                     p.label = mxslOrigin ? mxslOrigin.filename : path;
                     setParsed(p);
                     setMxslOriginal(mxslOrigin);
-                    resetCodeView();
+                    resetCodeView(mxslOrigin);
                     setScope('');
                     // Same default-target reset as opening a document fresh:
                     // a stale selection/pin from a PREVIOUS document (multi-
@@ -3780,7 +3786,9 @@
                 setSlxMessage(null);
                 let compiled = false;
                 try {
-                    const xml = await compileMxslcSource(source, null, 'the code view');
+                    // A .mxsl document's sibling files stay available to
+                    // its #include/#library directives.
+                    const xml = await compileMxslcSource(source, mxslOriginal && mxslOriginal.files, 'the code view');
                     compiled = true;
                     const p = await parseMtlxDocument(xml);
                     if (slxRunRef.current !== id) return;
