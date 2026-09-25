@@ -513,11 +513,23 @@
             // Monotonic run id: a compile/decompile resolving after a newer
             // one started (or after a different document loaded) is dropped.
             const slxRunRef = React.useRef(0);
+            // The latest code and baseline, for decompileToCodeView's
+            // async tail.
+            const slxStateRef = React.useRef(null);
+            slxStateRef.current = { code: slxCode, baseline: slxBaseline };
+            // The code view editor's API (SlxCodeEditor's apiRef).
+            const slxEditorRef = React.useRef(null);
+            // What the last Decompile replaced, while it can still be undone
+            // in the editor: { before, beforeBaseline, after }. Undoing it
+            // (or redoing it) brings the matching baseline back too, so
+            // "modified" reads as it did. A compile makes it stale.
+            const slxDecompileRef = React.useRef(null);
             // Called when a DIFFERENT document loads (loadDocument,
             // newDocument): the old code no longer describes the graph, so
             // it's dropped and re-decompiled. Compile and undo/redo keep it.
             const resetCodeView = () => {
                 slxRunRef.current++;
+                slxDecompileRef.current = null;
                 setSlxCode(null);
                 setSlxBaseline(null);
                 setSlxBusy(null);
@@ -3728,9 +3740,22 @@
                     // superseded run is just dropped below.
                     const { code } = await decompileMtlxToSlx(xml);
                     if (slxRunRef.current !== id) return;
-                    setSlxCode(code);
+                    // Replacing code that's there goes through the editor,
+                    // as one step in its own undo history: Ctrl+Z in the
+                    // code (or Undo on the message) puts the old code back.
+                    // The first fill, or with the panel closed meanwhile,
+                    // just sets it.
+                    const { code: before, baseline: beforeBaseline } = slxStateRef.current;
+                    const editor = slxEditorRef.current;
+                    let undoable = false;
+                    if (before != null && before !== code && editor) {
+                        slxDecompileRef.current = { before, beforeBaseline, after: code };
+                        undoable = editor.replaceText(code);
+                        if (!undoable) slxDecompileRef.current = null;
+                    }
+                    if (!undoable) setSlxCode(code);
                     setSlxBaseline(code);
-                    setSlxMessage({ kind: 'ok', text: 'Decompiled from the current node graph.' });
+                    setSlxMessage({ kind: 'ok', text: 'Decompiled from the current node graph.', undoable });
                 } catch (e) {
                     if (slxRunRef.current !== id) return;
                     // '' rather than null, so the auto-decompile effect
@@ -3776,6 +3801,7 @@
                     if (!scopeValid) setScope('');
                     setDocRev((r) => r + 1);
                     markDirty();
+                    slxDecompileRef.current = null;
                     setSlxBaseline(source);
                     setSlxMessage({ kind: 'ok', text: 'Compiled into the node graph.' });
                 } catch (e) {
@@ -3790,6 +3816,9 @@
 
             const onSlxCodeChange = (code) => {
                 setSlxCode(code);
+                const d = slxDecompileRef.current;
+                if (d && code === d.before) setSlxBaseline(d.beforeBaseline);
+                else if (d && code === d.after) setSlxBaseline(d.after);
                 // A stale "Compiled"/"Decompiled" note would misdescribe
                 // the edited text; an error stays up while it's being fixed.
                 setSlxMessage((m) => (m && m.kind === 'ok' ? null : m));
@@ -7610,6 +7639,7 @@
                                 onCollapse={() => setCodeViewOpen(false)}
                                 onOpenNodeDocs={openCategoryDocs}
                                 canvasRef={canvasHostRef}
+                                editorRef={slxEditorRef}
                             />
                         )}
                         {parsed && leftOpen && (

@@ -178,22 +178,26 @@
             return start < end ? { start, end } : null;
         };
 
+        // `after` taken as an edit of `before`: the single span that
+        // differs between their common prefix and suffix, as
+        // before[start, oldEnd) becoming after[start, newEnd).
+        const editSpan = (before, after) => {
+            const max = Math.min(before.length, after.length);
+            let start = 0;
+            while (start < max && before.charCodeAt(start) === after.charCodeAt(start)) start++;
+            let suffix = 0;
+            while (suffix < max - start
+                && before.charCodeAt(before.length - 1 - suffix) === after.charCodeAt(after.length - 1 - suffix)) suffix++;
+            return { start, oldEnd: before.length - suffix, newEnd: after.length - suffix };
+        };
+
         // Carry ranges ({ start, end, ... }) in `before` over to `after`,
-        // an edit of it, taking the edit as the single span that differs
-        // between their common prefix and suffix. Ranges clear of it
-        // shift; one it cuts into grows or shrinks, but text typed right
-        // at either edge stays outside; one it deletes outright is dropped.
+        // an edit of it (editSpan). Ranges clear of the edit shift; one it
+        // cuts into grows or shrinks, but text typed right at either edge
+        // stays outside; one it deletes outright is dropped.
         const remapRanges = (ranges, before, after) => {
             if (before === after || !ranges.length) return ranges;
-            const max = Math.min(before.length, after.length);
-            let prefix = 0;
-            while (prefix < max && before.charCodeAt(prefix) === after.charCodeAt(prefix)) prefix++;
-            let suffix = 0;
-            while (suffix < max - prefix
-                && before.charCodeAt(before.length - 1 - suffix) === after.charCodeAt(after.length - 1 - suffix)) suffix++;
-            // before[prefix, oldEnd) became after[prefix, newEnd).
-            const oldEnd = before.length - suffix;
-            const newEnd = after.length - suffix;
+            const { start: prefix, oldEnd, newEnd } = editSpan(before, after);
             const delta = newEnd - oldEnd;
             const out = [];
             for (const r of ranges) {
@@ -240,7 +244,8 @@
         //                          edits made since, until the next
         //                          diagnostics object replaces them
         //   apiRef                 filled with { focus(), revealLine(n),
-        //                          revealDiagnostic(i) }
+        //                          revealDiagnostic(i), replaceText(text),
+        //                          undo() }
         function SlxCodeEditor({ value, onChange, onSubmit, readOnly, placeholder, library, onOpenNodeDocs, diagnostics, apiRef }) {
             const taRef = React.useRef(null);
             const gutterRef = React.useRef(null);
@@ -378,6 +383,71 @@
                         if (mark) revealRange(mark.start, mark.end);
                         else revealLine(item.line);
                     },
+                    // Replace the text with `text` as one step in the
+                    // textarea's own undo history, so Ctrl+Z puts the old
+                    // text back (execCommand; a new `value` would wipe the
+                    // history). onChange reports it as usual. Only the
+                    // changed lines are replaced, which is what an undo
+                    // selects; the caret is carried over the edit and the
+                    // scroll kept. Focuses the editor, which execCommand
+                    // needs, and leaves it there unless another text field
+                    // had focus. False if it couldn't (not mounted,
+                    // read-only, unsupported): set `value` instead.
+                    replaceText: (text) => {
+                        const ta = taRef.current;
+                        if (!ta || !ta.isConnected || ta.readOnly) return false;
+                        const before = ta.value;
+                        if (before === text) return true;
+                        const span = editSpan(before, text);
+                        // Whole lines: a span edge inside a character
+                        // (a surrogate pair, a combining mark) could be
+                        // moved by the browser, and never is at a line.
+                        span.start = before.lastIndexOf('\n', span.start - 1) + 1;
+                        const lineEnd = before.indexOf('\n', span.oldEnd);
+                        const extend = (lineEnd === -1 ? before.length : lineEnd) - span.oldEnd;
+                        span.oldEnd += extend;
+                        span.newEnd += extend;
+                        const delta = span.newEnd - span.oldEnd;
+                        const carry = (o) => (o <= span.start ? o : o >= span.oldEnd ? o + delta : Math.min(o, span.newEnd));
+                        const sel = selectionRef.current;
+                        const { scrollTop, scrollLeft } = ta;
+                        const prevFocus = document.activeElement;
+                        ta.focus({ preventScroll: true });
+                        ta.setSelectionRange(span.start, span.oldEnd);
+                        const inserted = text.slice(span.start, span.newEnd);
+                        programmaticRef.current = { kind: 'external' };
+                        let ok = false;
+                        try {
+                            ok = document.execCommand(inserted ? 'insertText' : 'delete', false, inserted);
+                        } finally {
+                            programmaticRef.current = null;
+                        }
+                        if (!ok || ta.value !== text) {
+                            // Unsupported (or not what was asked): undo
+                            // whatever it did, and let the caller set it.
+                            if (ta.value !== before) document.execCommand('undo');
+                            ta.setSelectionRange(Math.min(sel.start, ta.value.length), Math.min(sel.end, ta.value.length));
+                            return false;
+                        }
+                        ta.setSelectionRange(carry(sel.start), carry(sel.end));
+                        ta.scrollTop = scrollTop;
+                        ta.scrollLeft = scrollLeft;
+                        syncScroll();
+                        updateCaret();
+                        if (prevFocus && prevFocus !== ta && prevFocus.isConnected
+                            && (/^(input|textarea|select)$/i.test(prevFocus.tagName) || prevFocus.isContentEditable)) {
+                            prevFocus.focus({ preventScroll: true });
+                        }
+                        return true;
+                    },
+                    // Undo the last edit in the textarea's own history, as
+                    // Ctrl+Z in it would.
+                    undo: () => {
+                        const ta = taRef.current;
+                        if (!ta || ta.readOnly) return;
+                        ta.focus({ preventScroll: true });
+                        document.execCommand('undo');
+                    },
                 };
             }
 
@@ -454,10 +524,11 @@
                 setHints(nextHints);
             };
             // How onChange saw the text change, for the layout effect
-            // above to act on; programmaticRef marks this editor's own
-            // insertions (a picked suggestion), which trigger nothing.
+            // above to act on; programmaticRef holds the trigger for this
+            // editor's own insertions while they're made: 'edit' (nothing
+            // new) for a picked suggestion, 'external' for replaceText.
             const pendingAssistRef = React.useRef(null);
-            const programmaticRef = React.useRef(false);
+            const programmaticRef = React.useRef(null);
             // Tokens and declared symbols of the text the assists last
             // looked at (the render's tokens when the text is the same).
             const assistDataRef = React.useRef({ text: null, tokens: null, symbols: null });
@@ -556,9 +627,9 @@
                 if (!ta || !comp) return;
                 setAssist(null, hintsRef.current);
                 ta.setSelectionRange(comp.wordStart, ta.selectionStart);
-                programmaticRef.current = true;
+                programmaticRef.current = { kind: 'edit' };
                 insertText(item.label);
-                programmaticRef.current = false;
+                programmaticRef.current = null;
             };
             const cycleHints = (step) => {
                 const help = hintsRef.current;
@@ -962,7 +1033,7 @@
                                 const ne = e.nativeEvent || {};
                                 let trigger = { kind: 'edit' };
                                 if (programmaticRef.current) {
-                                    // A picked suggestion: triggers nothing.
+                                    trigger = programmaticRef.current;
                                 } else if (ne.inputType === 'insertText' && typeof ne.data === 'string' && ne.data.length === 1) {
                                     trigger = /\w/.test(ne.data) ? { kind: 'word' } : { kind: 'char', char: ne.data };
                                 } else if (/^delete/.test(ne.inputType || '')) {
@@ -1039,9 +1110,12 @@
         // the panel, measured so the panel never crowds it out.
         function SlxCodeView({
             code, modified, busy, message, library,
-            onCodeChange, onCompile, onDecompile, onCollapse, onOpenNodeDocs, canvasRef,
+            onCodeChange, onCompile, onDecompile, onCollapse, onOpenNodeDocs, canvasRef, editorRef,
         }) {
-            const editorApiRef = React.useRef(null);
+            // The editor's apiRef (SlxCodeEditor), shared with the caller
+            // through `editorRef` when it passes one.
+            const ownEditorApiRef = React.useRef(null);
+            const editorApiRef = editorRef || ownEditorApiRef;
             const loading = code == null;
             // A new object only when the message changes: the editor keeps
             // carrying the squiggle through edits until then.
@@ -1188,6 +1262,16 @@
                                 <div className="flex items-center gap-1.5 px-0.5 text-[11px] text-green-300">
                                     <MtlxIcon name="check" className="w-3.5 h-3.5 flex-none" />
                                     <span className="truncate">{message.text}</span>
+                                    {message.undoable && (
+                                        <button
+                                            type="button"
+                                            onClick={() => editorApiRef.current && editorApiRef.current.undo()}
+                                            title="Put back the code this replaced (Ctrl+Z in the code)"
+                                            className="flex-none underline decoration-dotted underline-offset-2 hover:text-green-200"
+                                        >
+                                            Undo
+                                        </button>
+                                    )}
                                 </div>
                             )}
                             <div className="flex items-center gap-2 font-sans">
