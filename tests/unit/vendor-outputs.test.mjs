@@ -39,10 +39,19 @@ test("gitignore block lists only fetchOnly deps", () => {
   assert.match(block, /# END vendor-deps$/);
 });
 
-test("vscodeignore block lists only vscode:false deps", () => {
+test("vscodeignore block allowlists every dep except vscode:false ones", () => {
   const block = renderVscodeignoreBlock(DEPS);
-  assert.match(block, /^vendor\/a-dep\/\*\*$/m);
-  assert.doesNotMatch(block, /b-dep/);
+  assert.match(block, /^!vendor\/b-dep\/\*\*$/m);
+  assert.doesNotMatch(block, /a-dep/);
+});
+
+test("vscodeignore block skips dirs nested under an allowlisted dir", () => {
+  const block = renderVscodeignoreBlock(resolveDeps([
+    { id: "three", name: "T", source: { npm: "t", files: { "a.js": "a.js" } }, license: { url: "https://example.com/t" } },
+    { id: "draco", name: "D", dir: "three/draco", source: { npm: "d", files: { "a.js": "a.js" } }, license: { url: "https://example.com/d" } },
+  ]));
+  assert.match(block, /^!vendor\/three\/\*\*$/m);
+  assert.doesNotMatch(block, /three\/draco/);
 });
 
 test("spliceMarkedBlock replaces an existing block in place", () => {

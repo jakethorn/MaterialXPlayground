@@ -7,7 +7,8 @@
 // Extracted verbatim from material-viewer.html's inline script;
 // original 8-space indentation preserved as-is.
 
-const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|tga|exr|hdr|tif+)$/i;
+// Single source of truth: js/shared/texture-formats.js (window global).
+const IMG_EXT = window.textureExtRegex();
 
 // Geometry names this component actually knows how to render —
 // mirrors ViewportControls' own default `geomList` (js/shared/
@@ -83,7 +84,7 @@ const loadMtlxDocument = async (xmlText, path, version) => {
   } = env;
   const doc = mx.createDocument();
   if (typeof mx.readFromXmlString !== 'function') {
-    throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
+    throw new Error('readFromXmlString is not bound in this MaterialX build, cannot parse .mtlx files.');
   }
   // CRITICAL: readFromXmlString is ASYNC (a custom post-JS
   // implementation that fetches XIncludes). Missing the await
@@ -697,7 +698,7 @@ function MaterialViewerApp({
     const mtlx = Object.keys(merged).filter(k => /\.mtlx$/i.test(k));
     setMtlxPaths(mtlx);
     if (!mtlx.length) {
-      setStatus('Files received — now drop the .mtlx or .mxsl document itself.' + mxslWarn);
+      setStatus('Files received. Now drop the .mtlx or .mxsl document itself.' + mxslWarn);
       return;
     }
     if (droppedMtlx.length) {
@@ -707,7 +708,7 @@ function MaterialViewerApp({
       // sibling .mtlx via xi:include.
       const pick = rootKey && mtlx.indexOf(rootKey) !== -1 ? rootKey : mtlx.length === 1 ? mtlx[0] : null;
       setChosenMtlx(pick);
-      if (pick) loadPromise = loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files — pick one in the Files panel.' + mxslWarn);
+      if (pick) loadPromise = loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files. Pick one in the Files panel.' + mxslWarn);
     } else if (chosenMtlx && viewRef.current) {
       // Textures added to a live view: rebind without regenerating.
       trackTexReport(bindDroppedTextures(viewRef.current, merged));
@@ -715,7 +716,7 @@ function MaterialViewerApp({
     } else if (chosenMtlx) {
       loadPromise = loadDocument(chosenMtlx, merged);
     } else {
-      setStatus('Textures added — pick a .mtlx in the Files panel.' + mxslWarn);
+      setStatus('Textures added. Pick a .mtlx in the Files panel.' + mxslWarn);
     }
     // loadDocument clears status/error on success, surface a
     // partial .mxsl compile failure after it settles.
@@ -913,7 +914,12 @@ function MaterialViewerApp({
     // pure waste there — and its 404 is a console error wherever
     // the gitignored build is absent, which fails the embed smoke
     // test in CI. Nothing reads versionAvailable while chromeless.
-    if (chromeless) return undefined;
+    // The VS Code webview never packages a non-default version
+    // either (only the default's WASM ships in the .vsix), and
+    // a 404 through its resource pipeline logs a host-side
+    // "Webview.loadLocalResource" error on every run, so skip
+    // the probe there too.
+    if (chromeless || window.__MTLX_VSCODE__) return undefined;
     let cancelled = false;
     mtlxVersions.filter(v => v !== mtlxDefaultVersion).forEach(v => {
       fetch('js/materialx/' + v + '/JsMaterialXGenShader.js', {
@@ -1424,7 +1430,7 @@ function MaterialViewerApp({
     placeholder: "No document loaded",
     multiple: true,
     icon: "files",
-    accept: ".mtlx,.mxsl,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2",
+    accept: '.mtlx,.mxsl,.zip,' + window.textureAccept(),
     onFiles: onPickFileList
   })), /*#__PURE__*/React.createElement("label", {
     title: "Choose a folder",
@@ -1688,7 +1694,23 @@ function MaterialViewerApp({
   }, error), /*#__PURE__*/React.createElement("div", {
     ref: viewportRef,
     className: `overflow-hidden ${bgClass} ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`
-  }, /*#__PURE__*/React.createElement(LoadingOverlay, {
+  }, /*#__PURE__*/React.createElement("canvas", {
+    ref: canvasRef,
+    className: "block cursor-grab active:cursor-grabbing"
+    // Absolute so it fills the container even when the parent
+    // height is flex-derived (a % height would fall back to 2:1).
+    // No focus ring: on a transparent embed it reads as a border.
+    ,
+    style: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      width: '100%',
+      height: '100%',
+      outline: 'none'
+    },
+    tabIndex: -1
+  }), /*#__PURE__*/React.createElement(LoadingOverlay, {
     show: busy,
     label: status,
     className: "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70",
@@ -1853,19 +1875,7 @@ function MaterialViewerApp({
     title: "Material to display",
     size: "sm",
     variant: "toolbar"
-  }))), /*#__PURE__*/React.createElement("canvas", {
-    ref: canvasRef,
-    className: "w-full block cursor-grab active:cursor-grabbing"
-    // Always fills its container: VS Code, fullscreen, and
-    // the full-bleed browser default all resolve to 100% here.
-    // No focus ring: on a transparent embed it reads as a border.
-    ,
-    style: {
-      height: '100%',
-      outline: 'none'
-    },
-    tabIndex: -1
-  }), !IN_VSCODE && !chromeless && renderables.length > 0 && (() => {
+  }))), !IN_VSCODE && !chromeless && renderables.length > 0 && (() => {
     const segments = [renderables[chosenMat] && renderables[chosenMat].name, mxSafe(() => renderables[chosenMat].node.getCategory(), ''),
     // renderedVersion reflects what actually rendered; window.__mtlxVersion
     // is only ever stamped for the DEFAULT build (js/mtlx-engine.js), so it's
@@ -1898,15 +1908,15 @@ function MaterialViewerApp({
     name: "chevrons-right",
     className: "w-4 h-4"
   }), /*#__PURE__*/React.createElement("span", {
-    className: "max-w-[5rem] md:max-w-[8rem] truncate"
-  }, "Viewer")));
+    className: "max-w-[7rem] md:max-w-[8rem] truncate"
+  }, "Material Viewer")));
   return (
     /*#__PURE__*/
-    // IN_VSCODE: height chain fills the webview. Browser: a
+    // IN_VSCODE: absolute in #root, since a % height chain collapses to 0 after a resize. Browser: a
     // full-bleed flex row (docked sidebar + stage column), via
     // js/shell.jsx's now-empty viewer wrapClass.
     React.createElement("div", {
-      className: IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`
+      className: IN_VSCODE ? 'absolute inset-0 min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`
     }, dragOver && /*#__PURE__*/React.createElement("div", {
       className: `fixed left-0 right-0 bottom-0 z-40 pointer-events-none p-2 sm:p-4 ${chromeless ? 'top-0' : 'top-14'}`
     }, /*#__PURE__*/React.createElement("div", {
@@ -1919,10 +1929,10 @@ function MaterialViewerApp({
     }), " Drop to load"))), !IN_VSCODE && !chromeless && sidebarOpen && /*#__PURE__*/React.createElement("div", {
       className: "flex-none w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden"
     }, /*#__PURE__*/React.createElement("div", {
-      className: "flex-none flex items-center px-3 py-2 border-b border-gray-700"
+      className: "flex-none flex items-center gap-1.5 px-3 py-2 border-b border-gray-700"
     }, /*#__PURE__*/React.createElement("span", {
       className: "text-[13px] font-semibold text-gray-200"
-    }, "Viewer"), /*#__PURE__*/React.createElement("button", {
+    }, "Material Viewer"), /*#__PURE__*/React.createElement("button", {
       onClick: () => setSidebarOpen(false),
       title: "Collapse the viewer panel",
       className: "flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"

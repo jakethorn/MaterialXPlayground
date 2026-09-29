@@ -6,7 +6,8 @@
         // Extracted verbatim from material-viewer.html's inline script;
         // original 8-space indentation preserved as-is.
 
-        const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|tga|exr|hdr|tif+)$/i;
+        // Single source of truth: js/shared/texture-formats.js (window global).
+        const IMG_EXT = window.textureExtRegex();
 
         // Geometry names this component actually knows how to render —
         // mirrors ViewportControls' own default `geomList` (js/shared/
@@ -75,7 +76,7 @@
             const { mx, gen, stdlib, lightData } = env;
             const doc = mx.createDocument();
             if (typeof mx.readFromXmlString !== 'function') {
-                throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
+                throw new Error('readFromXmlString is not bound in this MaterialX build, cannot parse .mtlx files.');
             }
             // CRITICAL: readFromXmlString is ASYNC (a custom post-JS
             // implementation that fetches XIncludes). Missing the await
@@ -632,7 +633,7 @@
                 const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
                 setMtlxPaths(mtlx);
                 if (!mtlx.length) {
-                    setStatus('Files received — now drop the .mtlx or .mxsl document itself.' + mxslWarn);
+                    setStatus('Files received. Now drop the .mtlx or .mxsl document itself.' + mxslWarn);
                     return;
                 }
                 if (droppedMtlx.length) {
@@ -643,7 +644,7 @@
                     const pick = (rootKey && mtlx.indexOf(rootKey) !== -1) ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
                     if (pick) loadPromise = loadDocument(pick, merged);
-                    else setStatus('This drop contains several .mtlx files — pick one in the Files panel.' + mxslWarn);
+                    else setStatus('This drop contains several .mtlx files. Pick one in the Files panel.' + mxslWarn);
                 } else if (chosenMtlx && viewRef.current) {
                     // Textures added to a live view: rebind without regenerating.
                     trackTexReport(bindDroppedTextures(viewRef.current, merged));
@@ -651,7 +652,7 @@
                 } else if (chosenMtlx) {
                     loadPromise = loadDocument(chosenMtlx, merged);
                 } else {
-                    setStatus('Textures added — pick a .mtlx in the Files panel.' + mxslWarn);
+                    setStatus('Textures added. Pick a .mtlx in the Files panel.' + mxslWarn);
                 }
                 // loadDocument clears status/error on success, surface a
                 // partial .mxsl compile failure after it settles.
@@ -843,7 +844,12 @@
                 // pure waste there — and its 404 is a console error wherever
                 // the gitignored build is absent, which fails the embed smoke
                 // test in CI. Nothing reads versionAvailable while chromeless.
-                if (chromeless) return undefined;
+                // The VS Code webview never packages a non-default version
+                // either (only the default's WASM ships in the .vsix), and
+                // a 404 through its resource pipeline logs a host-side
+                // "Webview.loadLocalResource" error on every run, so skip
+                // the probe there too.
+                if (chromeless || window.__MTLX_VSCODE__) return undefined;
                 let cancelled = false;
                 mtlxVersions.filter((v) => v !== mtlxDefaultVersion).forEach((v) => {
                     fetch('js/materialx/' + v + '/JsMaterialXGenShader.js', { method: 'HEAD', cache: 'no-store' })
@@ -1350,7 +1356,7 @@
                                     placeholder="No document loaded"
                                     multiple
                                     icon="files"
-                                    accept=".mtlx,.mxsl,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
+                                    accept={'.mtlx,.mxsl,.zip,' + window.textureAccept()}
                                     onFiles={onPickFileList}
                                 />
                             </div>
@@ -1619,6 +1625,15 @@
                                 height, not the canvas child. Browser: fills
                                 the full-bleed viewport card via `absolute inset-0`. */}
                             <div ref={viewportRef} className={`overflow-hidden ${bgClass} ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`}>
+                                <canvas
+                                    ref={canvasRef}
+                                    className="block cursor-grab active:cursor-grabbing"
+                                    // Absolute so it fills the container even when the parent
+                                    // height is flex-derived (a % height would fall back to 2:1).
+                                    // No focus ring: on a transparent embed it reads as a border.
+                                    style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', outline: 'none' }}
+                                    tabIndex={-1}
+                                />
                                 <LoadingOverlay
                                     show={busy}
                                     label={status}
@@ -1792,15 +1807,6 @@
                                     </ViewportControls>
                                     )
                                 )}
-                                <canvas
-                                    ref={canvasRef}
-                                    className="w-full block cursor-grab active:cursor-grabbing"
-                                    // Always fills its container: VS Code, fullscreen, and
-                                    // the full-bleed browser default all resolve to 100% here.
-                                    // No focus ring: on a transparent embed it reads as a border.
-                                    style={{ height: '100%', outline: 'none' }}
-                                    tabIndex={-1}
-                                />
                                 {/* Status chip: material / shader category / MaterialX
                                     version. Lives inside viewportRef (survives fullscreen);
                                     browser-only, VS Code has its own status line above. */}
@@ -1852,17 +1858,17 @@
                             className={'absolute top-2 left-2 z-30 ' + HUD_PILL}
                         >
                             <MtlxIcon name="chevrons-right" className="w-4 h-4" />
-                            <span className="max-w-[5rem] md:max-w-[8rem] truncate">Viewer</span>
+                            <span className="max-w-[7rem] md:max-w-[8rem] truncate">Material Viewer</span>
                         </button>
                     )}
                 </React.Fragment>
             );
 
             return (
-                // IN_VSCODE: height chain fills the webview. Browser: a
+                // IN_VSCODE: absolute in #root, since a % height chain collapses to 0 after a resize. Browser: a
                 // full-bleed flex row (docked sidebar + stage column), via
                 // js/shell.jsx's now-empty viewer wrapClass.
-                <div className={IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`}>
+                <div className={IN_VSCODE ? 'absolute inset-0 min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`}>
                     {/* Full-page drop indicator, below the sticky header
                         (top-14) — except in embed mode, which has no header
                         to clear (top-0). z-40 matches the graph z-convention
@@ -1882,8 +1888,8 @@
                         embed mode; collapses to the pill in the stage below. */}
                     {!IN_VSCODE && !chromeless && sidebarOpen && (
                         <div className="flex-none w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden">
-                            <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
-                                <span className="text-[13px] font-semibold text-gray-200">Viewer</span>
+                            <div className="flex-none flex items-center gap-1.5 px-3 py-2 border-b border-gray-700">
+                                <span className="text-[13px] font-semibold text-gray-200">Material Viewer</span>
                                 <button
                                     onClick={() => setSidebarOpen(false)}
                                     title="Collapse the viewer panel"
