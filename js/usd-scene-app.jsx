@@ -688,7 +688,7 @@
         }
         groups.scene.count = byPath.size;
         groups.materials.count = groups.materials.children.length;
-        groups.cameras.count = groups.cameras.children.length - 1;
+        groups.cameras.count = groups.cameras.children.length;
         groups.lights.count = groups.lights.children.length;
         return {
             roots, groups, byId, byPath, byRenderPath, meshesByMaterial,
@@ -726,8 +726,8 @@
     };
     // Visible rows in display order. A filter keeps matches, their ancestors (forced
     // open, a group header only when something under it matches) and the descendants
-    // of matches the user expanded.
-    const flattenSceneTree = (tree, expanded, filter) => {
+    // of matches the user expanded. A group key other than 'all' shows only that group.
+    const flattenSceneTree = (tree, expanded, filter, group) => {
         const rows = [];
         if (!tree) return rows;
         const query = String(filter || '').trim().toLowerCase();
@@ -747,11 +747,12 @@
                 const matched = !!matches && matches.has(node);
                 if (matches && !matched && !insideMatch && !forced.has(node)) return;
                 rows.push(node);
-                const open = (forced && forced.has(node)) || expanded.has(node.id);
+                const open = (forced && forced.has(node)) || expanded.has(node.id) || (pinned && node.isGroup && !node.parent);
                 if (open && node.children.length) visit(node.children, insideMatch || matched);
             });
         };
-        visit(tree.roots, false);
+        const pinned = !!group && group !== 'all';
+        visit(pinned ? tree.roots.filter((root) => root.group === group) : tree.roots, false);
         return rows;
     };
     // The four groups start open. Small scenes open fully; larger ones open their roots
@@ -1564,6 +1565,39 @@
             </div>
         );
     };
+    // Hierarchy type filter: the bottom row of the search box, no chrome of its own.
+    const SCENE_TREE_GROUP_OPTIONS = [
+        ['all', 'All', 'Show everything'],
+        ['scene', 'Scene', 'Show only scene objects'],
+        ['materials', 'Materials', 'Show only materials'],
+        ['cameras', 'Cameras', 'Show only cameras'],
+        ['lights', 'Lights', 'Show only lights'],
+    ];
+    const SceneTreeGroupSegments = ({ value, onChange }) => {
+        return (
+            <div role="group" aria-label="Show in hierarchy" data-testid="usd-scene-tree-group" className="flex w-full border-t border-gray-700">
+                {SCENE_TREE_GROUP_OPTIONS.map(([id, label, title], i) => {
+                    const active = value === id;
+                    return (
+                        <button
+                            key={id}
+                            type="button"
+                            data-testid={'usd-scene-tree-group-' + id}
+                            data-active={active ? 'true' : undefined}
+                            aria-pressed={active}
+                            title={title}
+                            onClick={() => onChange(id)}
+                            className={'h-6 min-w-0 flex-1 px-1 flex items-center justify-center text-[11px] font-medium transition-colors '
+                                + (i > 0 ? 'border-l border-gray-700 ' : '')
+                                + (active ? 'bg-blue-500/[0.12] text-blue-300' : 'bg-transparent text-gray-400 hover:bg-gray-800 hover:text-gray-200')}
+                        >
+                            <span className="truncate">{label}</span>
+                        </button>
+                    );
+                })}
+            </div>
+        );
+    };
     // Diagnostics popover over the Statistics footer: this wide, at most this
     // share of the window tall, clamped to the window.
     const DIAGNOSTICS_POPOVER_W = 440;
@@ -1762,6 +1796,7 @@
         // The Environment row's eye: per view like hidden lights, never persisted.
         const [envLightingOff, setEnvLightingOff] = React.useState(false);
         const [treeFilter, setTreeFilter] = React.useState('');
+        const [treeGroup, setTreeGroup] = React.useState('all');
         const [treeReveal, setTreeReveal] = React.useState(0);
         const treeSceneKeyRef = React.useRef(null);
         // The Cameras group's active row: 'default' (frame the scene) or a camera path.
@@ -2556,6 +2591,10 @@
 
         // Outliner: tree model, renderer sync, selection and activation.
         const sceneTree = React.useMemo(() => (stage ? buildSceneTree(stage) : null), [stage]);
+        // Same camera list as the hierarchy's Cameras group.
+        const cameraOptions = React.useMemo(() => (sceneTree
+            ? sceneTree.groups.cameras.children.map((node) => ({ value: node.isDefaultCamera ? 'default' : node.path, label: node.name }))
+            : []), [sceneTree]);
         React.useEffect(() => {
             if (!sceneTree) return;
             if (treeSceneKeyRef.current === rootPath) {
@@ -2572,6 +2611,7 @@
             setLightsHidden(new Set());
             setEnvLightingOff(false);
             setTreeFilter('');
+            setTreeGroup('all');
             // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [sceneTree]);
         React.useEffect(() => {
@@ -2588,7 +2628,7 @@
             const node = treeSelected && sceneTree ? sceneTree.byId.get(treeSelected) : null;
             handle.setHighlightedPrims(node && !node.isGroup ? sceneTreeRenderPaths(sceneTree, node) : []);
         }, [handle, sceneTree, treeSelected]);
-        const treeRows = React.useMemo(() => flattenSceneTree(sceneTree, treeExpanded, treeFilter), [sceneTree, treeExpanded, treeFilter]);
+        const treeRows = React.useMemo(() => flattenSceneTree(sceneTree, treeExpanded, treeFilter, treeGroup), [sceneTree, treeExpanded, treeFilter, treeGroup]);
         const toggleTreeExpanded = (id) => setTreeExpanded((prev) => {
             const next = new Set(prev);
             if (next.has(id)) next.delete(id); else next.add(id);
@@ -2631,6 +2671,7 @@
             if (!node) { setTreeSelected(''); return; }
             const query = treeFilter.trim().toLowerCase();
             if (query && node.name.toLowerCase().indexOf(query) < 0) setTreeFilter('');
+            if (treeGroup !== 'all' && node.group !== treeGroup) setTreeGroup('all');
             selectTreePath(node.id, true);
         };
         // The material preview for a mesh row (its bound material) or a material row.
@@ -4096,7 +4137,8 @@
                 {sceneTree && (
                     <section data-testid="usd-scene-section-hierarchy" className="flex-1 flex flex-col gap-2 px-3.5 py-3 border-t border-gray-700">
                         <SidebarSectionHeader icon="list-details" title="Hierarchy" summary={objectCount.toLocaleString() + ' object' + (objectCount === 1 ? '' : 's')} testId="usd-scene-section-header" />
-                        <div className="relative flex-none h-[26px]">
+                        <div className="flex-none rounded-md border border-gray-700 bg-gray-900 overflow-hidden focus-within:border-blue-500">
+                        <div className="relative h-[26px]">
                             <MtlxIcon name="search" className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" />
                             <input
                                 type="text"
@@ -4115,8 +4157,10 @@
                                 aria-label="Filter objects"
                                 data-testid="usd-scene-tree-filter"
                                 spellCheck={false}
-                                className="w-full h-full bg-gray-900 border border-gray-700 rounded-md pl-7 pr-2 text-[11px] text-gray-300 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                                className="w-full h-full bg-transparent border-0 pl-7 pr-2 text-[11px] text-gray-300 placeholder-gray-500 focus:outline-none"
                             />
+                        </div>
+                        <SceneTreeGroupSegments value={treeGroup} onChange={setTreeGroup} />
                         </div>
                         {treeRows.length ? (
                             <SceneTree
@@ -4325,6 +4369,23 @@
                             <MtlxIcon name="sun" className="w-4 h-4" />
                             {!hudCompact && <span>Environment settings</span>}
                         </button>
+                        {sceneTree && (
+                            <div data-testid="usd-scene-camera-select" className="flex-none">
+                                <MtlxSelect
+                                    value={selectedCamera}
+                                    options={cameraOptions}
+                                    defValue="default"
+                                    onChange={selectCamera}
+                                    icon="camera"
+                                    title="Camera"
+                                    ariaLabel="Camera"
+                                    variant="toolbar"
+                                    size="md"
+                                    maxWidth={hudCompact ? 110 : 180}
+                                    disabled={!handle}
+                                />
+                            </div>
+                        )}
                     </div>
 
                     {envPopover}
