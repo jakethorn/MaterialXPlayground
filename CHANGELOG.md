@@ -118,11 +118,6 @@ Full notes for every release, including every fix, are on the [GitHub Releases p
 - Added a flat "2D Buffer" preview mode, useful for patterns and other flat operations.
 - The Node Graph Editor gained a delete-nodes button and a panel listing where a node's output is used.
 
-### Node Graph Editor
-
-- ShadingLanguageX code view: the document decompiled to editable SLX code in a panel docked beside the node list (a document opened from a `.mxsl` file shows its original source instead). Compile regenerates the node graph from the code (undoable, keeping the selected and previewed nodes when they still exist), and Decompile refreshes the code from the graph (also undoable: Ctrl+Z in the code, or the Undo link it shows). The code is syntax highlighted, with suggestions as you type, parameter hints inside calls, and hover cards showing a standard library function's signatures and description. A compile error squiggles the line it's on, and Ctrl/Cmd+clicking a standard library function opens its documentation. Not available in the VS Code extension.
-- With no material or surface shader to show, the preview now starts on the node at the end of a chain (nothing downstream of it) rather than the first node.
-
 ## 2026.8.0 (2026-08-01)
 
 First public release, built on MaterialX v1.39.5.
