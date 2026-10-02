@@ -32,8 +32,15 @@
         const CODE_LINE_HEIGHT = 18; // px
         const CODE_PAD_Y = 8; // px, top padding of every layer
         const CODE_TEXT_CLASS = 'font-mono text-[12px] leading-[18px]';
-        // The decompiler indents with tabs.
+        // Tabs show four columns wide, like the decompiler's indent.
         const CODE_TAB_SIZE = 4;
+        // The indent the code already uses, for Tab, Enter and outdenting:
+        // a tab when its first indented line starts with one, else four
+        // spaces (what the decompiler writes).
+        const slxIndentUnit = (text) => {
+            const m = /^[ \t]+(?=\S)/m.exec(text || '');
+            return m && m[0][0] === '\t' ? '\t' : '    ';
+        };
         // VS Code-style current-line band and line number.
         const CODE_CURRENT_LINE_CLASS = 'bg-white/[0.04] border-y border-white/[0.07]';
         const CODE_CURRENT_NUMBER_CLASS = 'text-gray-300';
@@ -208,6 +215,14 @@
             return out;
         };
 
+        // Screen px per layout px for `el`: 1 in the docked panel, the zoom
+        // on the canvas, whose transform getBoundingClientRect() includes
+        // while offset sizes, clientTop and the metrics above don't.
+        const layoutScale = (el) => {
+            if (!el || !el.offsetHeight) return 1;
+            return el.getBoundingClientRect().height / el.offsetHeight || 1;
+        };
+
         // The squiggle layer's HTML: the text up to the last mark, with
         // each mark wrapped in a .slx-error span. Null when there's none.
         const markupSquiggles = (text, marks) => {
@@ -230,6 +245,7 @@
         // this contract:
         //   value, onChange(text)  controlled text
         //   onSubmit()             Ctrl/Cmd+Enter
+        //   onBlur()               the text area lost focus (optional)
         //   readOnly, placeholder
         //   library                js/graph/slx-language.jsx's function
         //                          library (loadSlxLibrary), or null while
@@ -246,7 +262,10 @@
         //   apiRef                 filled with { focus(), revealLine(n),
         //                          revealDiagnostic(i), replaceText(text),
         //                          undo() }
-        function SlxCodeEditor({ value, onChange, onSubmit, readOnly, placeholder, library, onOpenNodeDocs, diagnostics, apiRef }) {
+        // Used by the docked code view below and, on the canvas, by each
+        // ShadingLanguageX node (js/graph/node-component.jsx), where React
+        // Flow's zoom scales it: pixel geometry goes through layoutScale.
+        function SlxCodeEditor({ value, onChange, onSubmit, onBlur, readOnly, placeholder, library, onOpenNodeDocs, diagnostics, apiRef }) {
             const taRef = React.useRef(null);
             const gutterRef = React.useRef(null);
             const backdropRef = React.useRef(null);
@@ -655,7 +674,8 @@
                     probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;';
                     probe.textContent = 'x'.repeat(100);
                     ta.parentNode.appendChild(probe);
-                    charWidthRef.current = probe.getBoundingClientRect().width / 100 || 7;
+                    // offsetWidth: layout px, the same at any zoom.
+                    charWidthRef.current = probe.offsetWidth / 100 || 7;
                     probe.remove();
                 }
                 let line = 0;
@@ -665,12 +685,14 @@
                     col = text[i] === '\t' ? (Math.floor(col / CODE_TAB_SIZE) + 1) * CODE_TAB_SIZE : col + 1;
                 }
                 const box = ta.getBoundingClientRect();
-                const areaTop = box.top + ta.clientTop;
-                const top = areaTop + CODE_PAD_Y + line * CODE_LINE_HEIGHT - ta.scrollTop;
+                const scale = layoutScale(ta);
+                const lineHeight = CODE_LINE_HEIGHT * scale;
+                const areaTop = box.top + ta.clientTop * scale;
+                const top = areaTop + (CODE_PAD_Y + line * CODE_LINE_HEIGHT - ta.scrollTop) * scale;
                 return {
-                    left: box.left + ta.clientLeft + parseFloat(getComputedStyle(ta).paddingLeft) + col * charWidthRef.current - ta.scrollLeft,
-                    top, bottom: top + CODE_LINE_HEIGHT,
-                    visible: top >= areaTop - 1 && top + CODE_LINE_HEIGHT <= areaTop + ta.clientHeight + 1,
+                    left: box.left + (ta.clientLeft + parseFloat(getComputedStyle(ta).paddingLeft) + col * charWidthRef.current - ta.scrollLeft) * scale,
+                    top, bottom: top + lineHeight,
+                    visible: top >= areaTop - 1 && top + lineHeight <= areaTop + ta.clientHeight * scale + 1,
                 };
             };
             const placeAssist = () => {
@@ -733,9 +755,10 @@
                 const box = clip.getBoundingClientRect();
                 if (x < box.left || x >= box.right || y < box.top || y >= box.bottom) return null;
                 const spans = code.querySelectorAll('.slx-stdlib');
+                const lineHeight = CODE_LINE_HEIGHT * layoutScale(clip);
                 const lineBox = (span) => {
                     const r = span.getBoundingClientRect();
-                    const pad = (CODE_LINE_HEIGHT - r.height) / 2;
+                    const pad = (lineHeight - r.height) / 2;
                     return { left: r.left, right: r.right, top: r.top - pad, bottom: r.bottom + pad };
                 };
                 let lo = 0;
@@ -784,7 +807,7 @@
             const showTip = (span) => {
                 if (!span.isConnected) return;
                 const r = span.getBoundingClientRect();
-                const pad = (CODE_LINE_HEIGHT - r.height) / 2;
+                const pad = (CODE_LINE_HEIGHT * layoutScale(taRef.current) - r.height) / 2;
                 hoverRef.current.tipShown = true;
                 setTip({ name: span.dataset.node, left: r.left, lineTop: r.top - pad, lineBottom: r.bottom + pad });
             };
@@ -907,6 +930,32 @@
                 }
             };
 
+            // Indent or outdent (a tab or up to four spaces) every line the
+            // selection touches, as one undoable edit. Several lines stay
+            // selected; a lone line keeps its caret on the same text.
+            const indentLines = (outdent) => {
+                const ta = taRef.current;
+                if (!ta) return;
+                const v = ta.value;
+                const s = ta.selectionStart;
+                const e = ta.selectionEnd;
+                const start = v.lastIndexOf('\n', s - 1) + 1;
+                const nl = v.indexOf('\n', (e > s && v[e - 1] === '\n') ? e - 1 : e);
+                const stop = nl === -1 ? v.length : nl;
+                const lines = v.slice(start, stop).split('\n');
+                const unit = slxIndentUnit(v);
+                const next = lines.map((l) => (outdent ? l.replace(/^(\t| {1,4})/, '') : (l ? unit + l : l))).join('\n');
+                if (next === v.slice(start, stop)) return;
+                ta.setSelectionRange(start, stop);
+                insertText(next);
+                if (lines.length > 1) {
+                    ta.setSelectionRange(start, start + next.length);
+                } else {
+                    const caret = Math.max(start, s + next.length - lines[0].length);
+                    ta.setSelectionRange(caret, caret);
+                }
+            };
+
             // Keys for the open suggestion list and parameter hints, first.
             // True when the key was theirs.
             const assistKeyDown = (e) => {
@@ -978,16 +1027,26 @@
                     return;
                 }
                 if (readOnly) return;
-                if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                const ta = e.currentTarget;
+                const unmodified = !e.ctrlKey && !e.altKey && !e.metaKey;
+                const before = ta.value.slice(ta.value.lastIndexOf('\n', ta.selectionStart - 1) + 1, ta.selectionStart);
+                if (e.key === 'Tab' && unmodified) {
+                    // A tab at the caret; Shift+Tab, or Tab over several
+                    // selected lines, outdents or indents the lines instead.
                     e.preventDefault();
-                    insertText('\t');
+                    if (e.shiftKey || ta.value.slice(ta.selectionStart, ta.selectionEnd).indexOf('\n') !== -1) indentLines(e.shiftKey);
+                    else insertText(slxIndentUnit(ta.value));
                 } else if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
-                    // Carry the current line's indentation onto the new one.
-                    const ta = e.currentTarget;
-                    const lineStart = ta.value.lastIndexOf('\n', ta.selectionStart - 1) + 1;
-                    const indent = /^[ \t]*/.exec(ta.value.slice(lineStart, ta.selectionStart))[0];
+                    // Carry the current line's indentation onto the new one,
+                    // a level deeper after an opening brace.
                     e.preventDefault();
-                    insertText('\n' + indent);
+                    insertText('\n' + /^[ \t]*/.exec(before)[0] + (/\{\s*$/.test(before) ? slxIndentUnit(ta.value) : ''));
+                } else if (e.key === '}' && unmodified && ta.selectionStart === ta.selectionEnd && /^[ \t]+$/.test(before)) {
+                    // A closing brace typed on a blank line steps back a level.
+                    e.preventDefault();
+                    const unit = /(\t| {1,4})$/.exec(before)[0];
+                    ta.setSelectionRange(ta.selectionStart - unit.length, ta.selectionStart);
+                    insertText('}');
                 }
             };
 
@@ -1043,7 +1102,7 @@
                                 emitChange(e.target.value);
                             }}
                             onKeyDown={onKeyDown}
-                            onBlur={() => setAssist(null, null)}
+                            onBlur={() => { setAssist(null, null); if (onBlur) onBlur(); }}
                             onScroll={() => { syncScroll(); hideTip(); updateHover(); placeAssist(); }}
                             onMouseMove={onMouseMove}
                             onMouseLeave={onMouseLeave}
@@ -1308,4 +1367,4 @@
             );
         }
 
-Object.assign(window, { SlxCodeView, SlxCodeEditor });
+Object.assign(window, { SlxCodeView, SlxCodeEditor, slxErrorLine });

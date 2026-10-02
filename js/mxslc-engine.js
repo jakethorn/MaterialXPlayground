@@ -60,6 +60,15 @@ const compileMxslcSource = async (source, files, label) => {
     }
 };
 
+// The attribute a ShadingLanguageX code node (a nodegraph built from code
+// written on it in the graph editor, js/graph/slx-node.jsx) keeps its
+// source in. A whole-document decompile leaves it out: mxslc would carry it
+// into the code as an @slxsource "..." string, which breaks as soon as the
+// node's code holds a quote (SLX strings have no escapes), and the code
+// view's Compile puts it back (carrySlxSources).
+const SLX_SOURCE_ATTR = 'slxsource';
+const withoutSlxSources = (xml) => String(xml).replace(new RegExp('\\s' + SLX_SOURCE_ATTR + '="[^"]*"', 'g'), '');
+
 // Decompiling a large graph (thousands of nodes) can run for minutes on
 // the mxslc WASM module, so it runs in a dedicated worker (js/mxslc-worker.js)
 // instead of the main thread: a worker is also the only way to actually
@@ -144,7 +153,7 @@ const decompileMtlxToSlx = (xml, { signal } = {}) => {
         worker.addEventListener('error', onError);
         if (signal) signal.addEventListener('abort', onAbort, { once: true });
         try {
-            worker.postMessage({ id, op: 'decompile', xml, entryUrl });
+            worker.postMessage({ id, op: 'decompile', xml: withoutSlxSources(xml), entryUrl });
         } catch (e) {
             settled = true;
             cleanup();
@@ -293,4 +302,4 @@ const expandMxsl = async (map, origins, failures) => {
 // they reach slxExportStages as a bare identifier, exactly like expandZips.
 // viewer-app.jsx reaches expandMxsl via window instead, because the embed
 // bundle (embed/viewer.html) doesn't load this file.
-Object.assign(window, { getMxslcModule, compileMxslcSource, decompileMtlxToSlx, slxExportStages, expandMxsl });
+Object.assign(window, { getMxslcModule, compileMxslcSource, SLX_SOURCE_ATTR, decompileMtlxToSlx, slxExportStages, expandMxsl });

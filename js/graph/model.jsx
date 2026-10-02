@@ -180,7 +180,7 @@
             // self-heals documents from outside the graph editor too.
             mxSafe(() => stripValuesFromConnectedInputs(parsed.doc), 0);
             return preserveSourceFormatting(parsed.sourceText,
-                withXmlEnvelope(parsed.mx.writeToXmlString(parsed.doc), parsed.envelope));
+                withXmlEnvelope(escapeXmlAttrSpecials(parsed.mx.writeToXmlString(parsed.doc)), parsed.envelope));
         };
 
         // Document's own children only, never the library: every by-name
@@ -321,6 +321,14 @@
             parsed.implGraphByNodedef = computeImplGraphByNodedef(parsed.doc);
             return parsed;
         };
+
+        // A ShadingLanguageX code node is a plain root-level instance
+        // nodegraph whose interior was compiled from the SLX source it
+        // carries in SLX_SOURCE_ATTR (js/mxslc-engine.js; see
+        // js/graph/slx-node.jsx). Lives here, not there, since read-only
+        // graph previews render these cards too.
+        const isSlxGraph = (el) => !!el && mxElCat(el) === 'nodegraph'
+            && mxElHasAttr(el, SLX_SOURCE_ATTR) && !mxElAttr(el, 'nodedef');
 
         // Kind decides the accent color and (for nodegraphs) the
         // double-click-to-open affordance.
@@ -610,7 +618,8 @@
                     push({ id: 'g:' + mxElName(g), kind: 'nodegraph', name: mxElName(g),
                            category: 'nodegraph', type: '',
                            inputs: ins, outputs: outs.length ? outs : [{ name: 'out', type: '' }],
-                           pos: storedPos(g) });
+                           pos: storedPos(g),
+                           slx: isSlxGraph(g) ? { source: mxElAttr(g, SLX_SOURCE_ATTR) } : undefined });
                 }
                 // One "definition card" per local nodedef: one card per
                 // functional graph implementing it, or one keyed off the
@@ -773,6 +782,7 @@
 
 Object.assign(window, {
     DEFAULT_GRAPH_URL, parseMtlxDocument, validateMtlxXml, serializeDocXml, kindOfNode,
+    isSlxGraph,
     resolveVersionedNodeDef,
     collectPorts, storedPos, buildScope, MTLX_PERF_LOG: (window.MTLX_PERF_LOG || MTLX_PERF_LOG), ifaceColorManaged,
     ifaceNumericType, ifaceLiteralType,

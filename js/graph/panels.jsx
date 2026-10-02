@@ -18,7 +18,9 @@
         // filterMode/filterType drive the port-dot double-click flow:
         // 'in' matches nodes whose OUTPUT feeds the port, 'out' matches
         // an INPUT that can consume it; null/'' is the normal flow.
-        function AddNodeSearch({ catalog, docCatalog = [], ifaceMode, onAddInterface, defMode, onCreateDefinition, initialMode = null, onPick, onClose, filterMode = null, filterType = '' }) {
+        // slxMode/onAddSlx offer a synthetic "ShadingLanguageX node" row
+        // (document root only, where a nodegraph can live).
+        function AddNodeSearch({ catalog, docCatalog = [], ifaceMode, onAddInterface, defMode, onCreateDefinition, slxMode = false, onAddSlx, initialMode = null, onPick, onClose, filterMode = null, filterType = '' }) {
             const [q, setQ] = React.useState('');
             const [typeFilter, setTypeFilter] = React.useState(filterType || '');
             const [hi, setHi] = React.useState(0);
@@ -77,6 +79,11 @@
                         synth.push({ synthetic: 'definition', category: 'node definition' });
                     }
                 }
+                if (slxMode) {
+                    if (!s || ['shadinglanguagex', 'slx', 'mxsl', 'code', 'shading language'].some((k) => k.indexOf(s) !== -1)) {
+                        synth.push({ synthetic: 'slx', category: 'ShadingLanguageX node' });
+                    }
+                }
                 if (!catalog) return synth;
                 // Rank on category first, group second (see catalog.jsx's
                 // searchFilter comment): a group-only match still shows,
@@ -109,7 +116,11 @@
                 if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
             }, [hi, items]);
             const pick = (c) => {
-                if (c.synthetic === 'definition') {
+                if (c.synthetic === 'slx') {
+                    onAddSlx();
+                    onClose();
+                }
+                else if (c.synthetic === 'definition') {
                     setDefDraft({ node: '', type: 'color3', nodegroup: '', withGraph: true });
                 }
                 else if (c.synthetic) {
@@ -387,7 +398,7 @@
                                         <React.Fragment>
                                             <span className="w-2 h-2 rotate-45 flex-none border" style={{ background: 'transparent', borderColor: '#94a3b8' }} />
                                             <span className="truncate italic">{c.category}</span>
-                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">{c.synthetic === 'definition' ? 'new' : 'interface'}</span>
+                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">{c.synthetic === 'definition' ? 'new' : (c.synthetic === 'slx' ? 'code' : 'interface')}</span>
                                         </React.Fragment>
                                     ) : (
                                         <React.Fragment>
