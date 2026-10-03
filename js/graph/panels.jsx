@@ -510,7 +510,9 @@
         // One row per param: connected inputs jump to their source node;
         // unconnected ones edit the value, debounced (each commit writes
         // the doc and recompiles); onLive fires per tick for a live preview.
-        function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace, hideHeader }) {
+        // `disabled`: the reason, shown as a tooltip, the controls are shown
+        // greyed out and inert (a code node's inputs are set by its code).
+        function ParamRow({ nodeId, inp, readOnly, disabled, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace, hideHeader }) {
             // A ref (not state): blurring alone must never re-trigger the
             // re-seed effects below, only an actual value change should.
             const focusedRef = React.useRef(false);
@@ -888,6 +890,10 @@
             ) : readOnly ? (
                 <div className={(hideHeader ? '' : 'mt-1 ') + 'text-[11px] text-gray-400 font-mono truncate'} title={inp.value}>
                     {inp.value !== '' ? inp.value : '\u2014'}
+                </div>
+            ) : disabled ? (
+                <div className={(hideHeader ? '' : 'mt-1 ') + 'cursor-not-allowed'} title={disabled}>
+                    <fieldset disabled className="min-w-0 opacity-50 pointer-events-none">{control()}</fieldset>
                 </div>
             ) : (
                 hideHeader ? control() : <div className="mt-1">{control()}</div>

@@ -1166,9 +1166,13 @@
         // compile errors): those get squiggled. `library` (the function
         // library, or null while it loads) and `onOpenNodeDocs` are passed
         // through to SlxCodeEditor. `canvasRef` is the graph canvas beside
-        // the panel, measured so the panel never crowds it out.
+        // the panel, measured so the panel never crowds it out. `node`
+        // names the ShadingLanguageX node whose code is shown while its
+        // graph is open, null for the document's; each gets a fresh editor.
+        // `stale`: the graph changed since the code was last compiled or
+        // decompiled, so the code no longer describes it.
         function SlxCodeView({
-            code, modified, busy, message, library,
+            node, code, modified, stale, busy, message, library,
             onCodeChange, onCompile, onDecompile, onCollapse, onOpenNodeDocs, canvasRef, editorRef,
         }) {
             // The editor's apiRef (SlxCodeEditor), shared with the caller
@@ -1269,10 +1273,25 @@
                         className="flex-none flex flex-col bg-gray-800/95 border-r border-gray-600 overflow-hidden font-mono">
                         <div className="flex items-center gap-2 px-3 py-2 min-h-[45px] border-b border-gray-700 bg-gray-900/70">
                             <MtlxIcon name="code" className="w-3.5 h-3.5 text-gray-500" />
-                            <span className="text-[13px] font-bold text-gray-100 truncate flex-1">ShadingLanguageX</span>
-                            {modified && (
-                                <span className="flex-none text-[10px] text-amber-300" title="The code has edits that haven't been compiled into the node graph yet">
-                                    modified
+                            <span className={'text-[13px] font-bold text-gray-100 truncate ' + (node ? 'flex-none' : 'flex-1')}>ShadingLanguageX</span>
+                            {node && (
+                                <span className="flex-1 min-w-0 truncate text-[11px] text-gray-400" title={'The code of the ShadingLanguageX node ' + node}>
+                                    {node}
+                                </span>
+                            )}
+                            {(modified || stale) && (
+                                <span className="flex-none flex items-center gap-1 text-[10px]">
+                                    {modified && (
+                                        <span className="text-amber-300 underline decoration-dotted underline-offset-2" title="The code has edits that haven't been compiled into the node graph yet">
+                                            modified
+                                        </span>
+                                    )}
+                                    {modified && stale && <span className="text-white">/</span>}
+                                    {stale && (
+                                        <span className="text-orange-400 underline decoration-dotted underline-offset-2" title="The node graph has changed since this code was last compiled or decompiled. Decompile to bring the code up to date">
+                                            stale
+                                        </span>
+                                    )}
                                 </span>
                             )}
                             <button
@@ -1286,6 +1305,7 @@
                         </div>
                         <div className="relative flex-1 min-h-0 flex">
                             <SlxCodeEditor
+                                key={node || ''}
                                 value={loading ? '' : code}
                                 onChange={onCodeChange}
                                 onSubmit={() => { if (!busy && !loading) onCompile(); }}
@@ -1338,7 +1358,9 @@
                                     type="button"
                                     onClick={onDecompile}
                                     disabled={!!busy}
-                                    title="Replace the code with the current node graph, decompiled to ShadingLanguageX"
+                                    title={node
+                                        ? 'Replace the node’s code with its graph, decompiled to ShadingLanguageX'
+                                        : 'Replace the code with the current node graph, decompiled to ShadingLanguageX'}
                                     className={BTN_SECONDARY + ' flex-1 gap-1.5'}
                                 >
                                     <MtlxIcon name="arrow-left" className="w-3.5 h-3.5" />
@@ -1348,7 +1370,9 @@
                                     type="button"
                                     onClick={onCompile}
                                     disabled={!!busy || loading}
-                                    title="Compile the code and regenerate the node graph from it (Ctrl+Enter)"
+                                    title={node
+                                        ? 'Compile the code into this node’s graph (Ctrl+Enter)'
+                                        : 'Compile the code and regenerate the node graph from it (Ctrl+Enter)'}
                                     className={BTN_PRIMARY + ' flex-1 gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none'}
                                 >
                                     <span>{busy === 'compile' ? 'Compiling…' : 'Compile'}</span>

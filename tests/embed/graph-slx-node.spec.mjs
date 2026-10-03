@@ -115,6 +115,14 @@ test('adds a ShadingLanguageX node from the Tab palette and compiles edited code
     .toMatch(/^\[\[nodegraph\]\]\ncolor3 slx_node\(/);
   expect(graphBody(await graphXml(page), 'NG_slx_node')).toMatch(/<checkerboard name="p"/);
 
+  // Its panel can ungroup it, but the code sets its inputs and definition.
+  await expect(page.getByRole('button', { name: /^Ungroup/ })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Convert to Definition' })).toBeDisabled();
+  await expect(page.getByPlaceholder('node name')).toBeDisabled();
+  const fields = page.locator('fieldset[disabled] input'); // c1's three components, c2_seed, tiling
+  await expect(fields).toHaveCount(5);
+  for (const f of await fields.all()) await expect(f).toBeDisabled();
+
   // Typed code (real keystrokes: the editor auto-indents after "{" and
   // steps back for "}"), compiled with Ctrl+Enter. Renaming the function
   // renames the graph after it.
@@ -253,4 +261,115 @@ test('the code view leaves a code node\'s source out of its code, and its Compil
     try { const { mx } = await getMxEnv(); await compileSlxGraph(mx, src, 'check'); return true; } catch (e) { return String(e.message || e); }
   }, code);
   expect(recompiles).toBe(true);
+});
+
+test('inside a code node\'s graph the code view works on the node\'s code, and leaving decompiles just that code', async ({ page, embedURL }) => {
+  test.skip(!HAS_MXSLC, 'vendor/mxslc not on disk (gitignored, run npm run vendor first)');
+  await page.addInitScript(() => { try { localStorage.setItem('mtlxGraphCodeViewOpen', 'true'); } catch (e) { /* no storage */ } });
+  await openGraphWith(page, embedURL, WITH_NODE);
+  const node = card(page, 'g:NG_brighten');
+  await node.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  const panel = page.locator('aside', { has: page.locator('textarea[aria-label="ShadingLanguageX code"]') });
+  const panelCode = panel.locator('textarea');
+  await expect(panelCode).toHaveValue(/float brighten\(/, { timeout: WAIT_TIMEOUT });
+  const docCode = await panelCode.inputValue();
+
+  // Opening the graph shows the node's own code, comment and all.
+  await node.locator('span', { hasText: /^in2$/ }).dblclick();
+  await card(page, 'n:var__0').waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  await expect(panelCode).toHaveValue(CODE);
+  await expect(panel.getByText('NG_brighten')).toBeVisible();
+
+  // An edit inside the graph rewrites the code shown.
+  await card(page, 'n:var__0').locator('.mtlx-node-name').dblclick();
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('total');
+  await page.keyboard.press('Enter');
+  await expect(panelCode).toHaveValue(/float total = in1 \+ in2;/, { timeout: 10000 });
+
+  // Compile goes into the node alone.
+  const edited = (await panelCode.inputValue()).replace('clamp(gain, 0.0, 10.0)', 'clamp(gain, 0.0, 5.0)');
+  await panelCode.fill(edited);
+  await panel.getByRole('button', { name: /^Compile/ }).click();
+  await expect(panel.getByText('Compiled into the node\u2019s graph.')).toBeVisible({ timeout: 10000 });
+  expect(slxSource(await graphXml(page), 'NG_brighten')).toBe(edited);
+  expect(graphBody(await graphXml(page), 'NG_brighten')).toMatch(/<input name="high" type="float" value="5" \/>/);
+
+  // A compile error stays in the panel, squiggled.
+  await panelCode.fill(edited.replace('in1 + in2', 'in1 + '));
+  await panel.getByRole('button', { name: /^Compile/ }).click();
+  await expect(panel.locator('.slx-marks .slx-error')).toHaveCount(1, { timeout: 10000 });
+  expect(slxSource(await graphXml(page), 'NG_brighten')).toBe(edited);
+
+  // Decompile rebuilds the node's code from its graph.
+  await panel.getByRole('button', { name: /^Decompile/ }).click();
+  await expect(panel.getByText('Decompiled from the node\u2019s graph.')).toBeVisible({ timeout: 10000 });
+  await expect(panelCode).toHaveValue(/clamp\(gain, 0\.0, 5\.0\)/);
+  expect(slxSource(await graphXml(page), 'NG_brighten')).toBe(await panelCode.inputValue());
+
+  // An edit right before leaving is in the node's code as the graph closes;
+  // the document's code is left as it was, stale.
+  await card(page, 'n:total').locator('.mtlx-node-name').dblclick();
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('sum');
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Back to the code' }).click();
+  await expect(editorOf(page, 'g:NG_brighten')).toHaveValue(/float sum = in1 \+ in2;/, { timeout: WAIT_TIMEOUT });
+  await expect(panel.getByText('NG_brighten')).toHaveCount(0);
+  await expect(panelCode).toHaveValue(docCode);
+  await expect(panel.getByText('stale', { exact: true })).toBeVisible({ timeout: 10000 });
+
+  // Uncompiled code left in the panel is the node's draft on its card,
+  // over any edit made inside the graph after it, which leaves it stale.
+  await node.locator('span', { hasText: /^in2$/ }).dblclick();
+  await card(page, 'n:sum').waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  await expect(panel.getByText('stale', { exact: true })).toHaveCount(0);
+  const draft = (await panelCode.inputValue()) + '\n// draft';
+  await panelCode.fill(draft);
+  await card(page, 'n:sum').locator('.mtlx-node-name').dblclick();
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('both');
+  await page.keyboard.press('Enter');
+  await expect(panel.getByText('stale', { exact: true })).toBeVisible({ timeout: 10000 });
+  await expect(panel.getByText(/^modified\s*\/\s*stale$/)).toBeVisible();
+  await expect(panelCode).toHaveValue(draft);
+  await page.getByRole('button', { name: 'Back to the code' }).click();
+  await expect.poll(async () => slxSource(await graphXml(page), 'NG_brighten'), { timeout: 10000 }).toMatch(/float both = in1 \+ in2;/);
+  await expect(editorOf(page, 'g:NG_brighten')).toHaveValue(draft);
+  await expect(node.getByText(/^Edited/)).toBeVisible();
+});
+
+test('the code view flags its code stale once the graph changes', async ({ page, embedURL }) => {
+  test.skip(!HAS_MXSLC, 'vendor/mxslc not on disk (gitignored, run npm run vendor first)');
+  await page.addInitScript(() => { try { localStorage.setItem('mtlxGraphCodeViewOpen', 'true'); } catch (e) { /* no storage */ } });
+  await openGraphWith(page, embedURL, ROOT_ONLY);
+  const panel = page.locator('aside', { has: page.locator('textarea[aria-label="ShadingLanguageX code"]') });
+  const panelCode = panel.locator('textarea');
+  await expect(panelCode).toHaveValue(/float c1 = constant\(0\.25\);/, { timeout: WAIT_TIMEOUT });
+  const stale = panel.getByText('stale', { exact: true });
+  await expect(stale).toHaveCount(0);
+
+  await card(page, 'n:c1').locator('.mtlx-node-name').dblclick();
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('c2');
+  await page.keyboard.press('Enter');
+  await expect(stale).toBeVisible({ timeout: 10000 });
+
+  // Undo puts back the graph the code describes; redo moves off it again.
+  await focusStage(page);
+  await page.keyboard.press('Control+Z');
+  await expect(stale).toHaveCount(0, { timeout: 10000 });
+  await page.keyboard.press('Control+Shift+Z');
+  await expect(stale).toBeVisible({ timeout: 10000 });
+
+  await panel.getByRole('button', { name: /^Decompile/ }).click();
+  await expect(panelCode).toHaveValue(/float c2 = constant\(0\.25\);/, { timeout: 10000 });
+  await expect(stale).toHaveCount(0);
+
+  // A compile leaves the code describing its own graph.
+  await panelCode.fill((await panelCode.inputValue()).replace('0.25', '0.5'));
+  await panel.getByRole('button', { name: /^Compile/ }).click();
+  await expect(panel.getByText('Compiled into the node graph.')).toBeVisible({ timeout: 10000 });
+  await page.waitForTimeout(1000); // past the undo snapshot that checks it
+  await expect(stale).toHaveCount(0);
 });
