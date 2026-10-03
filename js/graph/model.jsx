@@ -196,6 +196,23 @@
             return null;
         };
 
+        // Every element in `container` that can carry a reference: its
+        // nodes' inputs, its own outputs and, at the document root, each
+        // nodegraph's interface inputs, which are wired like a node's
+        // (a code node's, say). Implementation graphs (nodedef=) take no wires.
+        const collectConnectables = (container) => {
+            const out = [];
+            for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
+                out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
+            }
+            out.push.apply(out, vecToArray(mxSafe(() => container.getOutputs(), [])));
+            for (const g of docChildren(container)) {
+                if (mxElCat(g) !== 'nodegraph' || mxElAttr(g, 'nodedef')) continue;
+                out.push.apply(out, vecToArray(mxSafe(() => g.getInputs(), [])));
+            }
+            return out;
+        };
+
         // True for a document-local element; false only when it's
         // demonstrably from the library (the library document itself
         // carries no data library of its own).
@@ -786,7 +803,7 @@ Object.assign(window, {
     resolveVersionedNodeDef,
     collectPorts, storedPos, buildScope, MTLX_PERF_LOG: (window.MTLX_PERF_LOG || MTLX_PERF_LOG), ifaceColorManaged,
     ifaceNumericType, ifaceLiteralType,
-    docChildren, docChild, isDocLocal, resolveNodedefFor, nodedefPorts,
+    docChildren, docChild, collectConnectables, isDocLocal, resolveNodedefFor, nodedefPorts,
     definitionOutType, computeDefinitions, refreshDefinitions,
     computeImplGraphByNodedef, implGraphForNode,
 });

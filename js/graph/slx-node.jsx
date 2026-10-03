@@ -195,22 +195,6 @@
             }
         };
 
-        // Every element at the document root that can read a nodegraph's
-        // output: root node inputs, root outputs, and the interface inputs
-        // of other instance nodegraphs.
-        const slxRootConnectables = (doc) => {
-            const out = [];
-            for (const n of vecToArray(mxSafe(() => doc.getNodes(), []))) {
-                out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
-            }
-            out.push.apply(out, vecToArray(mxSafe(() => doc.getOutputs(), [])));
-            for (const g of docChildren(doc)) {
-                if (mxElCat(g) !== 'nodegraph' || mxElAttr(g, 'nodedef')) continue;
-                out.push.apply(out, vecToArray(mxSafe(() => g.getInputs(), [])));
-            }
-            return out;
-        };
-
         // Replaces nodegraph `g`'s interior with compiled graph `compiled`
         // and stores `source` on it. Keeps what belongs to the node rather
         // than its code: the graph's own attributes (position, doc, ...) and,
@@ -253,7 +237,7 @@
             const outTypes = new Map(vecToArray(mxSafe(() => g.getOutputs(), []))
                 .map((o) => [mxElName(o), mxElType(o)]));
             const gName = mxElName(g);
-            for (const p of slxRootConnectables(doc)) {
+            for (const p of collectConnectables(doc)) {
                 if (mxElAttr(p, 'nodegraph') !== gName) continue;
                 const outName = mxElAttr(p, 'output') || (outTypes.size === 1 ? outTypes.keys().next().value : '');
                 const t = outTypes.get(outName);
@@ -378,5 +362,5 @@ Object.assign(window, {
     slxCompilerAvailable, ensureSlxCompiler, slxCompilerIfLoaded, prepareSlxCarry, carrySlxSources,
     slxNodegraphFunctions, slxEntryName, renameSlxEntry, isSlxIdentifier, slxFunctionForGraph, slxGraphNameFor,
     slxTemplateSource, slxErrorText, compileSlxGraph, slxInputDefaults, slxDefaultsOf,
-    slxRootConnectables, applySlxGraph, slxGraphSignature, decompileSlxGraph,
+    applySlxGraph, slxGraphSignature, decompileSlxGraph,
 });

@@ -3048,18 +3048,6 @@
                 setFlow(rebuilt);
             };
 
-            // Every node input, plus a container's own outputs, mirrors
-            // renameElement's own connectables() helper (private to that
-            // closure) for rewriting nodegraph-output referrers at the root.
-            const collectConnectables = (container) => {
-                const out = [];
-                for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
-                    out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
-                }
-                out.push.apply(out, vecToArray(mxSafe(() => container.getOutputs(), [])));
-                return out;
-            };
-
             // Rename a nodedef, then rewrite every node/nodegraph that
             // pins it via nodedef=. MaterialX's setName does NOT do this.
             const renameDefinition = (oldName, newName) => {
@@ -5057,25 +5045,14 @@
                     }
                 }
 
-                // Every node input, plus a container's own outputs — the
-                // full set of elements that can carry a reference attribute.
-                const connectables = (container) => {
-                    const out = [];
-                    for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
-                        out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
-                    }
-                    out.push.apply(out, vecToArray(mxSafe(() => container.getOutputs(), [])));
-                    return out;
-                };
-
                 if (kind === 'n:' && c) {
                     // Referrers live in the SAME container as the node.
-                    for (const p of connectables(c)) {
+                    for (const p of collectConnectables(c)) {
                         if (mxElAttr(p, 'nodename') === oldName) mxSetAttr(p, 'nodename', newName);
                     }
                 } else if (kind === 'g:') {
                     // Referrers to a nodegraph live at the DOC ROOT.
-                    for (const p of connectables(parsed.doc)) {
+                    for (const p of collectConnectables(parsed.doc)) {
                         if (mxElAttr(p, 'nodegraph') === oldName) mxSetAttr(p, 'nodegraph', newName);
                     }
                     refreshDefinitions(parsed); // scope dropdown + definition cards
@@ -5096,14 +5073,14 @@
                     }
                 } else if (kind === 'i:') {
                     // Interface input referrers live inside the SAME graph.
-                    for (const p of connectables(c)) {
+                    for (const p of collectConnectables(c)) {
                         if (mxElAttr(p, 'interfacename') === oldName) mxSetAttr(p, 'interfacename', newName);
                     }
                 } else if (kind === 'o:' && scope !== '') {
                     // A nodegraph output — referenced from the doc root
                     // as nodegraph=<scope> output=<name>; a root <output>
                     // isn't referenced by name, so nothing to rewrite there.
-                    for (const p of connectables(parsed.doc)) {
+                    for (const p of collectConnectables(parsed.doc)) {
                         if (mxElAttr(p, 'nodegraph') === scope && mxElAttr(p, 'output') === oldName) {
                             mxSetAttr(p, 'output', newName);
                         }
@@ -5708,7 +5685,7 @@
             // along. False (nothing renamed) when MaterialX refuses the name.
             const renameSlxGraph = (g, from, to) => {
                 if (!mxSafe(() => { g.setName(to); return true; }, false) || mxElName(g) !== to) return false;
-                for (const p of slxRootConnectables(parsed.doc)) {
+                for (const p of collectConnectables(parsed.doc)) {
                     if (mxElAttr(p, 'nodegraph') === from) mxSetAttr(p, 'nodegraph', to);
                 }
                 refreshDefinitions(parsed); // scope dropdown
@@ -6451,22 +6428,16 @@
 
                         // 5: rewrite every ROOT-level consumer pointed at
                         // g (nodegraph=gName) to read from the recreated
-                        // node — same "connectables" traversal as renameElement.
+                        // node — same traversal as renameElement, other
+                        // nodegraphs' pins included.
                         const connectables = (container) => {
-                            const out = [];
-                            for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
-                                out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
-                            }
-                            out.push.apply(out, vecToArray(mxSafe(() => container.getOutputs(), [])));
+                            const out = collectConnectables(container);
                             // Also recurse into every OTHER nodegraph's
                             // interior — a sibling nodegraph's node can
                             // legally reference this graph too, else it'd dangle after deletion.
                             for (const sib of docChildren(container).filter((el) => mxElCat(el) === 'nodegraph')) {
                                 if (mxElName(sib) === gName) continue; // the graph being dissolved itself
-                                for (const n of vecToArray(mxSafe(() => sib.getNodes(), []))) {
-                                    out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
-                                }
-                                out.push.apply(out, vecToArray(mxSafe(() => sib.getOutputs(), [])));
+                                out.push.apply(out, collectConnectables(sib));
                             }
                             return out;
                         };
