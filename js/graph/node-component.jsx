@@ -186,10 +186,11 @@
                 return line != null ? { source: failed.code, items: [{ line, message: failed.text }] } : null;
             }, [failed]);
 
+            // Nothing once compiled.
             const status = busy ? { text: 'Compiling\u2026', cls: 'text-gray-400' }
-                : dirty ? { text: 'modified \u00b7 Ctrl+Enter to compile', cls: 'text-amber-300' }
+                : dirty ? { text: 'modified', cls: 'text-amber-300' }
                 : !editable ? { text: slx.unavailable ? 'Read only: editing needs the browser or desktop app' : 'Read only', cls: 'text-gray-500' }
-                : { text: 'Compiled', cls: 'text-gray-500' };
+                : null;
             return (
                 // The empty title keeps the card's own tooltip off its code.
                 <div className="mtlx-slx-editor nodrag nowheel border-t border-gray-700 px-1.5 pt-1.5 pb-1 cursor-default"
@@ -217,7 +218,7 @@
                         )}
                     </div>
                     <div className="flex items-center gap-1.5 h-6 text-[10px] min-w-0">
-                        <span className={'truncate ' + status.cls} title={status.text}>{status.text}</span>
+                        {status && <span className={'truncate ' + status.cls} title={status.text}>{status.text}</span>}
                         {editable && (
                             <button
                                 type="button"

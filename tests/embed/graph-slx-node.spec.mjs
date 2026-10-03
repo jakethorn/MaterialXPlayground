@@ -178,7 +178,8 @@ test('recompiling keeps the node\'s wires, gives its inputs the code\'s defaults
   // Undoing the mistake puts back the node's own code: the error goes.
   await editor.fill(CODE);
   await expect(card(page, 'g:NG_brighten').locator('.mtlx-slx-error')).toHaveCount(0);
-  await expect(card(page, 'g:NG_brighten').getByText('Compiled', { exact: true })).toBeVisible();
+  await expect(card(page, 'g:NG_brighten').getByText('modified', { exact: true })).toHaveCount(0);
+  await expect(card(page, 'g:NG_brighten').getByRole('button', { name: 'Compile' })).toBeDisabled();
 
   // New code: in1's wire survives, gain and in2 take the code's defaults.
   await editor.fill(CODE.replace('float gain = 2.0', 'float gain = 4.0').replace('(in1 + in2) * clamp(gain, 0.0, 10.0)', 'in1 * gain + in2'));
@@ -373,7 +374,7 @@ test('inside a code node\'s graph the code view works on the node\'s code, and l
   await page.getByRole('button', { name: /^Leave NG_brighten/ }).click();
   await expect.poll(async () => slxSource(await graphXml(page), 'NG_brighten'), { timeout: 10000 }).toMatch(/float both = in1 \+ in2;/);
   await expect(editorOf(page, 'g:NG_brighten')).toHaveValue(draft);
-  await expect(node.getByText(/^modified/)).toBeVisible();
+  await expect(node.getByText('modified', { exact: true })).toBeVisible();
 });
 
 test('the code view flags its code stale once the graph changes', async ({ page, embedURL }) => {
