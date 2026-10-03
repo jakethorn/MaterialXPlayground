@@ -29,7 +29,6 @@
             { keys: 'Double-click a definition card', desc: 'Open its implementation graph; the sidebar edits the nodedef interface', group: 'mouse' },
             { keys: '+ / − badge on a node', desc: "Show or hide that node's default-valued inputs", group: 'mouse' },
             { keys: 'Drag & drop files', desc: 'Import a .mtlx / .zip / companion files anywhere on the page', group: 'mouse', browserOnly: true },
-            { keys: 'Ctrl/Cmd + Click a function', desc: 'In ShadingLanguageX code (the code view or a ShadingLanguageX node): open the documentation for an underlined standard library function', group: 'mouse', browserOnly: true },
             // Keyboard
             { keys: 'Delete', desc: 'Delete the selected node(s) and disconnect the selected edge(s)', group: 'keyboard' },
             { keys: 'Backspace', desc: 'Exit the current nodegraph scope (step up to its parent / document root)', group: 'keyboard' },
@@ -45,11 +44,13 @@
             { keys: 'Ctrl/Cmd + Shift + G', desc: 'Ungroup the selected nodegraph (dissolve it, keeping connections) (with a nodegraph selected)', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + Z', desc: 'Undo the last document edit', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + Shift + Z (or Ctrl/Cmd + Y)', desc: 'Redo', group: 'keyboard' },
-            { keys: 'Ctrl/Cmd + Enter', desc: "In ShadingLanguageX code: compile it (the code view's into the whole node graph, a ShadingLanguageX node's into its nodegraph; leaving a node's code compiles it too)", group: 'keyboard', browserOnly: true },
-            { keys: 'Ctrl + Space', desc: 'In ShadingLanguageX code: show suggestions (they also appear as you type; Enter or Tab inserts one)', group: 'keyboard', browserOnly: true },
-            { keys: 'Ctrl + Shift + Space', desc: 'In ShadingLanguageX code: show parameter hints for the call around the cursor (Up/Down steps through its signatures)', group: 'keyboard', browserOnly: true },
-            { keys: 'Tab / Shift + Tab', desc: 'In ShadingLanguageX code: indent / outdent (every selected line when several are selected)', group: 'keyboard', browserOnly: true },
             { keys: 'Ctrl/Cmd + S', desc: 'Save the document back to the open .mtlx file', group: 'keyboard', vscodeOnly: true },
+            // ShadingLanguageX code (the code panel and ShadingLanguageX nodes)
+            { keys: 'Ctrl/Cmd + Click a function', desc: 'Open the documentation for an underlined standard library function', group: 'slx', browserOnly: true },
+            { keys: 'Ctrl/Cmd + Enter', desc: "Compile the code (the code panel's into the whole node graph, a ShadingLanguageX node's into its nodegraph; leaving a node's code compiles it too)", group: 'slx', browserOnly: true },
+            { keys: 'Ctrl + Space', desc: 'Show suggestions (they also appear as you type; Enter or Tab inserts one)', group: 'slx', browserOnly: true },
+            { keys: 'Ctrl + Shift + Space', desc: 'Show parameter hints for the call around the cursor (Up/Down steps through its signatures)', group: 'slx', browserOnly: true },
+            { keys: 'Tab / Shift + Tab', desc: 'Indent / outdent (every selected line when several are selected)', group: 'slx', browserOnly: true },
         ];
 
         function KeybindsHelp({ onClose, active = true }) {
@@ -58,6 +59,7 @@
             // VS Code, vscodeOnly rows everywhere else.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
             const keybinds = KEYBINDS.filter((k) => (!k.vscodeOnly || IN_VSCODE) && (!k.browserOnly || !IN_VSCODE));
+            const slxKeybinds = keybinds.filter((k) => k.group === 'slx');
             const mouseKeybinds = keybinds.filter((k) => k.group === 'mouse');
             const keyboardKeybinds = keybinds.filter((k) => k.group === 'keyboard');
             useEscapeToClose(onClose, active);
@@ -113,6 +115,17 @@
                                 </tr>
                                 {keyboardKeybinds.map((k) => (
                                     <tr key={k.keys} className="align-top">
+                                        <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
+                                        <td className="py-1 text-gray-300">{k.desc}</td>
+                                    </tr>
+                                ))}
+                                {slxKeybinds.length > 0 && (
+                                    <tr>
+                                        <td colSpan={2} className="pt-3 pb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">ShadingLanguageX</td>
+                                    </tr>
+                                )}
+                                {slxKeybinds.map((k) => (
+                                    <tr key={'slx:' + k.keys} className="align-top">
                                         <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
                                         <td className="py-1 text-gray-300">{k.desc}</td>
                                     </tr>

@@ -119,8 +119,8 @@
         ].join('\n');
 
         // The compiler's diagnostic without compileMxslcSource's
-        // "ShadingLanguageX compile error in <label>:" header line.
-        const slxErrorText = (e) => errMsg(e).replace(/^ShadingLanguageX compile error in [^\n]*:\n/, '');
+        // "ShadingLanguageX compile error[ in <label>]:" header line.
+        const slxErrorText = (e) => errMsg(e).replace(/^ShadingLanguageX compile error(?: in [^\n]*)?:\n/, '');
 
         // name -> { value, type } of a graph's interface inputs: for a
         // freshly compiled graph, the parameter defaults its code declares.
@@ -131,10 +131,9 @@
             }
             return map;
         };
-        // Parameter defaults of recently compiled or decompiled sources: a
-        // recompile tells the input values the user changed from them
-        // (applySlxGraph's oldDefaults), and a decompile writes them back
-        // into the code (decompileSlxGraph), neither compiling twice.
+        // Parameter defaults of recently compiled or decompiled sources,
+        // which a decompile keeps for wired inputs, having no value of their
+        // own (decompileSlxGraph), without compiling the code again.
         const SLX_DEFAULTS_CACHE = new Map();
         const rememberSlxDefaults = (source, defaults) => {
             SLX_DEFAULTS_CACHE.delete(source);
@@ -167,18 +166,9 @@
             await readMtlxXml(mx, doc, xml);
             const children = vecToArray(mxSafe(() => doc.getChildren(), []));
             const graphs = children.filter((el) => mxElCat(el) === 'nodegraph' && !mxElAttr(el, 'nodedef'));
-            if (graphs.length > 1) {
-                throw new Error('A ShadingLanguageX node runs one [[nodegraph]] function, this code has '
-                    + graphs.length + ' (' + graphs.map((g) => slxFunctionForGraph(mxElName(g))).join(', ') + ').');
-            }
-            if (!graphs.length) {
-                throw new Error(children.length
-                    ? 'Mark the function this node runs with [[nodegraph]] on the line above it.'
-                    : 'The code defines no function: write one, marked [[nodegraph]].');
-            }
-            if (children.length > 1) {
-                throw new Error('Helper functions are not supported in a ShadingLanguageX node yet: write everything inside the [[nodegraph]] function.');
-            }
+            if (graphs.length > 1) throw new Error('Too many functions marked as [[nodegraph]]');
+            if (!graphs.length) throw new Error('At least one function needs to be marked as [[nodegraph]]');
+            if (children.length > 1) throw new Error('Helper functions must be marked as [[inline]]');
             rememberSlxDefaults(source, slxInputDefaults(graphs[0]));
             return { doc, graph: graphs[0] };
         };
@@ -198,18 +188,17 @@
         // Replaces nodegraph `g`'s interior with compiled graph `compiled`
         // and stores `source` on it. Keeps what belongs to the node rather
         // than its code: the graph's own attributes (position, doc, ...) and,
-        // per interface input of the same name and type, its incoming wire,
-        // or a value the user changed away from the old code's default
-        // (`oldDefaults`; when null the new code's default wins). Root wires
+        // per interface input of the same name and type, its incoming wire
+        // and colorspace; its value is the code's default. Root wires
         // reading an output the new code dropped or retyped are cut.
-        const applySlxGraph = (doc, g, compiled, source, oldDefaults) => {
+        const applySlxGraph = (doc, g, compiled, source) => {
             const prev = new Map();
             for (const inp of vecToArray(mxSafe(() => g.getInputs(), []))) {
                 const conn = {};
                 for (const a of CONN_ATTRS) { if (mxElAttr(inp, a)) conn[a] = mxElAttr(inp, a); }
                 prev.set(mxElName(inp), {
                     type: mxElType(inp), conn: Object.keys(conn).length ? conn : null,
-                    value: mxElAttr(inp, 'value'), colorspace: mxElAttr(inp, 'colorspace'),
+                    colorspace: mxElAttr(inp, 'colorspace'),
                 });
             }
             // copyContentFrom replaces the attribute map wholesale, and adds
@@ -229,8 +218,6 @@
                     for (const a of Object.keys(p.conn)) mxSetAttr(inp, a, p.conn[a]);
                     continue;
                 }
-                const oldDefault = oldDefaults ? oldDefaults.get(mxElName(inp)) : undefined;
-                if (p.value && oldDefault && p.value !== oldDefault.value) mxSetAttr(inp, 'value', p.value);
                 if (p.colorspace && !mxElAttr(inp, 'colorspace')) mxSetAttr(inp, 'colorspace', p.colorspace);
             }
 
@@ -255,12 +242,12 @@
             }
         };
 
-        // What a code node's graph is made of: its interface (input names
-        // and types, in order), every node with its literal values and
-        // wiring, and its outputs. Leaves out what belongs to the node
-        // instance rather than its code (interface input values and wires)
-        // and layout (xpos/ypos, ui* attributes), so only an edit that
-        // changes the code itself changes the signature.
+        // What a code node's graph is made of: its interface (input names,
+        // types and values, in order: the values are the code's parameter
+        // defaults), every node with its literal values and wiring, and its
+        // outputs. Leaves out the wires into the node, which belong to the
+        // node rather than its code, and layout (xpos/ypos, ui*
+        // attributes), so only an edit that changes the code changes it.
         const slxGraphSignature = (g) => {
             const wiring = (el) => CONN_ATTRS.map((a) => mxElAttr(el, a)).join(',');
             const parts = [];
@@ -268,7 +255,8 @@
                 const cat = mxElCat(el);
                 if (/^__pv_/.test(mxElName(el))) continue; // transient preview tap
                 if (cat === 'input') {
-                    parts.push('i ' + mxElName(el) + ' ' + mxElType(el));
+                    const wired = !!wiring(el).replace(/,/g, '');
+                    parts.push('i ' + mxElName(el) + ' ' + mxElType(el) + ' ' + (wired ? '' : mxElAttr(el, 'value')));
                 } else if (cat === 'output') {
                     parts.push('o ' + mxElName(el) + ' ' + mxElType(el) + ' ' + wiring(el));
                 } else if (cat !== 'comment') {
@@ -289,10 +277,10 @@
         // loaded main-thread mxslc module. The scratch copy is named after
         // the node's current entry function, so the decompiled code keeps
         // that name even when the graph itself carries a numbered copy name.
-        // Its interface inputs drop the node's own wires and values (those
-        // belong to the node, not its code) for the parameter defaults the
-        // current code declares, else the node's value, else a zero: an
-        // input without a value decompiles to "= null", which won't compile.
+        // Its interface inputs' values become the parameter defaults; a
+        // wired one (the wire belongs to the node, not its code) keeps the
+        // default the current code declares, else gets a zero: an input
+        // without a value decompiles to "= null", which won't compile.
         const decompileSlxGraph = (mxslc, mx, g) => {
             const source = mxElAttr(g, SLX_SOURCE_ATTR);
             const fn = slxEntryName(source) || slxFunctionForGraph(mxElName(g));
@@ -310,8 +298,8 @@
                 const own = CONN_ATTRS.some((a) => mxElAttr(inp, a)) ? '' : mxElAttr(inp, 'value');
                 for (const a of CONN_ATTRS) mxRemoveAttr(inp, a);
                 const d = known && known.get(name);
-                const value = (d && d.type === type) ? d.value
-                    : (own || (Object.prototype.hasOwnProperty.call(SLX_ZERO_VALUES, type) ? SLX_ZERO_VALUES[type] : null));
+                const value = own || ((d && d.type === type) ? d.value
+                    : (Object.prototype.hasOwnProperty.call(SLX_ZERO_VALUES, type) ? SLX_ZERO_VALUES[type] : null));
                 if (value != null) mxSetAttr(inp, 'value', value);
                 declared.set(name, { value: value == null ? '' : value, type });
             }

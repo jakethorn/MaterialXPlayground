@@ -900,19 +900,39 @@
             const VALIDATE_DEBOUNCE_MS = 500;
 
             // ---- ShadingLanguageX code nodes (js/graph/slx-node.jsx) -------
-            // A code node's graph signature (slxGraphSignature) as of the
-            // last moment its code and graph were known to agree, by graph
-            // name. Taken when its graph is opened and after every compile
-            // or decompile; only for the parsed document it came from, so a
-            // load or an undo/redo re-parse starts over.
-            const slxBaselineRef = React.useRef({ parsed: null, sigs: new Map() });
-            const slxBaselines = () => {
-                const b = slxBaselineRef.current;
-                if (b.parsed !== parsedRef.current) {
-                    b.parsed = parsedRef.current;
-                    b.sigs = new Map();
-                }
-                return b.sigs;
+            // Which graph a code node's code describes: by graph name, each
+            // code it has had -> its graph's signature (slxGraphSignature)
+            // when the two agreed. Noted at every compile and decompile, and
+            // as a graph is opened. A graph whose signature has moved off the
+            // one noted for its current code is stale (slxGraphStale): edited
+            // inside, or put back that way by an undo, which this outlives.
+            // A document load starts over.
+            const slxSyncedRef = React.useRef(new Map());
+            const slxSyncedSig = (name, source) => {
+                const m = slxSyncedRef.current.get(name);
+                return m ? m.get(source) : undefined;
+            };
+            const noteSlxSynced = (name, source, sig) => {
+                let m = slxSyncedRef.current.get(name);
+                if (!m) slxSyncedRef.current.set(name, m = new Map());
+                m.delete(source);
+                m.set(source, sig);
+                if (m.size > 16) m.delete(m.keys().next().value);
+            };
+            // A renamed code node, whose code may have had its entry function
+            // renamed along (`oldSource` -> `newSource`), keeps its record.
+            const renameSlxSynced = (from, to, oldSource, newSource) => {
+                const m = slxSyncedRef.current.get(from);
+                if (!m) return;
+                slxSyncedRef.current.delete(from);
+                slxSyncedRef.current.set(to, m);
+                if (oldSource !== newSource && m.has(oldSource)) noteSlxSynced(to, newSource, m.get(oldSource));
+            };
+            const slxGraphStale = (name) => {
+                const g = parsedRef.current && docChild(parsedRef.current.doc, name);
+                if (!isSlxGraph(g)) return false;
+                const base = slxSyncedSig(name, mxElAttr(g, SLX_SOURCE_ATTR));
+                return base !== undefined && base !== slxGraphSignature(g);
             };
             // Unsaved code drafts by graph name, { base, draft, error }, so a
             // card that remounts (scope round trip, rebuild) keeps what was
@@ -963,18 +983,21 @@
                 }
                 return code;
             };
-            // Rewrites a code node's code from its graph when the graph was
-            // edited from the inside (its signature moved off the baseline).
-            // Runs right before every snapshot, export and final autosave
-            // write, so the stored code always describes the stored graph
-            // and an undo step covers both.
-            const syncSlxCode = () => {
+            // Rewrites stale code nodes' code from their graphs. Runs right
+            // before every snapshot, export and final autosave write, so the
+            // stored code describes the stored graph and an undo step covers
+            // both; except, at a snapshot, the code node whose graph is open
+            // (`skip`), whose code stays as it was, flagged stale in the code
+            // view, until Decompile or leaving the graph.
+            const syncSlxCode = (skip) => {
                 const p = parsedRef.current;
                 if (!p) return;
-                const sigs = slxBaselines();
-                for (const [name, base] of Array.from(sigs.entries())) {
-                    const g = docChild(p.doc, name);
-                    if (!isSlxGraph(g)) { sigs.delete(name); continue; }
+                for (const g of docChildren(p.doc)) {
+                    const name = mxElName(g);
+                    if (name === skip || !isSlxGraph(g)) continue;
+                    const source = mxElAttr(g, SLX_SOURCE_ATTR);
+                    const base = slxSyncedSig(name, source);
+                    if (base === undefined) continue;
                     const sig = slxGraphSignature(g);
                     if (sig === base) continue;
                     const mxslc = slxCompilerIfLoaded();
@@ -983,18 +1006,46 @@
                             // Still loading: retry through a fresh snapshot.
                             ensureSlxCompiler().then(() => pushUndoSnapshot()).catch(() => {});
                         } else {
-                            sigs.set(name, sig);
+                            noteSlxSynced(name, source, sig);
                             setError('The ShadingLanguageX code of "' + name + '" was not updated from its graph: the compiler is not available here.');
                         }
                         continue;
                     }
-                    sigs.set(name, sig);
                     try {
-                        followSlxNodeView(name, rebuildSlxCode(mxslc, p, name, g));
+                        const code = rebuildSlxCode(mxslc, p, name, g);
+                        noteSlxSynced(name, code, sig);
+                        followSlxNodeView(name, code);
                     } catch (e) {
+                        noteSlxSynced(name, source, sig); // not retried at every snapshot
                         setError('The ShadingLanguageX code of "' + name + '" could not be rebuilt from its graph and keeps its previous code: ' + slxErrorText(e));
                     }
                 }
+            };
+            // The XML of document `p` for export or saving, with every code
+            // node's code describing its graph: the open one's goes out
+            // decompiled while it stays stale in the editor.
+            const serializeSlxSynced = (p) => {
+                const open = slxNodeEntryRef.current && slxNodeEntryRef.current.name;
+                syncSlxCode(open);
+                const g = open && slxGraphStale(open) ? docChild(p.doc, open) : null;
+                const mxslc = g ? slxCompilerIfLoaded() : null;
+                const kept = mxslc ? mxElAttr(g, SLX_SOURCE_ATTR) : null;
+                if (kept != null) {
+                    try { mxSetAttr(g, SLX_SOURCE_ATTR, decompileSlxGraph(mxslc, p.mx, g)); } catch (e) { /* goes out as it is */ }
+                }
+                try {
+                    return serializeDocXml(p);
+                } finally {
+                    if (kept != null) mxSetAttr(g, SLX_SOURCE_ATTR, kept);
+                }
+            };
+            // The open code node's stale flag in the code view.
+            const noteSlxNodeViewStale = () => {
+                const entry = slxNodeEntryRef.current;
+                if (!entry) return;
+                const graphStale = slxGraphStale(entry.name);
+                setSlxNodeView((v) => (v && v.name === entry.name && !!v.graphStale !== graphStale
+                    ? Object.assign({}, v, { graphStale }) : v));
             };
 
             // Flush a pending debounced snapshot immediately (synchronous
@@ -1003,7 +1054,8 @@
             const flushUndoSnapshot = (tag) => {
                 if (restoringRef.current) return;
                 if (!parsedRef.current) return;
-                syncSlxCode();
+                syncSlxCode(slxNodeEntryRef.current && slxNodeEntryRef.current.name);
+                noteSlxNodeViewStale();
                 let xml;
                 try {
                     xml = serializeDocXml(parsedRef.current);
@@ -1600,6 +1652,7 @@
                     setDocReadOnlySource(ro ? ro.source : '');
                     setMxslOriginal(mxslOrigin);
                     resetCodeView(mxslOrigin, p);
+                    slxSyncedRef.current = new Map();
                     setScope('');
                     // Same default-target reset as opening a document fresh:
                     // a stale selection/pin from a PREVIOUS document (multi-
@@ -1650,6 +1703,7 @@
                     mxslOriginalsRef.current = {};
                     setMxslOriginal(null);
                     resetCodeView();
+                    slxSyncedRef.current = new Map();
                     setParsed(p);
                     setScope('');
                     setStatus(null);
@@ -3547,8 +3601,7 @@
             const resolveDocXml = async (attempt) => {
                 if (!parsed) return { xml: null, error: 'no document' };
                 try {
-                    syncSlxCode();
-                    return { xml: serializeDocXml(parsed), error: null };
+                    return { xml: serializeSlxSynced(parsed), error: null };
                 } catch (e) {
                     if (e && e.transient) {
                         if ((attempt || 0) < 8) {
@@ -3973,7 +4026,7 @@
                 }
                 let xml = null;
                 if (parsedRef.current) {
-                    try { syncSlxCode(); xml = serializeDocXml(parsedRef.current); } catch (e) { xml = null; }
+                    try { xml = serializeSlxSynced(parsedRef.current); } catch (e) { xml = null; }
                 }
                 if (xml == null) xml = docXmlRef.current.xml;
                 if (xml == null) {
@@ -4129,7 +4182,7 @@
                 try {
                     // A .mxsl document's sibling files stay available to
                     // its #include/#library directives.
-                    const xml = await compileMxslcSource(source, mxslOriginal && mxslOriginal.files, 'the code view');
+                    const xml = await compileMxslcSource(source, mxslOriginal && mxslOriginal.files, null);
                     compiled = true;
                     const p = await parseMtlxDocument(xml);
                     const slxCarry = parsedRef.current
@@ -4212,18 +4265,25 @@
             // Entering a code node's graph puts its code in the view, or the
             // unsaved draft its card kept; an undo, redo or compile that
             // changes the code moves an untouched text along. Before paint,
-            // so the document's code never flashes in between. Leaving it,
-            // edits still waiting on the debounced snapshot are decompiled
-            // into the node's code straight away (syncSlxCode); the
-            // document's code is left as it was.
+            // so the document's code never flashes in between. Leaving it
+            // decompiles the edits made inside into the node's code
+            // (syncSlxCode), in one snapshot with any edit still waiting on
+            // its debounce; not when an undo, redo or load moved the view,
+            // whose document is as it was. The document's code is left as
+            // it was.
+            const slxNodeParsedRef = React.useRef(parsed);
             React.useLayoutEffect(() => {
+                const reparsed = slxNodeParsedRef.current !== parsed;
+                slxNodeParsedRef.current = parsed;
                 const entry = slxNodeEntryRef.current;
                 if (entry && entry.name !== slxNodeScope) {
                     slxNodeEntryRef.current = null;
                     slxNodeRunRef.current++; // a compile or decompile still running lands nowhere
-                    if (snapshotTimerRef.current) {
-                        clearTimeout(snapshotTimerRef.current);
-                        snapshotTimerRef.current = null;
+                    if (!reparsed && (snapshotTimerRef.current || slxGraphStale(entry.name))) {
+                        if (snapshotTimerRef.current) {
+                            clearTimeout(snapshotTimerRef.current);
+                            snapshotTimerRef.current = null;
+                        }
                         flushUndoSnapshot(null);
                     }
                 }
@@ -4239,10 +4299,17 @@
                     setSlxMessage((m) => (m && m.undoable ? Object.assign({}, m, { undoable: false }) : m));
                 }
                 const v = slxNodeViewRef.current;
-                if (v && v.name === slxNodeScope) { followSlxNodeView(slxNodeScope, source); return; }
+                if (v && v.name === slxNodeScope) {
+                    followSlxNodeView(slxNodeScope, source);
+                    noteSlxNodeViewStale();
+                    return;
+                }
                 const d = slxDraftFor(slxNodeScope, source);
+                // `stale`: the text is an edit over code the node no longer
+                // has; `graphStale`: the graph moved off the node's code.
                 setSlxNodeView({
-                    name: slxNodeScope, code: d ? d.draft : source, baseline: source, busy: null, stale: false,
+                    name: slxNodeScope, code: d ? d.draft : source, baseline: source, busy: null,
+                    stale: false, graphStale: slxGraphStale(slxNodeScope),
                     message: d && d.failed ? { kind: 'error', text: d.failed.text, source: d.failed.code } : null,
                 });
                 // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4277,7 +4344,7 @@
                 try { res = await compileSlxNodeRef.current(v.name, code); } catch (e) { res = { ok: false, error: errMsg(e) }; }
                 if (slxNodeRunRef.current !== id) return;
                 if (res && res.ok) {
-                    patchSlxNodeView({ busy: null, baseline: code, stale: false, message: { kind: 'ok', text: 'Compiled into the node’s graph.' } });
+                    patchSlxNodeView({ busy: null, baseline: code, stale: false, graphStale: false, message: { kind: 'ok', text: 'Compiled into the node graph.' } });
                     return;
                 }
                 // mxslc's errors carry line numbers into `code`, squiggled.
@@ -4299,22 +4366,24 @@
                     const p = parsedRef.current;
                     const g = p && docChild(p.doc, v.name);
                     if (!isSlxGraph(g)) throw new Error('This node is no longer in the document.');
-                    // The parameter defaults its code declares, which the
-                    // decompile writes back (decompileSlxGraph).
+                    // The parameter defaults its code declares, which wired
+                    // inputs keep (decompileSlxGraph).
                     await slxDefaultsOf(p.mx, mxElAttr(g, SLX_SOURCE_ATTR), v.name);
                     if (slxNodeRunRef.current !== id || parsedRef.current !== p) return;
                     const before = mxElAttr(g, SLX_SOURCE_ATTR);
                     const code = scopeLockedRef.current ? decompileSlxGraph(mxslc, p.mx, g) : rebuildSlxCode(mxslc, p, v.name, g);
                     if (!scopeLockedRef.current) {
-                        slxBaselines().set(v.name, slxGraphSignature(g));
+                        noteSlxSynced(v.name, code, slxGraphSignature(g));
                         setSlxDraft(v.name, null);
                         if (code !== before) markDirty();
                     }
                     const cur = slxNodeViewRef.current;
                     const editor = slxEditorRef.current;
                     const undoable = !!cur && cur.code !== code && !!editor && editor.replaceText(code);
-                    patchSlxNodeView(Object.assign({ busy: null, baseline: scopeLockedRef.current ? before : code, stale: false,
-                        message: { kind: 'ok', text: 'Decompiled from the node’s graph.', undoable } }, undoable ? null : { code }));
+                    patchSlxNodeView(Object.assign(
+                        { busy: null, stale: false, message: { kind: 'ok', text: 'Decompiled from the node’s graph.', undoable } },
+                        scopeLockedRef.current ? { baseline: before } : { baseline: code, graphStale: false },
+                        undoable ? null : { code }));
                 } catch (e) {
                     if (slxNodeRunRef.current !== id) return;
                     patchSlxNodeView({ busy: null, message: { kind: 'error', text: slxErrorText(e) } });
@@ -4324,7 +4393,8 @@
             // the moment before it's read in), else the document's.
             const slxNodeShown = (slxNodeView && slxNodeView.name === slxNodeScope) ? slxNodeView : null;
             const slxCodeShown = slxNodeScope
-                ? (slxNodeShown || { code: null, baseline: null, busy: null, message: null, stale: false })
+                ? (slxNodeShown ? Object.assign({}, slxNodeShown, { stale: slxNodeShown.stale || slxNodeShown.graphStale })
+                    : { code: null, baseline: null, busy: null, message: null, stale: false })
                 : { code: slxCode, baseline: slxBaseline, busy: slxBusy, message: slxMessage, stale: slxCode != null && slxDocStale };
 
             // The code view's function library (underlines, completion,
@@ -4440,9 +4510,6 @@
             }, [parsed, scope, docRev, docReadOnly]);
             const scopeLockedRef = React.useRef(false);
             scopeLockedRef.current = scopeLocked;
-            // Whether the open scope is a ShadingLanguageX code node's graph.
-            const slxScope = React.useMemo(() => !!(parsed && scope && isSlxGraph(docChild(parsed.doc, scope))),
-                [parsed, scope, docRev]);
             // Shared guard for every writer below: tells the caller to bail.
             // Silent, since the amber "View only" strip already explains the lock.
             const guardLocked = () => scopeLockedRef.current;
@@ -5251,12 +5318,12 @@
                         // the rename, so the code keeps describing the node.
                         const src = mxElAttr(el, SLX_SOURCE_ATTR);
                         const fn = slxFunctionForGraph(newName);
+                        let next = null;
                         if (slxEntryName(src) === slxFunctionForGraph(oldName) && isSlxIdentifier(fn)) {
-                            const next = renameSlxEntry(src, fn);
+                            next = renameSlxEntry(src, fn);
                             if (next != null) mxSetAttr(el, SLX_SOURCE_ATTR, next);
                         }
-                        const sigs = slxBaselines();
-                        if (sigs.has(oldName)) { sigs.set(newName, sigs.get(oldName)); sigs.delete(oldName); }
+                        renameSlxSynced(oldName, newName, src, next != null ? next : src);
                         slxDraftsRef.current.delete(oldName);
                         renameSlxNodeView(oldName, newName);
                     }
@@ -5878,8 +5945,7 @@
                     if (mxElAttr(p, 'nodegraph') === from) mxSetAttr(p, 'nodegraph', to);
                 }
                 refreshDefinitions(parsed); // scope dropdown
-                const sigs = slxBaselines();
-                if (sigs.has(from)) { sigs.set(to, sigs.get(from)); sigs.delete(from); }
+                renameSlxSynced(from, to);
                 slxDraftsRef.current.delete(from);
                 renameSlxNodeView(from, to);
                 const fromId = 'g:' + from, toId = 'g:' + to;
@@ -5910,22 +5976,19 @@
                 } catch (e) {
                     return { ok: false, error: errMsg(e) };
                 }
-                // Inputs the user changed away from the defaults the node's
-                // current code declares keep their values (applySlxGraph).
-                const oldDefaults = await slxDefaultsOf(p0.mx, oldSource, gName);
-                return applySlxCompileRef.current(p0, gName, source, oldSource, compiled.graph, oldDefaults);
+                return applySlxCompileRef.current(p0, gName, source, oldSource, compiled.graph);
             };
             const compileSlxNodeRef = React.useRef(compileSlxNode);
             compileSlxNodeRef.current = compileSlxNode;
 
-            const applySlxCompile = (p0, gName, source, oldSource, compiled, oldDefaults) => {
+            const applySlxCompile = (p0, gName, source, oldSource, compiled) => {
                 if (!parsed || parsed !== p0) return { ok: false, error: 'The document changed while compiling: compile again.' };
                 if (guardLocked()) return { ok: false, error: 'This document is view only.' };
                 const doc = parsed.doc;
                 const g = docChild(doc, gName);
                 if (!isSlxGraph(g)) return { ok: false, error: 'This node is no longer in the document.' };
                 try {
-                    applySlxGraph(doc, g, compiled, source, oldDefaults);
+                    applySlxGraph(doc, g, compiled, source);
                 } catch (e) {
                     return { ok: false, error: 'The node could not be updated: ' + errMsg(e) };
                 }
@@ -5935,11 +5998,20 @@
                 const newFn = slxFunctionForGraph(mxElName(compiled));
                 const want = (newFn && newFn !== slxEntryName(oldSource)) ? slxGraphNameFor(doc, newFn, gName) : gName;
                 const name = (want !== gName && renameSlxGraph(g, gName, want)) ? want : gName;
-                slxBaselines().set(name, slxGraphSignature(g));
+                noteSlxSynced(name, source, slxGraphSignature(g));
                 setDocRev((r) => r + 1);
                 markDirty();
-                // Inside the renamed graph, setScope already rebuilds.
-                if (!(name !== gName && scope === gName)) {
+                if (scope === gName) {
+                    // Inside the graph, whose nodes were all replaced, with no
+                    // stored places: laid out afresh, so a node that kept its
+                    // name doesn't keep its old place among the new ones. When
+                    // renamed, setScope already rebuilds.
+                    if (name === gName) {
+                        const { descs, edges } = buildScope(parsed, scope);
+                        setFlow(toFlow(descs, edges, flowOpts(capturePortModes())));
+                        scheduleViewSettle(() => fitViewSoon({ padding: 0.15, duration: 350 }));
+                    }
+                } else {
                     softRebuildScope(name !== gName ? { rename: { from: 'g:' + gName, to: 'g:' + name } } : undefined);
                 }
                 return { ok: true };
@@ -5985,14 +6057,14 @@
                 const name = slxGraphNameFor(doc, slxFunctionForGraph(mxElName(compiled)), null);
                 const g = mxSafe(() => doc.addNodeGraph(name), null);
                 if (!g) { setError('Could not create a nodegraph.'); return; }
-                applySlxGraph(doc, g, compiled, source, null);
+                applySlxGraph(doc, g, compiled, source);
                 // Centered on the viewport, or on a right-click "add here".
                 const size = { slx: { source }, inputs: vecToArray(mxSafe(() => g.getInputs(), [])), outputs: vecToArray(mxSafe(() => g.getOutputs(), [])) };
                 const center = viewportCenterFlow(rfInstRef.current, canvasHostRef.current, point || undefined) || { x: 40, y: 40 };
                 const pos = { x: center.x - SLX_NODE_W / 2, y: center.y - nodeHeight(size) / 2 };
                 writeFlowPos(g, pos.x, pos.y);
                 refreshDefinitions(parsed); // scope dropdown
-                slxBaselines().set(name, slxGraphSignature(g));
+                noteSlxSynced(name, source, slxGraphSignature(g));
                 setDocRev((r) => r + 1);
                 markDirty();
                 const id = 'g:' + name;
@@ -6005,21 +6077,21 @@
             const insertSlxNodeRef = React.useRef(insertSlxNode);
             insertSlxNodeRef.current = insertSlxNode;
 
-            // Opening a code node's graph: its code and graph agree at this
-            // point, so that is the baseline syncSlxCode compares edits made
-            // inside against. Kept if one is already recorded (an edit still
-            // waiting on the debounced snapshot). Also warms the compiler,
-            // which that synchronous decompile needs loaded, and the code's
-            // parameter defaults, which it writes back (decompileSlxGraph).
+            // Opening a code node's graph with no record of what its code
+            // describes (slxSyncedRef): the two agree at this point, so that
+            // is what edits made inside are compared against. Also warms the
+            // compiler, which the synchronous decompile needs loaded, and the
+            // code's parameter defaults, which wired inputs keep
+            // (decompileSlxGraph).
             React.useEffect(() => {
                 if (!parsed || !scope) return;
                 const g = docChild(parsed.doc, scope);
                 if (!isSlxGraph(g)) return;
-                const sigs = slxBaselines();
-                if (!sigs.has(scope)) sigs.set(scope, slxGraphSignature(g));
+                const source = mxElAttr(g, SLX_SOURCE_ATTR);
+                if (slxSyncedSig(scope, source) === undefined) noteSlxSynced(scope, source, slxGraphSignature(g));
                 if (!slxCompilerAvailable()) return;
                 ensureSlxCompiler().catch(() => {});
-                slxDefaultsOf(parsed.mx, mxElAttr(g, SLX_SOURCE_ATTR), scope);
+                slxDefaultsOf(parsed.mx, source, scope);
             }, [parsed, scope]);
 
             // ---- Copy / paste (in-page clipboard, Ctrl/Cmd+C / Ctrl/Cmd+V) --
@@ -8082,7 +8154,6 @@
                     label: 'New ShadingLanguageX Node', icon: 'code',
                     disabled: !parsed || scope !== '' || scopeLocked || !slxCompilerAvailable(),
                     onSelect: addSlxNode,
-                    title: 'Add a node whose nodegraph is compiled from ShadingLanguageX code you write on it',
                 },
             ];
 
@@ -8094,7 +8165,6 @@
                 ...(CODE_VIEW_ON ? [{
                     label: 'ShadingLanguageX', icon: 'code', checked: codeViewOpen,
                     onSelect: () => setCodeViewOpen((o) => !o),
-                    title: 'The document as ShadingLanguageX code, editable and compilable back into the graph',
                 }] : []),
             ];
 
@@ -8659,23 +8729,6 @@
                                     )}
                                 </div>
                             )}
-                            {/* Inside a ShadingLanguageX node: same slot as the
-                                view-only notice (never both), so the HUD offset
-                                (lockBannerRef) works the same. */}
-                            {!scopeLocked && slxScope && (
-                                <div ref={lockBannerRef} className="absolute top-2 left-2 right-2 z-20 flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 bg-blue-950/50 border border-blue-800/60 rounded-md text-[11px] text-blue-200 backdrop-blur">
-                                    <MtlxIcon name="code" className="w-3.5 h-3.5 shrink-0" />
-                                    <span className="min-w-0">
-                                        ShadingLanguageX node: editing this graph rewrites the node's code from it, without the code's comments or formatting.
-                                    </span>
-                                    <button
-                                        onClick={goUpScope}
-                                        className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium bg-blue-900/70 hover:bg-blue-800 text-blue-100 transition-colors"
-                                    >
-                                        Back to the code
-                                    </button>
-                                </div>
-                            )}
 
                             {/* Top-left HUD, one anchored column: the scope select
                                 and the Leave pill share the first row (Leave wraps
@@ -8738,7 +8791,7 @@
                                     {CODE_VIEW_ON && !codeViewOpen && (
                                         <button
                                             onClick={() => setCodeViewOpen(true)}
-                                            title="Show the ShadingLanguageX code view"
+                                            title="Show the ShadingLanguageX code panel"
                                             className={HUD_PILL}
                                         >
                                             <span>ShadingLanguageX</span>

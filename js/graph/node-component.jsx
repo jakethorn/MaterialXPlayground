@@ -187,12 +187,13 @@
             }, [failed]);
 
             const status = busy ? { text: 'Compiling\u2026', cls: 'text-gray-400' }
-                : failed ? { text: 'Not compiled: the node keeps its last good code', cls: 'text-red-300' }
-                : dirty ? { text: 'Edited \u00b7 Ctrl+Enter to compile', cls: 'text-amber-300' }
+                : dirty ? { text: 'modified \u00b7 Ctrl+Enter to compile', cls: 'text-amber-300' }
                 : !editable ? { text: slx.unavailable ? 'Read only: editing needs the browser or desktop app' : 'Read only', cls: 'text-gray-500' }
                 : { text: 'Compiled', cls: 'text-gray-500' };
             return (
+                // The empty title keeps the card's own tooltip off its code.
                 <div className="mtlx-slx-editor nodrag nowheel border-t border-gray-700 px-1.5 pt-1.5 pb-1 cursor-default"
+                    title=""
                     onDoubleClick={(e) => e.stopPropagation()}>
                     <div
                         ref={boxRef}
@@ -216,7 +217,6 @@
                         )}
                     </div>
                     <div className="flex items-center gap-1.5 h-6 text-[10px] min-w-0">
-                        <span className="flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 rounded px-1">slx</span>
                         <span className={'truncate ' + status.cls} title={status.text}>{status.text}</span>
                         {editable && (
                             <button
@@ -225,7 +225,7 @@
                                 onMouseDown={(e) => e.preventDefault()}
                                 onClick={compile}
                                 disabled={busy || !dirty}
-                                title="Compile this code into the node's graph (Ctrl+Enter)"
+                                title="Compile the code (Ctrl+Enter)"
                                 className="ml-auto flex-none text-[10px] px-1.5 py-px rounded border border-blue-500/50 text-blue-200 hover:bg-blue-500/20 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
                             >Compile</button>
                         )}
@@ -266,7 +266,7 @@
                     title={isDef
                         ? 'Definition ' + data.nodedef + (data.onOpen ? '. Double-click to open its implementation graph' : '')
                         : (data.kind === 'nodegraph' && data.onOpen
-                            ? (data.slx ? 'ShadingLanguageX node. Double-click outside the code to open its nodegraph'
+                            ? (data.slx ? 'ShadingLanguageX node. Double-click to open its nodegraph'
                                 : 'Double-click to open this nodegraph')
                             : undefined)}
                     className={'relative rounded-lg border font-mono text-[11px] '

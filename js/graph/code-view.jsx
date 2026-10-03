@@ -841,6 +841,13 @@
                 ro.observe(el);
                 return () => ro.disconnect();
             }, [tip]);
+            // Whether client point (x, y) is on `ta`'s scrollbars, outside
+            // its client area.
+            const overScrollbar = (ta, x, y) => {
+                const r = ta.getBoundingClientRect();
+                const s = layoutScale(ta);
+                return x >= r.left + (ta.clientLeft + ta.clientWidth) * s || y >= r.top + (ta.clientTop + ta.clientHeight) * s;
+            };
             const updateHover = () => {
                 const h = hoverRef.current;
                 const ta = taRef.current;
@@ -852,7 +859,9 @@
                     h.link = link;
                 }
                 if (ta) {
-                    const cursor = link ? 'pointer' : '';
+                    // The arrow over the scrollbars, which styled ones would
+                    // otherwise draw with the text area's I-beam.
+                    const cursor = link ? 'pointer' : (h.inside && overScrollbar(ta, h.x, h.y) ? 'default' : '');
                     if (ta.style.cursor !== cursor) ta.style.cursor = cursor;
                 }
                 scheduleTip(span);
@@ -1158,6 +1167,20 @@
             );
         }
 
+        // A status label in the panel header ("modified", "stale") whose
+        // explanation shows under it the moment the pointer is over it, where
+        // a title tooltip would wait.
+        function CodeViewStatus({ className, tip, children }) {
+            return (
+                <span className="relative group">
+                    <span className={'underline decoration-dotted underline-offset-2 ' + className}>{children}</span>
+                    <span role="tooltip" className="hidden group-hover:block absolute right-0 top-full mt-1.5 z-30 w-56 rounded border border-gray-600 bg-gray-800 shadow-xl px-2 py-1.5 text-[11px] leading-4 text-gray-300 font-sans pointer-events-none">
+                        {tip}
+                    </span>
+                </span>
+            );
+        }
+
         // The docked panel: header, editor, status line and the two
         // actions. `code` is null until the first decompile lands.
         // `busy` is 'compile' | 'decompile' | null; `message` is
@@ -1273,30 +1296,25 @@
                         className="flex-none flex flex-col bg-gray-800/95 border-r border-gray-600 overflow-hidden font-mono">
                         <div className="flex items-center gap-2 px-3 py-2 min-h-[45px] border-b border-gray-700 bg-gray-900/70">
                             <MtlxIcon name="code" className="w-3.5 h-3.5 text-gray-500" />
-                            <span className={'text-[13px] font-bold text-gray-100 truncate ' + (node ? 'flex-none' : 'flex-1')}>ShadingLanguageX</span>
-                            {node && (
-                                <span className="flex-1 min-w-0 truncate text-[11px] text-gray-400" title={'The code of the ShadingLanguageX node ' + node}>
-                                    {node}
-                                </span>
-                            )}
+                            <span className="text-[13px] font-bold text-gray-100 truncate flex-1">ShadingLanguageX</span>
                             {(modified || stale) && (
-                                <span className="flex-none flex items-center gap-1 text-[10px]">
+                                <span className="flex-none flex items-center gap-1 text-[10px] cursor-default">
                                     {modified && (
-                                        <span className="text-amber-300 underline decoration-dotted underline-offset-2" title="The code has edits that haven't been compiled into the node graph yet">
+                                        <CodeViewStatus className="text-amber-300" tip="The code has edits that haven't been compiled into the node graph">
                                             modified
-                                        </span>
+                                        </CodeViewStatus>
                                     )}
                                     {modified && stale && <span className="text-white">/</span>}
                                     {stale && (
-                                        <span className="text-orange-400 underline decoration-dotted underline-offset-2" title="The node graph has changed since this code was last compiled or decompiled. Decompile to bring the code up to date">
+                                        <CodeViewStatus className="text-orange-400" tip="The node graph has edits that haven't been decompiled into the code">
                                             stale
-                                        </span>
+                                        </CodeViewStatus>
                                     )}
                                 </span>
                             )}
                             <button
                                 type="button"
-                                title="Collapse the code view"
+                                title="Collapse the code panel"
                                 className="flex-none w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/80 transition-colors"
                                 onClick={onCollapse}
                             >
@@ -1345,7 +1363,6 @@
                                         <button
                                             type="button"
                                             onClick={() => editorApiRef.current && editorApiRef.current.undo()}
-                                            title="Put back the code this replaced (Ctrl+Z in the code)"
                                             className="flex-none underline decoration-dotted underline-offset-2 hover:text-green-200"
                                         >
                                             Undo
@@ -1358,9 +1375,7 @@
                                     type="button"
                                     onClick={onDecompile}
                                     disabled={!!busy}
-                                    title={node
-                                        ? 'Replace the node’s code with its graph, decompiled to ShadingLanguageX'
-                                        : 'Replace the code with the current node graph, decompiled to ShadingLanguageX'}
+                                    title="Decompile the current node graph into ShadingLanguageX code"
                                     className={BTN_SECONDARY + ' flex-1 gap-1.5'}
                                 >
                                     <MtlxIcon name="arrow-left" className="w-3.5 h-3.5" />
@@ -1370,9 +1385,7 @@
                                     type="button"
                                     onClick={onCompile}
                                     disabled={!!busy || loading}
-                                    title={node
-                                        ? 'Compile the code into this node’s graph (Ctrl+Enter)'
-                                        : 'Compile the code and regenerate the node graph from it (Ctrl+Enter)'}
+                                    title="Compile the code (Ctrl+Enter)"
                                     className={BTN_PRIMARY + ' flex-1 gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none'}
                                 >
                                     <span>{busy === 'compile' ? 'Compiling…' : 'Compile'}</span>

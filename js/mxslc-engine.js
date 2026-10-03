@@ -39,7 +39,7 @@ const getMxslcModule = () => MtlxVendor.load('mxslc');
 // appear inside a #include "..." or #library "..." directive in `source`
 // — to that sibling file's text; pass null/undefined for a self-contained
 // compile with no siblings. `label` is only used to make a thrown error
-// identify which file failed.
+// identify which file failed; null names none.
 const compileMxslcSource = async (source, files, label) => {
     const mxslc = await getMxslcModule();
 
@@ -54,7 +54,7 @@ const compileMxslcSource = async (source, files, label) => {
         // (CompileError / Error), so e.message is already a readable
         // compiler diagnostic — just attach which file it came from.
         const msg = (e && e.message) || String(e);
-        throw new Error('ShadingLanguageX compile error in ' + label + ':\n' + msg);
+        throw new Error('ShadingLanguageX compile error' + (label ? ' in ' + label : '') + ':\n' + msg);
     } finally {
         opts.delete(); // embind object: not garbage-collected automatically
     }

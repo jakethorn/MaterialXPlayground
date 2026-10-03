@@ -22,8 +22,8 @@ const ROOT_ONLY = [
   '</materialx>',
 ].join('\n');
 
-// A code node as saved by the editor: in1 wired from c1 at the root, in2
-// changed on the node from its code default, the result feeding ss1. The
+// A code node: in1 wired from c1 at the root, in2 at 0.5 against its code's
+// 0.0 default (as values set on the node used to be), the result feeding ss1. The
 // comment's quotes, < and > must survive the attribute round trip, and the
 // code view's decompile (an @slxsource string couldn't hold the quotes).
 const CODE = [
@@ -94,6 +94,24 @@ const graphBody = (xml, name) => (new RegExp('<nodegraph name="' + name + '"[\\s
 const focusStage = (page) => page.evaluate(() => { if (document.activeElement) document.activeElement.blur(); });
 
 const card = (page, id) => page.locator('.react-flow__node[data-id="' + id + '"]');
+// Renames card `id` from the side panel's title, which doesn't depend on
+// the canvas zoom (a far zoomed out card draws without its rename field).
+const renameInPanel = async (page, id, to) => {
+  await card(page, id).click();
+  await page.getByTitle('Click to rename', { exact: true }).click();
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type(to);
+  await page.keyboard.press('Enter');
+};
+// Pairs of cards on the canvas drawn over each other.
+const overlappingCards = (page) => page.evaluate(() => {
+  const boxes = Array.from(document.querySelectorAll('.react-flow__node')).map((n) => [n.dataset.id, n.getBoundingClientRect()]);
+  const pairs = [];
+  boxes.forEach(([a, r], i) => boxes.slice(i + 1).forEach(([b, s]) => {
+    if (r.left < s.right && s.left < r.right && r.top < s.bottom && s.top < r.bottom) pairs.push(a + ' / ' + b);
+  }));
+  return pairs;
+});
 const editorOf = (page, id) => card(page, id).locator('.mtlx-slx-editor textarea');
 
 test('adds a ShadingLanguageX node from the Tab palette and compiles edited code into it', async ({ page, embedURL }) => {
@@ -141,7 +159,7 @@ test('adds a ShadingLanguageX node from the Tab palette and compiles edited code
   await expect(card(page, 'g:NG_scale').locator('span', { hasText: /^gain$/ })).toBeVisible();
 });
 
-test('recompiling keeps the node\'s wires and changed values, and shows compile errors', async ({ page, embedURL }) => {
+test('recompiling keeps the node\'s wires, gives its inputs the code\'s defaults, and shows compile errors', async ({ page, embedURL }) => {
   test.skip(!HAS_MXSLC, 'vendor/mxslc not on disk (gitignored, run npm run vendor first)');
   await openGraphWith(page, embedURL, WITH_NODE);
   const editor = editorOf(page, 'g:NG_brighten');
@@ -162,15 +180,14 @@ test('recompiling keeps the node\'s wires and changed values, and shows compile 
   await expect(card(page, 'g:NG_brighten').locator('.mtlx-slx-error')).toHaveCount(0);
   await expect(card(page, 'g:NG_brighten').getByText('Compiled', { exact: true })).toBeVisible();
 
-  // New code: in1's wire and in2's 0.5 (changed on the node from its 0.0
-  // default) survive, gain takes the code's new default.
+  // New code: in1's wire survives, gain and in2 take the code's defaults.
   await editor.fill(CODE.replace('float gain = 2.0', 'float gain = 4.0').replace('(in1 + in2) * clamp(gain, 0.0, 10.0)', 'in1 * gain + in2'));
   await page.keyboard.press('Control+Enter');
   await expect.poll(async () => graphBody(await graphXml(page), 'NG_brighten'), { timeout: 10000 })
     .toMatch(/<input name="gain" type="float" value="4" \/>/);
   let body = graphBody(await graphXml(page), 'NG_brighten');
   expect(body).toMatch(/<input name="in1" type="float" nodename="c1" \/>/);
-  expect(body).toMatch(/<input name="in2" type="float" value="0.5" \/>/);
+  expect(body).toMatch(/<input name="in2" type="float" value="0" \/>/);
   expect(await graphXml(page)).toMatch(/<input name="base" type="float" nodegraph="NG_brighten" output="out" \/>/);
   await expect(card(page, 'g:NG_brighten').locator('.mtlx-slx-error')).toHaveCount(0);
 
@@ -184,29 +201,35 @@ test('recompiling keeps the node\'s wires and changed values, and shows compile 
   expect(await graphXml(page)).not.toMatch(/nodegraph="NG_brighten"/);
 });
 
-test('editing inside a code node\'s graph rewrites its code, and undo restores it', async ({ page, embedURL }) => {
+test('editing inside a code node\'s graph leaves its code stale until the graph closes, and undo restores both', async ({ page, embedURL }) => {
   test.skip(!HAS_MXSLC, 'vendor/mxslc not on disk (gitignored, run npm run vendor first)');
+  await page.addInitScript(() => { try { localStorage.setItem('mtlxGraphCodeViewOpen', 'true'); } catch (e) { /* no storage */ } });
   await openGraphWith(page, embedURL, WITH_NODE);
   const node = card(page, 'g:NG_brighten');
   await node.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  const panel = page.locator('aside', { has: page.locator('textarea[aria-label="ShadingLanguageX code"]') });
+  const panelCode = panel.locator('textarea');
+  const stale = panel.getByText('stale', { exact: true });
 
   // Double-click the card (outside its code) to open the graph.
   await node.locator('span', { hasText: /^in2$/ }).dblclick();
   const inner = card(page, 'n:var__0');
   await inner.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
-  await expect(page.getByText(/editing this graph rewrites the node's code/)).toBeVisible();
 
-  // Rename a node inside: the code is decompiled from the graph.
+  // Rename a node inside: the node's code stays as it was, flagged stale...
   await inner.locator('.mtlx-node-name').dblclick();
   await page.keyboard.press('Control+A');
   await page.keyboard.type('total');
   await page.keyboard.press('Enter');
-  await expect.poll(async () => slxSource(await graphXml(page), 'NG_brighten'), { timeout: 10000 })
-    .toMatch(/float total = in1 \+ in2;/);
+  await expect(stale).toBeVisible({ timeout: 10000 });
+  await expect(panelCode).toHaveValue(CODE);
+  // ...though what leaves the editor (an export) carries it decompiled.
   const code = slxSource(await graphXml(page), 'NG_brighten');
-  // The code keeps its own defaults, not the node's wire (which would
-  // decompile to an uncompilable "= null") or its changed in2 value.
-  expect(code).toMatch(/float brighten\(float in1 = 0\.0, float in2 = 0\.0, float gain = 2\.0\)/);
+  expect(code).toMatch(/float total = in1 \+ in2;/);
+  await expect(panelCode).toHaveValue(CODE);
+  // The inputs' values are the code's defaults; a wired one (which would
+  // decompile to an uncompilable "= null") keeps the code's own.
+  expect(code).toMatch(/float brighten\(float in1 = 0\.0, float in2 = 0\.5, float gain = 2\.0\)/);
   expect(code).not.toMatch(/null/);
   const recompiles = await page.evaluate(async (src) => {
     try { const { mx } = await getMxEnv(); await compileSlxGraph(mx, src, 'check'); return true; } catch (e) { return String(e.message || e); }
@@ -217,21 +240,35 @@ test('editing inside a code node\'s graph rewrites its code, and undo restores i
   expect(body).toMatch(/<input name="in1" type="float" nodename="c1" \/>/);
   expect(body).toMatch(/<input name="in2" type="float" value="0.5" \/>/);
 
-  // Back at the root, the card shows the rewritten code.
-  await page.getByRole('button', { name: 'Back to the code' }).click();
+  // Back at the root, the code is decompiled from the graph.
+  await page.getByRole('button', { name: /^Leave NG_brighten/ }).click();
   await expect(editorOf(page, 'g:NG_brighten')).toHaveValue(code, { timeout: WAIT_TIMEOUT });
 
-  // One undo step covers the edit and its rewritten code.
+  // Undo takes back the decompile, into the graph as it was left: stale...
   await focusStage(page);
   await page.keyboard.press('Control+Z');
-  await expect.poll(async () => slxSource(await graphXml(page), 'NG_brighten'), { timeout: 10000 }).toBe(CODE);
+  await expect(card(page, 'n:total')).toBeVisible({ timeout: WAIT_TIMEOUT });
+  await expect(panelCode).toHaveValue(CODE);
+  await expect(stale).toBeVisible();
+  // ...then the edit, back out at the root.
+  await focusStage(page);
+  await page.keyboard.press('Control+Z');
   await expect(editorOf(page, 'g:NG_brighten')).toHaveValue(CODE, { timeout: WAIT_TIMEOUT });
+  expect(slxSource(await graphXml(page), 'NG_brighten')).toBe(CODE);
+  // Redo is still there for both.
+  await page.keyboard.press('Control+Shift+Z');
+  await expect(card(page, 'n:total')).toBeVisible({ timeout: WAIT_TIMEOUT });
+  await expect(stale).toBeVisible({ timeout: 10000 });
 });
 
 test('the code view leaves a code node\'s source out of its code, and its Compile keeps the node a code node', async ({ page, embedURL }) => {
   test.skip(!HAS_MXSLC, 'vendor/mxslc not on disk (gitignored, run npm run vendor first)');
   await page.addInitScript(() => { try { localStorage.setItem('mtlxGraphCodeViewOpen', 'true'); } catch (e) { /* no storage */ } });
-  await openGraphWith(page, embedURL, WITH_NODE);
+  // Unwired, at its code's defaults: compiling the document's code folds a
+  // wire from a root node into a value, which changes the node's code.
+  await openGraphWith(page, embedURL, WITH_NODE
+    .replace('<input name="in1" type="float" nodename="c1" />', '<input name="in1" type="float" value="0" />')
+    .replace('<input name="in2" type="float" value="0.5" />', '<input name="in2" type="float" value="0" />'));
   await card(page, 'g:NG_brighten').waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
 
   // The code view's own editor (the node card's sits on the canvas).
@@ -248,7 +285,7 @@ test('the code view leaves a code node\'s source out of its code, and its Compil
   await expect(editorOf(page, 'g:NG_brighten')).toHaveValue(CODE);
 
   // A function changed in the code view: the node's code is rebuilt from
-  // its new graph, standalone (no references to other nodes).
+  // its new graph.
   expect(decompiled).toMatch(/clamp\(gain, 0\.0, 10\.0\)/);
   await panelCode.fill(decompiled.replace('clamp(gain, 0.0, 10.0)', 'clamp(gain, 0.0, 5.0)'));
   await panel.getByRole('button', { name: /^Compile/ }).click();
@@ -278,22 +315,28 @@ test('inside a code node\'s graph the code view works on the node\'s code, and l
   await node.locator('span', { hasText: /^in2$/ }).dblclick();
   await card(page, 'n:var__0').waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
   await expect(panelCode).toHaveValue(CODE);
-  await expect(panel.getByText('NG_brighten')).toBeVisible();
 
-  // An edit inside the graph rewrites the code shown.
+  // An edit inside the graph leaves the code stale until Decompile.
   await card(page, 'n:var__0').locator('.mtlx-node-name').dblclick();
   await page.keyboard.press('Control+A');
   await page.keyboard.type('total');
   await page.keyboard.press('Enter');
+  await expect(panel.getByText('stale', { exact: true })).toBeVisible({ timeout: 10000 });
+  await expect(panelCode).toHaveValue(CODE);
+  await panel.getByRole('button', { name: /^Decompile/ }).click();
   await expect(panelCode).toHaveValue(/float total = in1 \+ in2;/, { timeout: 10000 });
+  await expect(panel.getByText('stale', { exact: true })).toHaveCount(0);
 
-  // Compile goes into the node alone.
-  const edited = (await panelCode.inputValue()).replace('clamp(gain, 0.0, 10.0)', 'clamp(gain, 0.0, 5.0)');
+  // Compile goes into the node alone, its graph laid out afresh: the nodes
+  // that kept their names don't keep their old places among the new ones.
+  const edited = (await panelCode.inputValue()).replace('clamp(gain, 0.0, 10.0)', 'clamp(gain, 0.0, 5.0) + sin(in1) * 0.5');
   await panelCode.fill(edited);
   await panel.getByRole('button', { name: /^Compile/ }).click();
-  await expect(panel.getByText('Compiled into the node\u2019s graph.')).toBeVisible({ timeout: 10000 });
+  await expect(panel.getByText('Compiled into the node graph.')).toBeVisible({ timeout: 10000 });
   expect(slxSource(await graphXml(page), 'NG_brighten')).toBe(edited);
   expect(graphBody(await graphXml(page), 'NG_brighten')).toMatch(/<input name="high" type="float" value="5" \/>/);
+  await expect(card(page, 'n:total')).toBeVisible();
+  await expect.poll(() => overlappingCards(page), { timeout: 5000 }).toEqual([]);
 
   // A compile error stays in the panel, squiggled.
   await panelCode.fill(edited.replace('in1 + in2', 'in1 + '));
@@ -309,13 +352,9 @@ test('inside a code node\'s graph the code view works on the node\'s code, and l
 
   // An edit right before leaving is in the node's code as the graph closes;
   // the document's code is left as it was, stale.
-  await card(page, 'n:total').locator('.mtlx-node-name').dblclick();
-  await page.keyboard.press('Control+A');
-  await page.keyboard.type('sum');
-  await page.keyboard.press('Enter');
-  await page.getByRole('button', { name: 'Back to the code' }).click();
+  await renameInPanel(page, 'n:total', 'sum');
+  await page.getByRole('button', { name: /^Leave NG_brighten/ }).click();
   await expect(editorOf(page, 'g:NG_brighten')).toHaveValue(/float sum = in1 \+ in2;/, { timeout: WAIT_TIMEOUT });
-  await expect(panel.getByText('NG_brighten')).toHaveCount(0);
   await expect(panelCode).toHaveValue(docCode);
   await expect(panel.getByText('stale', { exact: true })).toBeVisible({ timeout: 10000 });
 
@@ -326,17 +365,15 @@ test('inside a code node\'s graph the code view works on the node\'s code, and l
   await expect(panel.getByText('stale', { exact: true })).toHaveCount(0);
   const draft = (await panelCode.inputValue()) + '\n// draft';
   await panelCode.fill(draft);
-  await card(page, 'n:sum').locator('.mtlx-node-name').dblclick();
-  await page.keyboard.press('Control+A');
-  await page.keyboard.type('both');
-  await page.keyboard.press('Enter');
+  await renameInPanel(page, 'n:sum', 'both');
   await expect(panel.getByText('stale', { exact: true })).toBeVisible({ timeout: 10000 });
-  await expect(panel.getByText(/^modified\s*\/\s*stale$/)).toBeVisible();
+  await expect(panel.getByText('modified', { exact: true })).toBeVisible();
+  await expect(panel.getByText('/', { exact: true })).toBeVisible();
   await expect(panelCode).toHaveValue(draft);
-  await page.getByRole('button', { name: 'Back to the code' }).click();
+  await page.getByRole('button', { name: /^Leave NG_brighten/ }).click();
   await expect.poll(async () => slxSource(await graphXml(page), 'NG_brighten'), { timeout: 10000 }).toMatch(/float both = in1 \+ in2;/);
   await expect(editorOf(page, 'g:NG_brighten')).toHaveValue(draft);
-  await expect(node.getByText(/^Edited/)).toBeVisible();
+  await expect(node.getByText(/^modified/)).toBeVisible();
 });
 
 test('the code view flags its code stale once the graph changes', async ({ page, embedURL }) => {
@@ -372,4 +409,22 @@ test('the code view flags its code stale once the graph changes', async ({ page,
   await expect(panel.getByText('Compiled into the node graph.')).toBeVisible({ timeout: 10000 });
   await page.waitForTimeout(1000); // past the undo snapshot that checks it
   await expect(stale).toHaveCount(0);
+});
+
+test('an interface input\'s value set inside a code node\'s graph becomes the code\'s default', async ({ page, embedURL }) => {
+  test.skip(!HAS_MXSLC, 'vendor/mxslc not on disk (gitignored, run npm run vendor first)');
+  await openGraphWith(page, embedURL, WITH_NODE);
+  const node = card(page, 'g:NG_brighten');
+  await node.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  await node.locator('span', { hasText: /^in2$/ }).dblclick();
+  const gain = card(page, 'i:gain');
+  await gain.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  await gain.click();
+  const value = page.locator('input[type="number"]').last();
+  await expect(value).toHaveValue('2');
+  await value.fill('4');
+  await value.press('Enter');
+  await page.getByRole('button', { name: /^Leave NG_brighten/ }).click();
+  await expect(editorOf(page, 'g:NG_brighten')).toHaveValue(/float brighten\(float in1 = 0\.0, float in2 = 0\.5, float gain = 4\.0\)/, { timeout: WAIT_TIMEOUT });
+  expect(graphBody(await graphXml(page), 'NG_brighten')).toMatch(/<input name="gain" type="float" value="4" \/>/);
 });
