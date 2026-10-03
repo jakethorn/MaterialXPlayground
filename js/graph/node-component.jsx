@@ -146,14 +146,21 @@
                 if (slx.source === baseRef.current) return;
                 const untouched = draft === baseRef.current;
                 baseRef.current = slx.source;
-                if (untouched) { setDraft(slx.source); setFailed(null); }
+                if (untouched || draft === slx.source) { setDraft(slx.source); setFailed(null); }
             }, [slx.source]);
             const dirty = draft !== slx.source;
 
             const remember = (code, fail) => {
                 if (data.onSlxDraft) data.onSlxDraft(code === slx.source ? null : { base: slx.source, draft: code, failed: fail || null });
             };
-            const update = (code) => { setDraft(code); remember(code, failed); };
+            // Undoing a failed edit puts back the node's own code, so its
+            // error no longer applies (and Compile has nothing to do).
+            const update = (code) => {
+                const fail = code === slx.source ? null : failed;
+                setDraft(code);
+                setFailed(fail);
+                remember(code, fail);
+            };
             const compile = async () => {
                 if (!editable || busyRef.current || !dirty) return;
                 const code = draft;

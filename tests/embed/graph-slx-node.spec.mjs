@@ -149,6 +149,11 @@ test('recompiling keeps the node\'s wires and changed values, and shows compile 
   await expect(card(page, 'g:NG_brighten').locator('.slx-marks .slx-error')).toHaveText('return (in1 + ) * clamp(gain, 0.0, 10.0);');
   expect(graphBody(await graphXml(page), 'NG_brighten')).toMatch(/<clamp name="var__1"/);
 
+  // Undoing the mistake puts back the node's own code: the error goes.
+  await editor.fill(CODE);
+  await expect(card(page, 'g:NG_brighten').locator('.mtlx-slx-error')).toHaveCount(0);
+  await expect(card(page, 'g:NG_brighten').getByText('Compiled', { exact: true })).toBeVisible();
+
   // New code: in1's wire and in2's 0.5 (changed on the node from its 0.0
   // default) survive, gain takes the code's new default.
   await editor.fill(CODE.replace('float gain = 2.0', 'float gain = 4.0').replace('(in1 + in2) * clamp(gain, 0.0, 10.0)', 'in1 * gain + in2'));
