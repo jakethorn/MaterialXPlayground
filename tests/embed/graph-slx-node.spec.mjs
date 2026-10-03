@@ -131,14 +131,14 @@ test('adds a ShadingLanguageX node from the Tab palette and compiles edited code
   await expect(editor).toBeFocused();
   await expect.poll(async () => slxSource(await graphXml(page), 'NG_slx_node'), { timeout: 10000 })
     .toMatch(/^\[\[nodegraph\]\]\ncolor3 slx_node\(/);
-  expect(graphBody(await graphXml(page), 'NG_slx_node')).toMatch(/<checkerboard name="p"/);
+  expect(graphBody(await graphXml(page), 'NG_slx_node')).toMatch(/<randomcolor name=/);
 
   // Its panel can ungroup it, but the code sets its inputs and definition.
   await expect(page.getByRole('button', { name: /^Ungroup/ })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Convert to Definition' })).toBeDisabled();
   await expect(page.getByPlaceholder('node name')).toBeDisabled();
-  const fields = page.locator('fieldset[disabled] input'); // c1's three components, c2_seed, tiling
-  await expect(fields).toHaveCount(5);
+  const fields = page.locator('fieldset[disabled] input'); // scale
+  await expect(fields).toHaveCount(1);
   for (const f of await fields.all()) await expect(f).toBeDisabled();
 
   // Typed code (real keystrokes: the editor auto-indents after "{" and

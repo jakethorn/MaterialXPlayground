@@ -48,8 +48,8 @@
             // ShadingLanguageX code (the code panel and ShadingLanguageX nodes)
             { keys: 'Ctrl/Cmd + Click a function', desc: 'Open the documentation for an underlined standard library function', group: 'slx', browserOnly: true },
             { keys: 'Ctrl/Cmd + Enter', desc: "Compile the code (the code panel's into the whole node graph, a ShadingLanguageX node's into its nodegraph; leaving a node's code compiles it too)", group: 'slx', browserOnly: true },
-            { keys: 'Ctrl + Space', desc: 'Show suggestions (they also appear as you type; Enter or Tab inserts one)', group: 'slx', browserOnly: true },
-            { keys: 'Ctrl + Shift + Space', desc: 'Show parameter hints for the call around the cursor (Up/Down steps through its signatures)', group: 'slx', browserOnly: true },
+            { keys: 'Ctrl/Cmd + Space', desc: 'Show suggestions (they also appear as you type; Enter or Tab inserts one)', group: 'slx', browserOnly: true },
+            { keys: 'Ctrl/Cmd + Shift + Space', desc: 'Show parameter hints for the call around the cursor (Up/Down steps through its signatures)', group: 'slx', browserOnly: true },
             { keys: 'Tab / Shift + Tab', desc: 'Indent / outdent (every selected line when several are selected)', group: 'slx', browserOnly: true },
         ];
 
@@ -121,7 +121,7 @@
                                 ))}
                                 {slxKeybinds.length > 0 && (
                                     <tr>
-                                        <td colSpan={2} className="pt-3 pb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">ShadingLanguageX</td>
+                                        <td colSpan={2} className="pt-3 pb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">Shading Language X</td>
                                     </tr>
                                 )}
                                 {slxKeybinds.map((k) => (

@@ -101,20 +101,12 @@
         // Starting code for a new node.
         const slxTemplateSource = (fn) => [
             '[[nodegraph]]',
-            'color3 ' + fn + '(',
-            '    color3 c1 = color3{0, 0.2, 0.9},',
-            '    int c2_seed = 17,',
-            '    float tiling = 5',
-            ')',
+            'color3 ' + fn + '(float scale = 10.0)',
             '{',
-            '    color3 c2 = randomcolor(c2_seed);',
-            '',
-            '    mutable vec2 uv = texcoord() * tiling;',
-            '    uv += sin(uv.yx * tiling) / tiling;',
-            '',
-            '    color3 p = checkerboard(texcoord=uv);',
-            '',
-            '    return mix(c1, c2, p);',
+            '    mutable vec2 uv = texcoord() * scale;',
+            '    uv += sin(uv.yx * scale) / scale;',
+            '    float seed = floor(uv.x) + floor(uv.y) * scale;',
+            '    return randomcolor(seed);',
             '}',
         ].join('\n');
 

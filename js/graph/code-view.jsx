@@ -971,7 +971,9 @@
                 const comp = completionRef.current;
                 const help = hintsRef.current;
                 const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
-                if (e.key === ' ' && e.ctrlKey && !e.altKey && !e.metaKey) {
+                // Ctrl or Cmd + (Shift +) Space; macOS keeps Cmd + Space
+                // for Spotlight unless that shortcut is turned off.
+                if (e.key === ' ' && (e.ctrlKey || e.metaKey) && !e.altKey) {
                     refreshAssist({ kind: e.shiftKey ? 'hints' : 'complete' });
                     return true;
                 }
