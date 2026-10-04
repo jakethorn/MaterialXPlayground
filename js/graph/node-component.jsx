@@ -68,9 +68,9 @@
                                 if (data.onRenameCancel) data.onRenameCancel();
                             }
                         }}
-                        className={'nodrag w-full bg-gray-900 border rounded py-0 px-1 focus:outline-none '
-                            + (isIface ? 'italic text-gray-300' : 'font-bold text-gray-100')
-                            + (issue ? ' border-red-500' : ' border-gray-600')}
+                        className={'nodrag w-full bg-surface-sunken border rounded py-0 px-1 focus:outline-none '
+                            + (isIface ? 'italic text-fg-secondary' : 'font-bold text-fg')
+                            + (issue ? ' border-error-hue' : ' border-line-strong')}
                     />
                     {issue && (
                         // Same palette as the panel's own rename message, but
@@ -78,10 +78,10 @@
                         // the field on a card. pointer-events-none so it can
                         // never swallow a click meant for the canvas.
                         <div className="absolute left-0 top-full mt-1.5 z-50 w-max max-w-[15rem] pointer-events-none
-                            rounded border border-red-800/60 bg-red-950/95 backdrop-blur shadow-lg
-                            px-2 py-1 text-[10px] leading-snug font-normal text-red-300
+                            rounded border border-error-border/60 bg-error-bg/95 backdrop-blur shadow-lg
+                            px-2 py-1 text-[10px] leading-snug font-normal text-error-text
                             flex items-start gap-1.5">
-                            <span className="absolute -top-1 left-3 w-2 h-2 rotate-45 border-l border-t border-red-800/60 bg-red-950/95" />
+                            <span className="absolute -top-1 left-3 w-2 h-2 rotate-45 border-l border-t border-error-border/60 bg-error-bg/95" />
                             <MtlxIcon name="alert-triangle" className="w-3 h-3 flex-none mt-px" />
                             <span>{issue}</span>
                         </div>
@@ -187,18 +187,18 @@
             }, [failed]);
 
             // Nothing once compiled.
-            const status = busy ? { text: 'Compiling\u2026', cls: 'text-gray-400' }
-                : dirty ? { text: 'modified', cls: 'text-amber-300' }
-                : !editable ? { text: slx.unavailable ? 'Read only: editing needs the browser or desktop app' : 'Read only', cls: 'text-gray-500' }
+            const status = busy ? { text: 'Compiling\u2026', cls: 'text-fg-muted' }
+                : dirty ? { text: 'modified', cls: 'text-warning' }
+                : !editable ? { text: slx.unavailable ? 'Read only: editing needs the browser or desktop app' : 'Read only', cls: 'text-fg-subtle' }
                 : null;
             return (
                 // The empty title keeps the card's own tooltip off its code.
-                <div className="mtlx-slx-editor nodrag nowheel border-t border-gray-700 px-1.5 pt-1.5 pb-1 cursor-default"
+                <div className="mtlx-slx-editor nodrag nowheel border-t border-line px-1.5 pt-1.5 pb-1 cursor-default"
                     title=""
                     onDoubleClick={(e) => e.stopPropagation()}>
                     <div
                         ref={boxRef}
-                        className={'flex rounded border overflow-hidden ' + (failed ? 'border-red-700/70' : 'border-gray-700')}
+                        className={'flex rounded border overflow-hidden ' + (failed ? 'border-error-border/70' : 'border-line')}
                         style={{ height: slxEditorHeight(draft) }}
                     >
                         {Editor ? (
@@ -213,7 +213,7 @@
                                 diagnostics={diagnostics}
                             />
                         ) : (
-                            <pre className="flex-1 m-0 px-2 py-2 overflow-auto custom-scrollbar font-mono text-[12px] leading-[18px] text-gray-300 whitespace-pre select-text bg-gray-900/60"
+                            <pre className="flex-1 m-0 px-2 py-2 overflow-auto custom-scrollbar font-mono text-[12px] leading-[18px] text-fg-secondary whitespace-pre select-text bg-surface-sunken/60"
                                 style={{ tabSize: 4 }}>{slx.source}</pre>
                         )}
                     </div>
@@ -227,12 +227,12 @@
                                 onClick={compile}
                                 disabled={busy || !dirty}
                                 title="Compile the code (Ctrl+Enter)"
-                                className="ml-auto flex-none text-[10px] px-1.5 py-px rounded border border-blue-500/50 text-blue-200 hover:bg-blue-500/20 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+                                className="ml-auto flex-none text-[10px] px-1.5 py-px rounded border border-accent-base/50 text-accent-fg-bright hover:bg-accent-wash/20 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
                             >Compile</button>
                         )}
                     </div>
                     {failed && (
-                        <pre className="mtlx-slx-error mb-0.5 max-h-28 overflow-auto custom-scrollbar rounded border border-red-800/60 bg-red-950/60 px-1.5 py-1 text-[10px] leading-snug text-red-300 whitespace-pre-wrap select-text">{failed.text}</pre>
+                        <pre className="mtlx-slx-error mb-0.5 max-h-28 overflow-auto custom-scrollbar rounded border border-error-border/60 bg-error-bg/60 px-1.5 py-1 text-[10px] leading-snug text-error-text whitespace-pre-wrap select-text">{failed.text}</pre>
                     )}
                 </div>
             );
@@ -271,9 +271,9 @@
                                 : 'Double-click to open this nodegraph')
                             : undefined)}
                     className={'relative rounded-lg border font-mono text-[11px] '
-                        + (isIface ? 'border-dashed bg-gray-900/70 ' : (isDef ? 'border-dashed bg-gray-800 shadow-md ' : 'bg-gray-800 shadow-md '))
-                        + (selected ? 'border-blue-500 ring-1 ring-blue-500/50'
-                                    : ((isIface || isDef) ? 'border-gray-500' : 'border-gray-600'))}
+                        + (isIface ? 'border-dashed bg-graph-node-header/70 ' : (isDef ? 'border-dashed bg-graph-node shadow-md ' : 'bg-graph-node shadow-md '))
+                        + (selected ? 'border-graph-node-selected ring-1 ring-graph-node-selected/50'
+                                    : ((isIface || isDef) ? 'border-graph-node-line-iface' : 'border-graph-node-line'))}
                     style={{ width: nodeWidth(data) }}>
                     {hasDefaults && data.onTogglePorts && (
                         <button
@@ -282,13 +282,13 @@
                             title={expanded ? 'Hide the inputs left at their defaults' : 'Show all inputs (defaults included)'}
                             className={'absolute -top-2 -right-2 z-10 w-4 h-4 rounded-full border text-[10px] leading-none flex items-center justify-center transition-colors '
                                 + (expanded
-                                    ? 'bg-blue-600 border-blue-400 text-white hover:bg-blue-500'
-                                    : 'bg-gray-700 border-gray-500 text-gray-300 hover:bg-gray-600 hover:text-gray-100')}
+                                    ? 'bg-accent-fill border-accent-base text-on-accent hover:bg-accent-fill-hover'
+                                    : 'bg-chip border-graph-node-line-iface text-fg-secondary hover:bg-hover-strong hover:text-fg')}
                         >{expanded ? '\u2212' : '+'}</button>
                     )}
                     <div className={'px-2 py-1.5 border-b rounded-t-lg leading-tight '
-                            + (isIface ? 'border-gray-700/70 border-dashed bg-transparent'
-                                       : 'border-gray-700 bg-gray-900/70')}>
+                            + (isIface ? 'border-line/60 border-dashed bg-transparent'
+                                       : 'border-line bg-graph-node-header/70')}>
                         <div className="flex items-center gap-1.5 min-w-0">
                             {isIface ? (
                                 <span className="w-2 h-2 rotate-45 flex-none border"
@@ -302,7 +302,7 @@
                                 <InlineRename data={data} isIface={isIface} />
                             ) : (
                                 <span
-                                    className={(isIface ? 'italic text-gray-300' : 'font-bold text-gray-100')
+                                    className={(isIface ? 'italic text-fg-secondary' : 'font-bold text-fg')
                                         + ' mtlx-node-name truncate'
                                         + (data.onRenameStart ? ' cursor-text' : '')}
                                     title={data.onRenameStart ? 'Double-click to rename' : undefined}
@@ -318,12 +318,12 @@
                                 </span>
                             )}
                             {isIface && (
-                                <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">
+                                <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-fg-subtle border border-line-strong border-dashed rounded px-1">
                                     {data.kind === 'input' ? 'interface' : 'output'}
                                 </span>
                             )}
                             {isDef && (
-                                <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">
+                                <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-fg-subtle border border-line-strong border-dashed rounded px-1">
                                     definition
                                 </span>
                             )}
@@ -335,7 +335,7 @@
                                     onClick={openScope}
                                     onDoubleClick={openScope}
                                     title="Open this nodegraph"
-                                    className={'mtlx-node-open flex-none inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors'
+                                    className={'mtlx-node-open flex-none inline-flex items-center gap-1 text-[9px] text-accent-fg-strong/90 border border-accent-wash/40 rounded px-1 hover:bg-accent-wash/20 hover:text-accent-fg-bright transition-colors'
                                         + (isDef ? '' : ' ml-auto')}
                                 >edit <MtlxIcon name="pencil" className="w-2.5 h-2.5" /></button>
                             )}
@@ -347,11 +347,11 @@
                                     onClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
                                     onDoubleClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
                                     title="Explore the implementation nodegraph (view only)"
-                                    className="mtlx-node-open flex-none ml-auto inline-flex items-center gap-1 text-[9px] text-blue-300/90 border border-blue-500/40 rounded px-1 hover:bg-blue-500/20 hover:text-blue-200 transition-colors"
+                                    className="mtlx-node-open flex-none ml-auto inline-flex items-center gap-1 text-[9px] text-accent-fg-strong/90 border border-accent-wash/40 rounded px-1 hover:bg-accent-wash/20 hover:text-accent-fg-bright transition-colors"
                                 >view <MtlxIcon name="eye" className="w-2.5 h-2.5" /></button>
                             )}
                         </div>
-                        <div className={'text-[10px] truncate pl-3.5 ' + (isIface ? 'text-gray-600 italic' : 'text-gray-500')}>
+                        <div className={'text-[10px] truncate pl-3.5 ' + (isIface ? 'text-fg-disabled italic' : 'text-fg-subtle')}>
                             {data.slx ? 'ShadingLanguageX' : data.category}{data.type ? ' : ' + data.type : ''}
                         </div>
                     </div>
@@ -368,9 +368,9 @@
                                     // circle to reconnect/delete the wire.
                                     className={inp.connected ? 'mtlx-handle-connected' : undefined}
                                     style={handleStyle(typeColor(inp.type))} />
-                                <span className="text-gray-300 truncate">{inp.name}</span>
+                                <span className="text-fg-secondary truncate">{inp.name}</span>
                                 {!inp.connected && inp.value !== '' && (
-                                    <span className="ml-auto text-gray-500 truncate max-w-[7.5rem] text-right"
+                                    <span className="ml-auto text-fg-subtle truncate max-w-[7.5rem] text-right"
                                         title={inp.value}>{inp.value}</span>
                                 )}
                                 {inp.connected && (
@@ -379,13 +379,13 @@
                             </div>
                         ))}
                         {data.value !== undefined && data.value !== '' && (
-                            <div className="px-2 text-gray-500 truncate" style={{ height: 22, lineHeight: '22px' }}
+                            <div className="px-2 text-fg-subtle truncate" style={{ height: 22, lineHeight: '22px' }}
                                 title={data.value}>= {data.value}</div>
                         )}
                         {safePortList(data.outputs, data.id, 'outputs').map((out) => (
                             <div key={'out:' + out.name} className="relative flex items-center justify-end gap-1.5 px-2" style={{ height: 22 }}>
                                 <span className="text-[9px]" style={{ color: typeColor(out.type) }}>{out.type}</span>
-                                <span className="text-gray-300 truncate">{out.name}</span>
+                                <span className="text-fg-secondary truncate">{out.name}</span>
                                 <Handle type="source" position={Position.Right} id={'out:' + out.name}
                                     onDoubleClick={(e) => { e.stopPropagation(); if (data.onPortAdd) data.onPortAdd({ nodeId: data.id, port: out.name, portType: out.type, dir: 'out' }); }}
                                     style={handleStyle(typeColor(out.type))} />

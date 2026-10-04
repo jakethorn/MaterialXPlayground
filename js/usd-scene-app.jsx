@@ -17,11 +17,10 @@
     // Self-authored (not imported from js/compare-app.jsx per the ground
     // rule against importing across apps): the same grid-mask empty-stage
     // treatment as Compare's own empty slot.
-    const EMPTY_STAGE_GRID_IMAGE = 'linear-gradient(to right, rgba(107,114,128,0.16) 1px, transparent 1px), linear-gradient(to bottom, rgba(107,114,128,0.16) 1px, transparent 1px)';
+    const EMPTY_STAGE_GRID_IMAGE = 'linear-gradient(to right, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 1px, transparent 1px), linear-gradient(to bottom, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 1px, transparent 1px)';
     const EMPTY_STAGE_GRID_MASK = 'radial-gradient(ellipse at center, rgba(0,0,0,1) 0%, rgba(0,0,0,0.9) 30%, rgba(0,0,0,0) 70%)';
-    // Same translucent-over-solid card surface as SectionCard/compare's
-    // stats panel (js/shared/mtlx-ui.jsx CARD_SURFACE).
-    const PANEL_SURFACE = 'color-mix(in srgb, var(--site-gray-800, #1f2937) 35%, var(--site-gray-900, #111827))';
+    // Popovers over the render: opacity is a theme param (0.95 dark, opaque light so render colors do not tint them).
+    const HUD_POPOVER_BG = 'rgb(var(--mtlx-surface-raised) / var(--mtlx-alpha-hud-popover))';
 
     // Mirrors js/usd-scene-renderer.js sceneDomeYawDegFromRotation (not
     // exported, math not to be changed here): converts an authored dome
@@ -1139,19 +1138,19 @@
             <div
                 ref={panelRef}
                 data-testid="usd-scene-material-preview"
-                className={'absolute z-40 flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden' + (open ? '' : ' hidden')}
-                style={rectStyle}
+                className={'absolute z-40 flex flex-col backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden' + (open ? '' : ' hidden')}
+                style={Object.assign({ backgroundColor: HUD_POPOVER_BG }, rectStyle)}
                 aria-hidden={!open}
             >
                 <div
-                    className="flex-none flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-700 bg-gray-900/70 cursor-move touch-none"
+                    className="flex-none flex items-center justify-between gap-2 px-3 py-2 border-b border-line bg-chrome/70 cursor-move touch-none"
                     onPointerDown={beginDrag(dragRef)}
                     onPointerMove={onHeaderMove}
                     onPointerUp={endDrag(dragRef)}
                 >
                     <div className="min-w-0 flex flex-col">
-                        <span className="text-[11px] text-gray-400 truncate max-w-[16rem]">{shown.primPath || ''}</span>
-                        <span className="text-sm font-semibold text-gray-100 truncate max-w-[16rem]">{shown.materialName || shown.name}</span>
+                        <span className="text-[11px] text-fg-muted truncate max-w-[16rem]">{shown.primPath || ''}</span>
+                        <span className="text-sm font-semibold text-fg truncate max-w-[16rem]">{shown.materialName || shown.name}</span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                         <button type="button" onClick={openInEditor} className={HUD_PILL}>
@@ -1165,11 +1164,11 @@
                 <div ref={bodyRef} className="relative flex-1 min-h-0">
                     {!depsReady ? (depsError ? (
                         <div role="alert" data-testid="usd-scene-material-preview-error" className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-4 text-center">
-                            <span className="text-sm text-red-300">The node graph preview could not be loaded.</span>
-                            <span className="text-[11px] text-gray-400 break-all">{depsError}</span>
+                            <span className="text-sm text-error-text">The node graph preview could not be loaded.</span>
+                            <span className="text-[11px] text-fg-muted break-all">{depsError}</span>
                         </div>
                     ) : (
-                        <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-sm animate-pulse">Loading preview</div>
+                        <div className="absolute inset-0 flex items-center justify-center text-fg-muted text-sm animate-pulse">Loading preview</div>
                     )) : (
                         <window.MtlxGraphPreview
                             xml={shown.xml}
@@ -1296,7 +1295,7 @@
                 onClick={(e) => { e.stopPropagation(); onToggleHidden(node); }}
                 onDoubleClick={(e) => e.stopPropagation()}
                 className={'w-5 h-4 shrink-0 inline-flex items-center justify-center rounded '
-                    + (selected ? 'text-blue-100 hover:text-white' : (eye.own ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-200'))
+                    + (selected ? 'text-on-accent-muted hover:text-on-accent' : (eye.own ? 'text-fg-muted hover:text-fg-soft' : 'text-fg-subtle hover:text-fg-soft'))
                     + (eye.by && !eye.own ? ' opacity-40' : '')}
             >
                 <MtlxIcon name={eye.own ? 'eye-off' : 'eye'} className="w-3.5 h-3.5" />
@@ -1310,7 +1309,7 @@
                 data-testid="usd-scene-tree-toggle"
                 onClick={(e) => { e.stopPropagation(); onToggleExpand(node.id); }}
                 onDoubleClick={(e) => e.stopPropagation()}
-                className={'w-3.5 h-3.5 shrink-0 inline-flex items-center justify-center rounded ' + (selected ? 'text-blue-100' : 'text-gray-500 hover:text-gray-200')}
+                className={'w-3.5 h-3.5 shrink-0 inline-flex items-center justify-center rounded ' + (selected ? 'text-on-accent-muted' : 'text-fg-subtle hover:text-fg-soft')}
             >
                 <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />
             </button>
@@ -1324,7 +1323,7 @@
                 data-testid="usd-scene-tree"
                 onKeyDown={onKeyDown}
                 onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-                className="relative overflow-y-auto custom-scrollbar rounded-md border border-gray-700 bg-gray-900/60 focus:outline-none focus-visible:border-blue-500"
+                className="relative overflow-y-auto custom-scrollbar rounded-md border border-line bg-surface-sunken/60 focus:outline-none focus-visible:border-focus"
                 style={{ flex: '1 1 0px', minHeight: SCENE_TREE_MIN_H }}
             >
                 <div style={{ height: rows.length * SCENE_TREE_ROW_H, position: 'relative' }}>
@@ -1348,15 +1347,15 @@
                                     title={sceneTreeRowTitle(node)}
                                     onClick={() => onRowClick(node)}
                                     className={'absolute left-0 right-0 flex items-center gap-1 pr-1 text-[11px] font-semibold cursor-default select-none '
-                                        + (selected ? 'bg-blue-600 text-white' : 'bg-gray-800/50 text-gray-200 hover:bg-gray-700/60')}
+                                        + (selected ? 'bg-accent-fill text-on-accent' : 'bg-surface-raised/50 text-fg-soft hover:bg-hover/60')}
                                     style={rowStyle}
                                 >
                                     {renderChevron(node, open, selected)}
                                     <MtlxIcon name={SCENE_TREE_GROUP_ICONS[node.group] || 'list-details'}
-                                        className={'w-3.5 h-3.5 shrink-0 ' + (selected ? 'text-blue-100' : 'text-gray-400')} />
+                                        className={'w-3.5 h-3.5 shrink-0 ' + (selected ? 'text-on-accent-muted' : 'text-fg-muted')} />
                                     <span className="flex-1 min-w-0 truncate">{node.name}</span>
                                     <span data-testid="usd-scene-tree-group-count"
-                                        className={'shrink-0 px-1 font-mono font-normal tabular-nums text-[10px] ' + (selected ? 'text-blue-100' : 'text-gray-500')}>
+                                        className={'shrink-0 px-1 font-mono font-normal tabular-nums text-[10px] ' + (selected ? 'text-on-accent-muted' : 'text-fg-subtle')}>
                                         {node.count.toLocaleString()}
                                     </span>
                                     {eye ? renderEye(node, eye, selected) : <span className="w-5 shrink-0" />}
@@ -1391,22 +1390,22 @@
                                 onClick={() => onRowClick(node)}
                                 onDoubleClick={() => onActivate(node)}
                                 className={'absolute left-0 right-0 flex items-center gap-1 pr-1 text-[11px] cursor-default select-none '
-                                    + (selected ? 'bg-blue-600 text-white' : (hiddenBy ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-300 hover:bg-gray-800'))
+                                    + (selected ? 'bg-accent-fill text-on-accent' : (hiddenBy ? 'text-fg-subtle hover:bg-hover-subtle' : 'text-fg-secondary hover:bg-hover-subtle'))
                                     + (dimmedByOff && !selected ? ' opacity-50' : '')}
                                 style={rowStyle}
                             >
                                 {Array.from({ length: node.depth }, (_, level) => (
                                     <span key={level} aria-hidden="true"
-                                        className={'absolute top-0 bottom-0 w-px ' + (selected ? 'bg-blue-300/40' : 'bg-gray-700/80')}
+                                        className={'absolute top-0 bottom-0 w-px ' + (selected ? 'bg-on-accent-muted/40' : 'bg-line/80')}
                                         style={{ left: 6 + level * SCENE_TREE_INDENT + 6 }} />
                                 ))}
                                 {renderChevron(node, open, selected)}
                                 <MtlxIcon name={node.isEnvironment ? 'sun' : (node.isDefaultCamera ? 'camera-reset' : (SCENE_TREE_ICONS[node.kind] || 'cube'))}
-                                    className={'w-3.5 h-3.5 shrink-0 ' + (selected ? 'text-blue-100' : (activeCam ? 'text-blue-400' : 'text-gray-500'))} />
+                                    className={'w-3.5 h-3.5 shrink-0 ' + (selected ? 'text-on-accent-muted' : (activeCam ? 'text-accent-fg' : 'text-fg-subtle'))} />
                                 <span className={'flex-1 min-w-0 truncate ' + (node.group === 'scene' || node.kind === 'material' ? 'font-mono' : '')
-                                    + (activeCam && !selected ? ' text-blue-300' : '')}>{node.name}</span>
+                                    + (activeCam && !selected ? ' text-accent-fg-strong' : '')}>{node.name}</span>
                                 {activeCam ? (
-                                    <span data-testid="usd-scene-tree-active-camera" className={'shrink-0 mr-1 inline-flex ' + (selected ? 'text-white' : 'text-blue-400')}>
+                                    <span data-testid="usd-scene-tree-active-camera" className={'shrink-0 mr-1 inline-flex ' + (selected ? 'text-on-accent' : 'text-accent-fg')}>
                                         <MtlxIcon name="check" className="w-3.5 h-3.5" />
                                     </span>
                                 ) : null}
@@ -1441,26 +1440,26 @@
     const LightInfoRow = ({ label, raw, testId, children }) => (
         <div className="flex items-start justify-between gap-3 min-w-0 py-0.5">
             <span className="shrink-0 flex flex-col">
-                <span className="text-[11px] text-gray-400">{label}</span>
-                {raw ? <span className="text-[10px] font-mono text-gray-600">{raw}</span> : null}
+                <span className="text-[11px] text-fg-muted">{label}</span>
+                {raw ? <span className="text-[10px] font-mono text-fg-faint">{raw}</span> : null}
             </span>
-            <span data-testid={testId} className="min-w-0 text-right text-[11px] font-mono tabular-nums text-gray-200 break-words">{children}</span>
+            <span data-testid={testId} className="min-w-0 text-right text-[11px] font-mono tabular-nums text-fg-soft break-words">{children}</span>
         </div>
     );
     const LightInfoColor = ({ rgb }) => (
         <React.Fragment>
-            <span aria-hidden="true" className="inline-block w-3 h-3 mr-1.5 rounded-sm border border-gray-500 align-[-2px]" style={{ background: lightSwatch(rgb) }} />
+            <span aria-hidden="true" className="inline-block w-3 h-3 mr-1.5 rounded-sm border border-line-heavy align-[-2px]" style={{ background: lightSwatch(rgb) }} />
             {lightTriple(rgb)}
         </React.Fragment>
     );
 
     // One label/value pair of the Scene section's facts: two cells of the Info grid,
     // in the Statistics micro-label idiom.
-    const SCENE_ROW_LABEL = 'text-[10px] leading-4 font-semibold uppercase tracking-[0.08em] text-gray-500';
+    const SCENE_ROW_LABEL = 'text-[10px] leading-4 font-semibold uppercase tracking-[0.08em] text-fg-subtle';
     const SceneInfoRow = ({ label, testId, title, children }) => (
         <React.Fragment>
             <span className={SCENE_ROW_LABEL}>{label}</span>
-            <span data-testid={testId} title={title} className="min-w-0 truncate text-right text-[11px] leading-4 text-gray-300">{children}</span>
+            <span data-testid={testId} title={title} className="min-w-0 truncate text-right text-[11px] leading-4 text-fg-secondary">{children}</span>
         </React.Fragment>
     );
 
@@ -1474,191 +1473,76 @@
     const KNOWN_ISSUES_POPOVER_W = 260;
 
     // Named "quality" throughout, never "preset" alone: MTLX_PRESETS and
-    // MtlxPresetPicker already mean material presets app-wide.
-    // These reference the same top-level consts js/usd-scene-renderer.js
-    // declares (shared global scope, not window properties); the fallback
-    // only matters if that script somehow loads after this one.
-    const QUALITY_TEXTURE_MAX_SIZE_DEFAULT = (typeof SCENE_TEXTURE_MAX_SIZE_DEFAULT !== 'undefined')
-        ? SCENE_TEXTURE_MAX_SIZE_DEFAULT
-        : (typeof storedSceneTextureMaxSize === 'function' ? storedSceneTextureMaxSize() : 2048);
-    const QUALITY_TEXTURE_BUDGET_DEFAULT_GIB = (typeof SCENE_TEXTURE_BUDGET_DEFAULT_GIB !== 'undefined')
-        ? SCENE_TEXTURE_BUDGET_DEFAULT_GIB
-        : (typeof storedSceneTextureBudgetBytes === 'function' ? Math.round(storedSceneTextureBudgetBytes() / (1024 * 1024 * 1024)) : 1);
-    const QUALITY_SUBDIVISION_DEFAULT = (typeof SCENE_SUBDIVISION_DEFAULT !== 'undefined')
-        ? SCENE_SUBDIVISION_DEFAULT
-        : (typeof storedSceneSubdivisionLevel === 'function' ? storedSceneSubdivisionLevel() : 1);
-
-    // Excluded on purpose: backdrop and env rotation (look, not cost);
-    // heightToNormalTexel (engine-global, shared with other tools, no Scene
-    // UI); MSAA sample count and FXAA (renderer-only test hooks, no row).
-    // Same fallback idiom as the texture/subdivision consts above: read the
-    // renderer's own default consts when available so "Default" can never
-    // drift from what a fresh profile actually ships.
-    const QUALITY_DISPLACEMENT_SUBDIVISION_DEFAULT = (typeof SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT !== 'undefined')
-        ? SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT
-        : (typeof storedSceneDisplacementSubdivision === 'function' ? storedSceneDisplacementSubdivision() : 'follow');
-    const QUALITY_TRIANGLE_LIMITS_DEFAULT = (typeof SCENE_TRIANGLE_LIMITS_DEFAULT !== 'undefined')
-        ? SCENE_TRIANGLE_LIMITS_DEFAULT
-        : (typeof storedSceneTriangleLimits === 'function' ? storedSceneTriangleLimits() : true);
-    // Live-key defaults (apply instantly, no draft): same fallback idiom,
-    // reading the renderer's own *_DEFAULT consts added alongside them.
-    const QUALITY_DISPLAY_TRANSFORM_DEFAULT = (typeof SCENE_DISPLAY_TRANSFORM_DEFAULT !== 'undefined') ? SCENE_DISPLAY_TRANSFORM_DEFAULT : 'neutral';
-    const QUALITY_MATERIAL_WORKSPACE_DEFAULT = (typeof SCENE_MATERIAL_WORKSPACE_DEFAULT !== 'undefined') ? SCENE_MATERIAL_WORKSPACE_DEFAULT : 'rec709';
-    // No exported const for this one (js/mtlx-engine.js:5249, initDisplayExposure's own fallback); shared engine-wide, not Scene-only.
-    const QUALITY_DISPLAY_EXPOSURE_DEFAULT = 0;
-    const QUALITY_STAGE_LIGHTS_DEFAULT = (typeof SCENE_STAGE_LIGHTS_DEFAULT !== 'undefined') ? SCENE_STAGE_LIGHTS_DEFAULT : true;
-    const QUALITY_STAGE_LIGHTS_EV_DEFAULT = (typeof SCENE_STAGE_LIGHTS_EV_DEFAULT !== 'undefined') ? SCENE_STAGE_LIGHTS_EV_DEFAULT : 0;
-    const QUALITY_AO_STRENGTH_DEFAULT = (typeof SCENE_AO_STRENGTH_DEFAULT !== 'undefined') ? SCENE_AO_STRENGTH_DEFAULT : 0.85;
-    const QUALITY_BOUNCE_STRENGTH_DEFAULT = (typeof SCENE_BOUNCE_STRENGTH_DEFAULT !== 'undefined') ? SCENE_BOUNCE_STRENGTH_DEFAULT : 1;
-    const QUALITY_SKYVIS_STRENGTH_DEFAULT = (typeof SCENE_SKYVIS_STRENGTH_DEFAULT !== 'undefined') ? SCENE_SKYVIS_STRENGTH_DEFAULT : 1;
-    const QUALITY_LOCAL_ENV_STRENGTH_DEFAULT = (typeof SCENE_LOCAL_ENV_STRENGTH_DEFAULT !== 'undefined') ? SCENE_LOCAL_ENV_STRENGTH_DEFAULT : 1;
-    const QUALITY_SSR_DEFAULT = (typeof SCENE_SSR_DEFAULT !== 'undefined') ? SCENE_SSR_DEFAULT : false;
-    const QUALITY_SSR_STRENGTH_DEFAULT = (typeof SCENE_SSR_STRENGTH_DEFAULT !== 'undefined') ? SCENE_SSR_STRENGTH_DEFAULT : 1;
-    const QUALITY_SSR_MAX_ROUGHNESS_DEFAULT = (typeof SCENE_SSR_MAX_ROUGHNESS_DEFAULT !== 'undefined') ? SCENE_SSR_MAX_ROUGHNESS_DEFAULT : 0.5;
-    // No exported const (js/mtlx-engine.js:606, DIFFUSE_ENV_METHOD's own fallback is 'convolve'); shared engine-wide.
-    const QUALITY_DIFFUSE_ENV_CONVOLVE_DEFAULT = true;
-    // Matches the shipped React.useState default below verbatim (single
-    // source): HDR presentation is app-owned state, not a persisted const.
-    const SCENE_PRESENTATION_DEFAULT = { enabled: true, bloom: false, strength: 0.25, threshold: 1, knee: 0.5, radius: 0.65, antialias: true, samples: 4, debugView: 'final', supported: true };
-    const SCENE_QUALITY_STORAGE_KEY = 'mtlx_scene_quality';
-    // Live keys carry the SAME value on every level (today's shipped
-    // default): they stay instant, never staged, so a level never fights an
-    // in-progress drag; only Reset and the toolbar menu force them.
-    const LIVE_QUALITY_VALUES = {
-        displayTransform: QUALITY_DISPLAY_TRANSFORM_DEFAULT, materialWorkspace: QUALITY_MATERIAL_WORKSPACE_DEFAULT,
-        displayExposure: QUALITY_DISPLAY_EXPOSURE_DEFAULT, presentation: SCENE_PRESENTATION_DEFAULT,
-        stageLightsOn: QUALITY_STAGE_LIGHTS_DEFAULT, stageLightsEv: QUALITY_STAGE_LIGHTS_EV_DEFAULT,
-        aoStrength: QUALITY_AO_STRENGTH_DEFAULT, bounceStrength: QUALITY_BOUNCE_STRENGTH_DEFAULT,
-        skyVisStrength: QUALITY_SKYVIS_STRENGTH_DEFAULT, localEnvStrength: QUALITY_LOCAL_ENV_STRENGTH_DEFAULT,
-        ssrOn: QUALITY_SSR_DEFAULT, ssrStrength: QUALITY_SSR_STRENGTH_DEFAULT, ssrMaxRoughness: QUALITY_SSR_MAX_ROUGHNESS_DEFAULT,
-        diffuseEnvConvolve: QUALITY_DIFFUSE_ENV_CONVOLVE_DEFAULT,
+    // MtlxPresetPicker already mean material presets app-wide. Levels and
+    // defaults come from the manifest (js/shared/render-settings.js, stage
+    // profile); nothing here keeps its own copy.
+    const sceneStageRow = (key) => window.MtlxRenderSettings.ROWS.find((entry) => entry.key === key);
+    const sceneLevelValue = (key, level) => {
+        const levels = sceneStageRow(key).profiles.stage.levels;
+        return levels[level] !== undefined ? levels[level] : levels.default;
     };
-    const LIVE_QUALITY_KEYS = Object.keys(LIVE_QUALITY_VALUES);
-    const SCENE_QUALITY_LEVELS = [
-        {
-            id: 'performance', label: 'Performance', icon: 'bolt',
-            title: 'Lowest settings, fastest loading and drawing',
-            values: {
-                textureMaxSize: 512, textureBudgetGib: 1, subdivision: 0,
-                shadows: false, ao: false, skyVis: false, transparency: false,
-                displacement: false, displacementSubdivision: QUALITY_DISPLACEMENT_SUBDIVISION_DEFAULT,
-                triangleLimits: true, bounce: false, localReflections: false, specularAA: false,
-                ...LIVE_QUALITY_VALUES,
-            },
-        },
-        {
-            id: 'default', label: 'Default', icon: 'restore',
-            title: 'Balanced quality and speed',
-            values: {
-                textureMaxSize: QUALITY_TEXTURE_MAX_SIZE_DEFAULT, textureBudgetGib: QUALITY_TEXTURE_BUDGET_DEFAULT_GIB, subdivision: QUALITY_SUBDIVISION_DEFAULT,
-                // Sky visibility, AO and shadows off by default (2026-09-22):
-                // matches storedSceneShadows/Ao/SkyVis in usd-scene-renderer.js.
-                shadows: false, ao: false, skyVis: false, transparency: true,
-                displacement: true, displacementSubdivision: QUALITY_DISPLACEMENT_SUBDIVISION_DEFAULT,
-                triangleLimits: QUALITY_TRIANGLE_LIMITS_DEFAULT, bounce: true, localReflections: false, specularAA: true,
-                ...LIVE_QUALITY_VALUES,
-            },
-        },
-        {
-            id: 'quality', label: 'Quality', icon: 'sparkles',
-            title: 'Highest settings, slowest loading and drawing',
-            values: {
-                textureMaxSize: 4096, textureBudgetGib: 4, subdivision: 2,
-                shadows: true, ao: true, skyVis: true, transparency: true,
-                displacement: true, displacementSubdivision: 3,
-                triangleLimits: false, bounce: true, localReflections: true, specularAA: true,
-                ...LIVE_QUALITY_VALUES,
-            },
-        },
+    const sceneStored = (key) => window.MtlxRenderSettings.get(key, { profile: 'stage' });
+    const sceneWrite = (key, value) => window.MtlxRenderSettings.set(key, value, { surface: 'scene' });
+    const scenePresentationAt = (level) => ({
+        enabled: sceneLevelValue('hdrPresentation', level), bloom: sceneLevelValue('bloom', level), strength: sceneLevelValue('bloomStrength', level),
+        threshold: sceneLevelValue('bloomThreshold', level), knee: sceneLevelValue('bloomKnee', level), radius: sceneLevelValue('bloomRadius', level),
+        antialias: sceneLevelValue('postAntialias', level), samples: sceneLevelValue('msaaSamples', level),
+        debugView: sceneLevelValue('hdrView', level), supported: true,
+    });
+    // HDR presentation is app-owned state (debugView and supported are not stored).
+    const SCENE_PRESENTATION_DEFAULT = scenePresentationAt('default');
+    // Excluded on purpose: backdrop and env rotation (look, not cost);
+    // heightToNormalTexel (engine-global, no Scene UI); MSAA and FXAA
+    // (renderer-only test hooks, no row).
+    const SCENE_GOVERNED_ROW_KEYS = [
+        'textureMaxSize', 'textureBudgetGib', 'subdivision', 'shadows', 'ao', 'skyVis', 'transparency',
+        'displacement', 'displacementSubdivision', 'triangleLimits', 'bounce', 'localReflections', 'specularAA',
     ];
-
-    // Render-settings popover row shells, hoisted to module scope (not
-    // declared inside SceneViewerApp) so their component TYPE stays the
-    // same across every render. A component declared inside a render body
-    // is a brand-new function every time, so React unmounts and remounts
-    // every instance on each re-render — which dropped a slider's pointer
-    // capture mid-drag and remounted the MtlxSelect rows (flicker) on every
-    // keystroke. See js/usd-scene-app.jsx's SceneRowCtx.Provider (wraps
-    // SceneViewerApp's return) for the per-render values these still need.
-    const SceneRowCtx = React.createContext({ rowDirtyFor: () => false, draftDiff: {}, hasStage: true });
-    const EXP_BADGE = <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>;
-    const DirtyDot = ({ show }) => (show ? <span title="Differs from the selected quality level" className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" /> : null);
+    // Live keys carry the SAME value on every level: they stay instant,
+    // never staged, so a level never fights an in-progress drag; only Reset
+    // and the toolbar menu force them.
+    const SCENE_LIVE_ROW_KEYS = [
+        'displayTransform', 'materialWorkspace', 'displayExposure', 'stageLightsOn', 'stageLightsEv', 'aoStrength',
+        'bounceStrength', 'skyVisStrength', 'localEnvStrength', 'ssrOn', 'ssrStrength', 'ssrMaxRoughness',
+    ];
+    const sceneLevelValues = (level) => {
+        const values = {};
+        SCENE_GOVERNED_ROW_KEYS.concat(SCENE_LIVE_ROW_KEYS).forEach((key) => { values[key] = sceneLevelValue(key, level); });
+        values.presentation = scenePresentationAt(level);
+        values.diffuseEnvConvolve = sceneLevelValue('diffuseEnv', level) === 'convolve';
+        return values;
+    };
+    const LIVE_QUALITY_KEYS = SCENE_LIVE_ROW_KEYS.concat(['presentation', 'diffuseEnvConvolve']);
+    const SCENE_QUALITY_LEVELS = [
+        { id: 'performance', label: 'Performance', icon: 'bolt', title: 'Lowest settings, fastest loading and drawing' },
+        { id: 'default', label: 'Default', icon: 'restore', title: 'Balanced quality and speed' },
+        { id: 'quality', label: 'Quality', icon: 'sparkles', title: 'Highest settings, slowest loading and drawing' },
+    ].map((level) => Object.assign(level, { values: sceneLevelValues(level.id) }));
+    // Cost kinds come from the renderer's own key lists, so they cannot drift.
     const settingsCostKind = (key) => {
         if ((typeof SCENE_SETTINGS_RELOAD_KEYS !== 'undefined' ? SCENE_SETTINGS_RELOAD_KEYS : []).includes(key)) return 'reload';
         if ((typeof SCENE_SETTINGS_REBUILD_KEYS !== 'undefined' ? SCENE_SETTINGS_REBUILD_KEYS : []).includes(key)) return 'rebuild';
         if ((typeof SCENE_SETTINGS_GEOMETRY_KEYS !== 'undefined' ? SCENE_SETTINGS_GEOMETRY_KEYS : []).includes(key)) return 'geometry';
         return null;
     };
-    const COST_KIND_ICON = { reload: 'refresh', rebuild: 'code', geometry: 'cube' };
-    const COST_KIND_TITLE = {
-        reload: 'Changing this reloads the stage', rebuild: 'Changing this recompiles materials', geometry: 'Changing this rebuilds geometry',
-    };
-    // settingKey drives DirtyDot (amber, differs from the level) and
-    // CostBadge (reload/rebuild/geometry, tinted if pending) via context.
-    const CostBadge = ({ settingKey }) => {
-        const { draftDiff, hasStage } = React.useContext(SceneRowCtx);
-        const kind = settingKey ? settingsCostKind(settingKey) : null;
-        if (!kind) return null;
-        // Muted with no scene loaded: Apply will only persist the value,
-        // never actually pay this cost, see applyQualityDraft.
-        const pending = hasStage && settingKey in draftDiff;
-        return (
-            <span title={COST_KIND_TITLE[kind]} className={'inline-flex ' + (pending ? 'text-amber-400' : 'text-gray-500')}>
-                <MtlxIcon name={COST_KIND_ICON[kind]} className="w-3 h-3" />
-            </span>
-        );
-    };
-    const ToggleRow = ({ label, experimental, checked, onChange, disabled, title, description, dirty, settingKey }) => {
-        const { rowDirtyFor } = React.useContext(SceneRowCtx);
-        return (
-            <div className="py-2 border-b border-gray-700/60 last:border-b-0">
-                <label className="flex items-center justify-between gap-2 cursor-pointer" title={title}>
-                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-300">
-                        <DirtyDot show={rowDirtyFor(settingKey, dirty)} /><span>{label}</span>{experimental ? EXP_BADGE : null}<CostBadge settingKey={settingKey} />
-                    </span>
-                    <Toggle checked={checked} onChange={onChange} disabled={disabled} />
-                </label>
-                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
-            </div>
-        );
-    };
-    const SelectRow = ({ label, experimental, control, description, title, dirty, settingKey }) => {
-        const { rowDirtyFor } = React.useContext(SceneRowCtx);
-        return (
-            <div className="py-2 border-b border-gray-700/60 last:border-b-0" title={title}>
-                <div className="flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-300">
-                        <DirtyDot show={rowDirtyFor(settingKey, dirty)} /><span>{label}</span>{experimental ? EXP_BADGE : null}<CostBadge settingKey={settingKey} />
-                    </span>
-                    {control}
-                </div>
-                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
-            </div>
-        );
-    };
-    const SliderRow = ({ children, description, dirty, settingKey }) => {
-        const { rowDirtyFor } = React.useContext(SceneRowCtx);
-        return (
-            <div className="py-2 border-b border-gray-700/60 last:border-b-0">
-                {rowDirtyFor(settingKey, dirty) ? <div className="flex items-center gap-1.5 mb-1"><DirtyDot show /><span className="text-[10px] text-amber-300/80">Differs from the selected quality level</span></div> : null}
-                {children}
-                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
-            </div>
-        );
+    // Rows whose quality-model key (levels, dirty dots) is not the row key.
+    const SCENE_QUALITY_KEY_OF = { hdrPresentation: 'presentation', diffuseEnv: 'diffuseEnvConvolve' };
+    const SCENE_PRESENTATION_FIELD_OF = {
+        bloom: 'bloom', bloomStrength: 'strength', bloomThreshold: 'threshold', bloomKnee: 'knee', bloomRadius: 'radius', hdrView: 'debugView',
     };
     // Three-way quality control used by the Render settings popover.
     // Kept local rather than moved into js/shared/mtlx-ui.jsx, which
     // feeds the embed bundle where Tailwind utilities silently no-op.
     const QUALITY_SEGMENT_TONES = {
         hud: {
-            wrap: 'inline-flex rounded-lg border border-gray-600/50 overflow-hidden',
-            idle: 'bg-gray-900/70 backdrop-blur text-gray-300 hover:bg-gray-700 hover:text-gray-100',
-            active: 'bg-blue-600/80 text-white border-blue-500',
+            wrap: 'inline-flex rounded-lg border border-hud-line/50 overflow-hidden',
+            idle: 'bg-hud/70 backdrop-blur text-hud-fg hover:bg-hud-hover hover:text-hud-fg-strong',
+            active: 'mtlx-fill-accent-translucent text-on-accent border-accent-base',
         },
         panel: {
-            wrap: 'flex flex-1 rounded-lg border border-gray-600/50 overflow-hidden',
-            idle: 'bg-gray-800/80 text-gray-300 hover:bg-gray-700/80',
-            active: 'bg-blue-500/[0.12] text-blue-300',
+            wrap: 'flex flex-1 rounded-lg border border-line-strong/50 overflow-hidden',
+            idle: 'bg-control/80 text-fg-secondary hover:bg-hover/80',
+            active: 'bg-selection/20 text-accent-fg-strong',
         },
     };
     const QualitySegments = ({ value, onChange, disabled, tone }) => {
@@ -1685,7 +1569,7 @@
                             className={'h-7 px-2.5 flex items-center gap-1 text-[11px] font-medium whitespace-nowrap transition-colors '
                                 + 'first:rounded-l-[7px] last:rounded-r-[7px] disabled:opacity-60 disabled:cursor-not-allowed '
                                 + (tone === 'panel' ? 'flex-1 justify-center ' : '')
-                                + (i > 0 ? 'border-l border-gray-600/50 ' : '')
+                                + (i > 0 ? (tone === 'panel' ? 'border-l border-line-strong/50 ' : 'border-l border-hud-line/50 ') : '')
                                 + (active ? cls.active : cls.idle)}
                         >
                             {level.icon && <MtlxIcon name={level.icon} className="w-3.5 h-3.5 flex-none" />}
@@ -1706,7 +1590,7 @@
     ];
     const SceneTreeGroupSegments = ({ value, onChange }) => {
         return (
-            <div role="group" aria-label="Show in hierarchy" data-testid="usd-scene-tree-group" className="flex w-full border-t border-gray-700">
+            <div role="group" aria-label="Show in hierarchy" data-testid="usd-scene-tree-group" className="flex w-full border-t border-line">
                 {SCENE_TREE_GROUP_OPTIONS.map(([id, label, title], i) => {
                     const active = value === id;
                     return (
@@ -1719,8 +1603,8 @@
                             title={title}
                             onClick={() => onChange(id)}
                             className={'h-6 min-w-0 flex-1 px-1 flex items-center justify-center text-[11px] font-medium transition-colors '
-                                + (i > 0 ? 'border-l border-gray-700 ' : '')
-                                + (active ? 'bg-blue-500/[0.12] text-blue-300' : 'bg-transparent text-gray-400 hover:bg-gray-800 hover:text-gray-200')}
+                                + (i > 0 ? 'border-l border-line ' : '')
+                                + (active ? 'bg-selection/20 text-accent-fg-strong' : 'bg-transparent text-fg-muted hover:bg-hover-subtle hover:text-fg-soft')}
                         >
                             <span className="truncate">{label}</span>
                         </button>
@@ -1736,9 +1620,9 @@
     // Title row of a flat sidebar section, in the Statistics header idiom.
     const SidebarSectionHeader = ({ icon, title, summary, testId }) => (
         <div data-testid={testId} className="flex items-center gap-2 min-w-0">
-            <MtlxIcon name={icon} className="w-4 h-4 text-gray-400 shrink-0" />
-            <span className="text-[13px] font-semibold text-gray-200 shrink-0">{title}</span>
-            {summary ? <span className="flex-1 min-w-0 text-right text-xs text-gray-500 truncate" title={summary}>{summary}</span> : null}
+            <MtlxIcon name={icon} className="w-4 h-4 text-fg-muted shrink-0" />
+            <span className="text-[13px] font-semibold text-fg shrink-0">{title}</span>
+            {summary ? <span className="flex-1 min-w-0 text-right text-xs text-fg-subtle truncate" title={summary}>{summary}</span> : null}
         </div>
     );
     // Slim viewport indicator for material/texture/geometry rebuilds after a
@@ -1782,15 +1666,15 @@
                 <div data-testid="usd-scene-rebuild-bar" role="progressbar" aria-label={text}
                     aria-valuemin="0" aria-valuemax="100" aria-valuenow={determinate ? Math.round(fraction * 100) : undefined}
                     className="absolute top-0 left-0 right-0 z-30 pointer-events-none overflow-hidden"
-                    style={{ height: 2, background: 'rgba(59,130,246,0.18)' }}>
+                    style={{ height: 2, background: 'rgb(var(--mtlx-accent-wash) / calc(46 / 255))' }}>
                     {determinate
-                        ? <div className="h-full bg-blue-400 transition-all duration-200" style={{ width: (fraction * 100) + '%' }} />
+                        ? <div className="h-full bg-progress transition-all duration-200" style={{ width: (fraction * 100) + '%' }} />
                         : <div className="mtlx-loading-bar" style={{ height: 2, borderRadius: 0, background: 'transparent' }} />}
                 </div>
                 <div data-testid="usd-scene-rebuild-indicator" data-kind={view.kind} data-done={view.done} data-total={view.total}
                     aria-live="polite"
                     className="absolute bottom-2 right-2 z-10 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0 animate-pulse" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-progress shrink-0 animate-pulse" />
                     <span className="whitespace-nowrap tabular-nums">{text}</span>
                 </div>
             </React.Fragment>
@@ -1966,80 +1850,59 @@
         const [backdrop, setBackdrop] = React.useState('studio');
         const [textureSizeTick, setTextureSizeTick] = React.useState(0);
         const [subdivisionLevel, setSubdivisionLevel] = React.useState(
-            () => (typeof storedSceneSubdivisionLevel === 'function' ? storedSceneSubdivisionLevel() : 0)
+            () => sceneStored('subdivision')
         );
         const subdivisionLevelRef = React.useRef(subdivisionLevel);
         subdivisionLevelRef.current = subdivisionLevel;
         const [triangleLimits, setTriangleLimitsState] = React.useState(
-            () => (typeof storedSceneTriangleLimits === 'function' ? storedSceneTriangleLimits() : true)
+            () => !!sceneStored('triangleLimits')
         );
         const triangleLimitsRef = React.useRef(triangleLimits);
         triangleLimitsRef.current = triangleLimits;
-        const [displacementEnabled, setDisplacementEnabledState] = React.useState(
-            () => !!(window.getDisplacementEnabled && window.getDisplacementEnabled())
-        );
+        const [displacementEnabled, setDisplacementEnabledState] = React.useState(() => !!sceneStored('displacement'));
         const [displacementSubdivisionOverride, setDisplacementSubdivisionOverrideState] = React.useState(
-            () => (typeof storedSceneDisplacementSubdivision === 'function' ? storedSceneDisplacementSubdivision() : 'follow')
+            () => sceneStored('displacementSubdivision')
         );
         const displacementSubdivisionRef = React.useRef(displacementSubdivisionOverride);
         displacementSubdivisionRef.current = displacementSubdivisionOverride;
-        React.useEffect(() => {
-            const onSettingsChanged = (e) => {
-                if (e.detail && e.detail.key === 'displacement') setDisplacementEnabledState(!!e.detail.value);
-            };
-            window.addEventListener('mtlx-settings-changed', onSettingsChanged);
-            return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
-        }, []);
-        // The Scene keeps its own view transform (the Material Viewer stays on
-        // sRGB for MaterialXView parity); exposure is shared with the other tools.
-        const [displayTransform, setDisplayTransformState] = React.useState('neutral');
+        // The Scene keeps its own view transform and exposure (the Material
+        // Viewer stays on sRGB for MaterialXView parity).
+        const [displayTransform, setDisplayTransformState] = React.useState(() => sceneStored('displayTransform'));
         // Karma reads untagged colour constants and displayColor as ACEScg;
         // this viewer treats the same numbers as linear Rec.709. Scene-only,
         // recompiles every material when toggled (see setSceneMaterialWorkspace).
-        const [materialWorkspace, setMaterialWorkspaceState] = React.useState('rec709');
+        const [materialWorkspace, setMaterialWorkspaceState] = React.useState(() => sceneStored('materialWorkspace'));
         // Widens the anisotropic specular alpha by screen-space normal/roughness
         // variance to stop procedural-roughness fireflies (see patchSpecularAA in
         // mtlx-engine.js). Scene-only, recompiles every material when toggled
         // (see setSceneSpecularAA); default on.
-        const [specularAAOn, setSpecularAAOn] = React.useState(true);
-        const [displayExposure, setDisplayExposureState] = React.useState(
-            () => (window.getDisplayExposure ? window.getDisplayExposure() : 0)
-        );
+        const [specularAAOn, setSpecularAAOn] = React.useState(() => !!sceneStored('specularAA'));
+        const [displayExposure, setDisplayExposureState] = React.useState(() => sceneStored('displayExposure'));
         // Analytic lights imported from the stage. Count comes from the
         // handle once a stage is loaded; the two controls are live.
         // Diagnostic groups: errors and warnings open, info and the source
         // list collapsed, since those are the long ones.
         const [diagOpen, setDiagOpen] = React.useState({ error: true, warning: true, info: false, materials: false });
         const [stageLightInfo, setStageLightInfo] = React.useState({ count: 0, enabled: true, ev: 0 });
-        const [stageLightsOn, setStageLightsOn] = React.useState(true);
-        const [stageLightsEv, setStageLightsEv] = React.useState(0);
+        const [stageLightsOn, setStageLightsOn] = React.useState(() => !!sceneStored('stageLightsOn'));
+        const [stageLightsEv, setStageLightsEv] = React.useState(() => sceneStored('stageLightsEv'));
         const [presentation, setPresentation] = React.useState(SCENE_PRESENTATION_DEFAULT);
-        // Off by default (2026-09-22): matches storedSceneShadows and the
-        // "default" quality level's shadows value below.
-        const [shadowsOn, setShadowsOn] = React.useState(false);
-        // Off by default (2026-09-22): matches storedSceneAo and the
-        // "default" quality level's ao value below.
-        const [aoOn, setAoOn] = React.useState(false);
-        const [aoStrength, setAoStrength] = React.useState(0.85);
-        // Default on (v3, 2026-09-20): see storedSceneBounce in
-        // js/usd-scene-renderer.js. Strength default must track
-        // QUALITY_BOUNCE_STRENGTH_DEFAULT or a fresh profile opens with a
-        // stray dot and Reset already enabled.
-        const [bounceOn, setBounceOn] = React.useState(true);
-        const [bounceStrength, setBounceStrength] = React.useState(QUALITY_BOUNCE_STRENGTH_DEFAULT);
+        const [shadowsOn, setShadowsOn] = React.useState(() => !!sceneStored('shadows'));
+        const [aoOn, setAoOn] = React.useState(() => !!sceneStored('ao'));
+        const [aoStrength, setAoStrength] = React.useState(() => sceneStored('aoStrength'));
+        const [bounceOn, setBounceOn] = React.useState(() => !!sceneStored('bounce'));
+        const [bounceStrength, setBounceStrength] = React.useState(() => sceneStored('bounceStrength'));
         // Screen-space reflections are parked: rows hidden, state and handlers kept.
         const SSR_ROWS_HIDDEN = true;
-        const [ssrOn, setSsrOn] = React.useState(false);
-        const [ssrStrength, setSsrStrength] = React.useState(1);
-        const [ssrMaxRoughness, setSsrMaxRoughness] = React.useState(0.5);
-        // Off by default (2026-09-22): matches storedSceneSkyVis and the
-        // "default" quality level's skyVis value below.
-        const [skyVisOn, setSkyVisOn] = React.useState(false);
-        const [skyVisStrength, setSkyVisStrength] = React.useState(1);
-        // Local reflections: off by default (storedSceneLocalReflections in
-        // js/usd-scene-renderer.js), never on in an embed.
-        const [localEnvOn, setLocalEnvOn] = React.useState(false);
-        const [localEnvStrength, setLocalEnvStrength] = React.useState(1);
+        const [ssrOn, setSsrOn] = React.useState(() => !!sceneStored('ssrOn'));
+        const [ssrStrength, setSsrStrength] = React.useState(() => sceneStored('ssrStrength'));
+        const [ssrMaxRoughness, setSsrMaxRoughness] = React.useState(() => sceneStored('ssrMaxRoughness'));
+        const [skyVisOn, setSkyVisOn] = React.useState(() => !!sceneStored('skyVis'));
+        const [skyVisStrength, setSkyVisStrength] = React.useState(() => sceneStored('skyVisStrength'));
+        const [localEnvOn, setLocalEnvOn] = React.useState(() => !!sceneStored('localReflections'));
+        const [localEnvStrength, setLocalEnvStrength] = React.useState(() => sceneStored('localEnvStrength'));
+        // Live, not staged: the renderer's texture session follows the store.
+        const [textureAnisotropy, setTextureAnisotropyState] = React.useState(() => sceneStored('textureAnisotropy'));
         // Render settings popover: replaces the old sidebar Rendering card.
         // Tab is persisted so a reopen lands where the user left it.
         const RENDER_TAB_KEY = 'mtlx_scene_render_settings_tab';
@@ -2153,10 +2016,6 @@
             window.addEventListener('pointerdown', onDown);
             return () => window.removeEventListener('pointerdown', onDown);
         }, [diagnosticsOpen]);
-        // Mirrors the boolean keys js/usd-scene-renderer.js reads at creation
-        // (storedSceneAo etc.) so a toggle flipped before load is honored by
-        // the next renderer instance without editing that file.
-        const writeStoredSceneBool = (key, enabled) => { try { localStorage.setItem(key, enabled ? '1' : '0'); } catch (e) {} };
         const [transparentPrims, setTransparentPrims] = React.useState([]);
         // Scene owns its transparency preference. It intentionally does not
         // mirror the shared Viewer Force Transparency setting: Scene defaults
@@ -2183,18 +2042,7 @@
         // GPU-convolved diffuse irradiance vs. the SH l<=2 fit (js/mtlx-engine.js
         // DIFFUSE_ENV_METHOD). Not generation-affecting: flipping it only
         // rebinds a sampler through applyMaterialEnvironment, no recompile.
-        const [diffuseEnvConvolve, setDiffuseEnvConvolveState] = React.useState(
-            () => (typeof window.getDiffuseEnvMethod === 'function' ? window.getDiffuseEnvMethod() !== 'sh' : true)
-        );
-        React.useEffect(() => {
-            const onSettingsChanged = (e) => {
-                const detail = e && e.detail;
-                if (!detail || detail.key !== 'diffuseEnvMethod') return;
-                setDiffuseEnvConvolveState(detail.value !== 'sh');
-            };
-            window.addEventListener('mtlx-settings-changed', onSettingsChanged);
-            return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
-        }, []);
+        const [diffuseEnvConvolve, setDiffuseEnvConvolveState] = React.useState(() => sceneStored('diffuseEnv') !== 'sh');
         const envSettingsRef = React.useRef({ rotation: 0, exposureLinear: 1, backdrop: 'studio', autoRotate: false });
         const [recordOpen, setRecordOpen] = React.useState(false);
         const envOverrideRef = React.useRef(null);
@@ -2235,6 +2083,8 @@
         const mountedRef = React.useRef(true);
         const filesRef = React.useRef(files);
         const handleRef = React.useRef(null);
+        // The live stage canvas, for WebGL context-loss recovery below.
+        const sceneCanvasRef = React.useRef(null);
         const generationRef = React.useRef(0);
         // Compact HUD: below ~720px the left pills (Render settings,
         // Environment settings, both with labels) and the right
@@ -2293,13 +2143,6 @@
             }
         }, [narrow]);
 
-        React.useEffect(() => {
-            const onDisplayExposure = () => {
-                if (window.getDisplayExposure) setDisplayExposureState(window.getDisplayExposure());
-            };
-            window.addEventListener('mtlx-display-exposure', onDisplayExposure);
-            return () => window.removeEventListener('mtlx-display-exposure', onDisplayExposure);
-        }, []);
         const pickDisplayTransform = (mode) => {
             setDisplayTransformState(mode);
             callHandle('setSceneDisplayTransform', mode);
@@ -2312,7 +2155,8 @@
             const value = Math.max(-8, Math.min(8, Number(raw)));
             if (!Number.isFinite(value)) return;
             setDisplayExposureState(value);
-            if (window.setDisplayExposure) window.setDisplayExposure(value);
+            sceneWrite('displayExposure', value);
+            callHandle('refreshDisplaySettings');
         };
 
         const applyChosenFiles = async (next, generation) => {
@@ -2524,6 +2368,7 @@
                     nextHandle.__sceneStage = stage;
                     adopted = true;
                     handleRef.current = nextHandle;
+                    sceneCanvasRef.current = nextHandle.renderer ? nextHandle.renderer.domElement : null;
                     window.__mtlxUsdSceneHandle = nextHandle; // test and console access to the live scene handle.
                     const settings = envSettingsRef.current;
                     // A stage that ships a dome light has already seeded the
@@ -2586,7 +2431,7 @@
                     }
                     callHandle('setBackdrop', settings.backdrop);
                     callHandle('setAutoRotate', settings.autoRotate);
-                    if (currentEnvironmentRef.current && !useDome) callHandle('setEnvironment', currentEnvironmentRef.current);
+                    if (currentEnvironmentRef.current && !useDome) callHandle('setEnvironment', currentEnvironmentRef.current, { user: true });
                     setHandle(nextHandle); setStatus('rendered');
                     // VS Code: textures and layers still missing once rendered go
                     // to the host; if it finds any, a bigger set reloads the scene.
@@ -2904,25 +2749,25 @@
                 }
             };
             return (
-                <div className="border-t border-gray-700/70 first:border-t-0">
-                    <div className="w-full flex items-center gap-1.5 py-1.5 px-1 -mx-1 rounded hover:bg-gray-800/60">
+                <div className="border-t border-line/60 first:border-t-0">
+                    <div className="w-full flex items-center gap-1.5 py-1.5 px-1 -mx-1 rounded hover:bg-hover-subtle/60">
                         <button
                             type="button"
                             onClick={() => setDiagOpen((prev) => ({ ...prev, [id]: !prev[id] }))}
                             aria-expanded={open}
                             className="flex-1 min-w-0 flex items-center gap-1.5 text-left"
                         >
-                            <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 shrink-0 text-gray-500" />
+                            <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 shrink-0 text-fg-subtle" />
                             <MtlxIcon name={icon} className={'w-3.5 h-3.5 shrink-0 ' + tone} />
                             <span className={'text-[10px] font-semibold uppercase tracking-[0.08em] ' + tone}>{label}</span>
-                            <span className="ml-auto text-[10px] font-mono tabular-nums text-gray-400 bg-gray-800 border border-gray-700 rounded-full px-1.5 py-0.5">{lines.length}</span>
+                            <span className="ml-auto text-[10px] font-mono tabular-nums text-fg-muted bg-surface-raised border border-line rounded-full px-1.5 py-0.5">{lines.length}</span>
                         </button>
                         <button
                             type="button"
                             onClick={copy}
                             title={'Copy all ' + lines.length + ' line(s)'}
                             aria-label={'Copy ' + label}
-                            className="shrink-0 p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                            className="shrink-0 p-1 rounded text-fg-subtle hover:text-fg-soft hover:bg-hover"
                         >
                             <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
                         </button>
@@ -2944,7 +2789,7 @@
                     <button type="button" data-testid="usd-scene-warning-setting-link"
                         onClick={() => { setDiagnosticsOpen(false); setRenderTab(link.tab); setRenderSettingsOpen(true); }}
                         title="Open this setting"
-                        className="underline decoration-dotted underline-offset-2 hover:text-amber-100 text-left break-all">
+                        className="underline decoration-dotted underline-offset-2 hover:text-warning-text-strong text-left break-all">
                         {link.text}
                     </button>
                     {label.slice(at + link.text.length)}
@@ -2958,9 +2803,9 @@
                 Object.assign({}, record, { label: stripTag(record.label), raw: stripTag(record.raw) }));
         });
         const SEVERITY_STYLE = {
-            error: { icon: 'alert-triangle', text: 'text-red-300/90', label: 'Errors' },
-            warning: { icon: 'alert-triangle', text: 'text-amber-300/90', label: 'Warnings' },
-            info: { icon: 'info-circle', text: 'text-gray-400', label: 'Info' },
+            error: { icon: 'alert-triangle', text: 'text-error-text/90', label: 'Errors' },
+            warning: { icon: 'alert-triangle', text: 'text-warning/90', label: 'Warnings' },
+            info: { icon: 'info-circle', text: 'text-fg-muted', label: 'Info' },
         };
         // SliderField reports the raw input string through onSlider/onNumber
         // (it has no onChange), so every slider coerces and clamps here.
@@ -3038,11 +2883,11 @@
             try {
                 const env = await loader(file.data || file);
                 if (!mountedRef.current || generation !== environmentGenerationRef.current) { disposeUnusedEnvironment(env); return; }
-                // setEnvOverride now broadcasts to every LIVE_VIEWS member
-                // (the Scene handle joined that registry at creation), so
-                // the manual callHandle('setEnvironment', env) this used to
-                // need right after is redundant.
+                // setEnvOverride broadcasts to every LIVE_VIEWS member, but an
+                // active stage dome ignores broadcasts, so this Scene's own
+                // import replaces it explicitly.
                 if (apiFunction('setEnvOverride')) apiFunction('setEnvOverride')(env);
+                if (domeRotationActiveRef.current) callHandle('setEnvironment', env, { user: true });
                 envOverrideRef.current = env;
                 currentEnvironmentRef.current = env;
                 domeRotationActiveRef.current = false;
@@ -3057,7 +2902,7 @@
             const reset = apiFunction('setEnvOverride');
             if (reset) reset(null);
             const getter = apiFunction('getEnvironment');
-            if (getter) { try { const env = await getter(); if (mountedRef.current && generation === environmentGenerationRef.current) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env); } } catch (e) {} }
+            if (getter) { try { const env = await getter(); if (mountedRef.current && generation === environmentGenerationRef.current) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env, { user: true }); } } catch (e) {} }
             if (mountedRef.current && generation === environmentGenerationRef.current) setEnvFileName('');
         };
         const resetEnvironment = async () => {
@@ -3084,7 +2929,7 @@
                 return;
             }
             domeRotationActiveRef.current = false;
-            if (env) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env); }
+            if (env) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env, { user: true }); }
             setEnvFileName(''); setEnvRotation(0); setEnvExposureLinear(1); callHandle('setEnvRotation', 0); callHandle('setEnvExposure', 1);
         };
         // The slider always displays and edits the authored degrees (matching
@@ -3124,6 +2969,18 @@
             if (IN_VSCODE) { reloadFromHost(); return; }
             if (filesRef.current && filesRef.current.length && rootPath) load(filesRef.current, rootPath);
         };
+        // WebGL context recovery: a restore re-inits GL state but not render
+        // targets or programs, so the stage view rebuilds through Reload.
+        const [sceneGlEpoch] = useRenderContextRecovery({
+            groups: [[sceneCanvasRef]],
+            isHidden: () => !containerRef.current || containerRef.current.getClientRects().length === 0,
+            onLost: () => setError(RENDER_CONTEXT_LOST_MESSAGE),
+        });
+        React.useEffect(() => {
+            if (!sceneGlEpoch) return;
+            setError('');
+            reloadScene();
+        }, [sceneGlEpoch]);
         const frameAll = () => { if (handle && handle.frameAll) { handle.frameAll(); if (handle.renderNow) handle.renderNow(); } };
         const selectCamera = (value) => {
             setSelectedCamera(value);
@@ -3171,10 +3028,10 @@
         };
         const textureMaxSize = (handle && typeof handle.getTextureMaxSize === 'function')
             ? handle.getTextureMaxSize()
-            : (typeof storedSceneTextureMaxSize === 'function' ? storedSceneTextureMaxSize() : 2048);
+            : sceneStored('textureMaxSize');
         const textureBudgetGib = (handle && typeof handle.getTextureBudgetBytes === 'function')
             ? Math.round(handle.getTextureBudgetBytes() / (1024 * 1024 * 1024))
-            : Math.round((typeof storedSceneTextureBudgetBytes === 'function' ? storedSceneTextureBudgetBytes() : (1024 * 1024 * 1024)) / (1024 * 1024 * 1024));
+            : sceneStored('textureBudgetGib');
         // Referenced so the memo below re-reads getTextureMaxSize() after a
         // mutation that doesn't otherwise touch React state.
         void textureSizeTick;
@@ -3212,8 +3069,7 @@
         // overrides are every governed key (staged or live) that no longer
         // matches it.
         const selectedQualityId = (() => {
-            let stored = null;
-            try { stored = localStorage.getItem(SCENE_QUALITY_STORAGE_KEY); } catch (e) { /* privacy mode */ }
+            const stored = window.MtlxRenderSettings.getStoredLevel('scene');
             if (SCENE_QUALITY_LEVELS.some((entry) => entry.id === stored)) return stored;
             const inferred = SCENE_QUALITY_LEVELS.find((level) =>
                 QUALITY_GOVERNED_KEYS.every((key) => currentQualityValues[key] === level.values[key])
@@ -3242,29 +3098,23 @@
         // Shared with restoreLiveSnapshot and forceLiveValue: the three live
         // toggles whose onChange body is more than one call, factored once
         // instead of copied at each of their three call sites.
-        const setStageLightsOnValue = (next) => { setStageLightsOn(next); callHandle('setStageLightsEnabled', next); writeStoredSceneBool('mtlx_scene_stage_lights', next); };
-        const setSsrOnValue = (next) => { setSsrOn(next); callHandle('setScreenSpaceReflections', next); writeStoredSceneBool('mtlx_scene_ssr', next); };
+        const setStageLightsOnValue = (next) => { setStageLightsOn(next); callHandle('setStageLightsEnabled', next); sceneWrite('stageLightsOn', next); };
+        const setSsrOnValue = (next) => { setSsrOn(next); callHandle('setScreenSpaceReflections', next); sceneWrite('ssrOn', next); };
         const setDiffuseEnvConvolveValue = (next) => {
             setDiffuseEnvConvolveState(next);
-            window.setDiffuseEnvMethod && window.setDiffuseEnvMethod(next ? 'convolve' : 'sh');
-            if (currentEnvironmentRef.current) callHandle('setEnvironment', currentEnvironmentRef.current);
+            sceneWrite('diffuseEnv', next ? 'convolve' : 'sh');
+            if (currentEnvironmentRef.current) callHandle('setEnvironment', currentEnvironmentRef.current, { user: true });
         };
-        // No stage handle yet: matches the persist-only fallback every single
-        // governed handler falls back to with no handle (writeStoredSceneBool/
-        // setStored*); displacement and transparency are globals, still live.
+        // No stage handle yet: persist-only, like every governed handler
+        // without a handle; the store write is what the next load reads.
         const persistSceneSettingsForNextLoad = (diff) => {
             if ('textureMaxSize' in diff && typeof setStoredSceneTextureMaxSize === 'function') setStoredSceneTextureMaxSize(diff.textureMaxSize);
             if ('textureBudgetGib' in diff && typeof setStoredSceneTextureBudgetBytes === 'function') setStoredSceneTextureBudgetBytes(diff.textureBudgetGib * 1024 * 1024 * 1024);
-            if ('shadows' in diff) writeStoredSceneBool('mtlx_scene_shadows', diff.shadows);
-            if ('ao' in diff) writeStoredSceneBool('mtlx_scene_ao', diff.ao);
-            if ('skyVis' in diff) writeStoredSceneBool('mtlx_scene_skyvis', diff.skyVis);
-            if ('specularAA' in diff) writeStoredSceneBool('mtlx_scene_specular_aa', diff.specularAA);
-            if ('bounce' in diff) writeStoredSceneBool('mtlx_scene_bounce', diff.bounce);
-            if ('localReflections' in diff) writeStoredSceneBool('mtlx_scene_local_reflections', diff.localReflections);
+            ['shadows', 'ao', 'skyVis', 'specularAA', 'bounce', 'localReflections'].forEach((key) => { if (key in diff) sceneWrite(key, diff[key]); });
             if ('triangleLimits' in diff && typeof setStoredSceneTriangleLimits === 'function') setStoredSceneTriangleLimits(diff.triangleLimits);
             if ('displacementSubdivision' in diff && typeof setStoredSceneDisplacementSubdivision === 'function') setStoredSceneDisplacementSubdivision(diff.displacementSubdivision);
             if ('subdivision' in diff && typeof setStoredSceneSubdivisionLevel === 'function') setStoredSceneSubdivisionLevel(diff.subdivision);
-            if ('displacement' in diff && window.setDisplacementEnabled) window.setDisplacementEnabled(diff.displacement);
+            if ('displacement' in diff) sceneWrite('displacement', diff.displacement);
             if ('transparency' in diff && window.setUsdSceneTransparency) window.setUsdSceneTransparency(diff.transparency);
             return { reload: false, rebuild: false, geometry: false };
         };
@@ -3272,7 +3122,7 @@
         // popover's Apply: one applySceneSettings call, state sync, reload
         // only if asked.
         const commitQualitySettings = (diff, id) => {
-            if (id) { try { localStorage.setItem(SCENE_QUALITY_STORAGE_KEY, id); } catch (e) { /* privacy mode */ } }
+            if (id) window.MtlxRenderSettings.markLevel('scene', id);
             if (!Object.keys(diff).length) return { reload: false, rebuild: false, geometry: false, reloadPromise: null };
             const result = (handle && typeof handle.applySceneSettings === 'function')
                 ? handle.applySceneSettings(diff)
@@ -3508,262 +3358,150 @@
         }, [status]);
 
         const RENDER_TAB_LABELS = { display: 'Display', lighting: 'Lighting', effects: 'Effects', geometry: 'Geometry and Textures' };
-        // rowDirtyFor closes over this render's draft/live state; it is a
-        // plain function (not a component), so recreating it every render
-        // only changes a context VALUE, never a component TYPE — passing it
-        // through SceneRowCtx keeps ToggleRow/SelectRow/SliderRow/CostBadge
-        // (module-scope, hoisted below SCENE_QUALITY_LEVELS) mounted once
-        // instead of remounting on every keystroke/drag tick.
-        const rowDirtyFor = (settingKey, dirty) => (settingKey
-            ? (!!draftLevel && !valuesEqual(rowValue(settingKey), draftLevel.values[settingKey]))
-            : !!dirty);
+        // Hands the draft/apply model to the shared manifest rows
+        // (RenderSettingsSection). Governed rows stage into the draft, live
+        // rows apply instantly through their own handlers.
+        const rowQualityKey = (row) => SCENE_QUALITY_KEY_OF[row.key] || row.key;
+        const sceneRowBinding = {
+            value: (row) => {
+                const field = SCENE_PRESENTATION_FIELD_OF[row.key];
+                if (field) return row.key === 'hdrView' ? (presentation.debugView || 'final') : presentation[field];
+                switch (row.key) {
+                    case 'hdrPresentation': return !!presentation.enabled;
+                    case 'displayTransform': return displayTransform;
+                    case 'materialWorkspace': return materialWorkspace;
+                    case 'displayExposure': return displayExposure;
+                    case 'stageLightsOn': return stageLightsOn;
+                    case 'stageLightsEv': return stageLightsEv;
+                    case 'skyVisStrength': return skyVisStrength;
+                    case 'aoStrength': return aoStrength;
+                    case 'bounceStrength': return bounceStrength;
+                    case 'localEnvStrength': return localEnvStrength;
+                    case 'ssrOn': return ssrOn;
+                    case 'ssrStrength': return ssrStrength;
+                    case 'ssrMaxRoughness': return ssrMaxRoughness;
+                    case 'diffuseEnv': return diffuseEnvConvolve ? 'convolve' : 'sh';
+                    case 'textureAnisotropy': return textureAnisotropy;
+                    default: return draftValues[row.key];
+                }
+            },
+            onChange: (row, next) => {
+                const field = SCENE_PRESENTATION_FIELD_OF[row.key];
+                if (field) return updatePresentation({ [field]: next });
+                switch (row.key) {
+                    case 'hdrPresentation': return updatePresentation({ enabled: next });
+                    case 'displayTransform': return pickDisplayTransform(next);
+                    case 'materialWorkspace': return pickMaterialWorkspace(next);
+                    case 'displayExposure': return applyDisplayExposure(next);
+                    case 'stageLightsOn': return setStageLightsOnValue(next);
+                    case 'stageLightsEv': return applyStageLightsEv(next);
+                    case 'skyVisStrength': return applySkyVisStrength(next);
+                    case 'aoStrength': return applyAoStrength(next);
+                    case 'bounceStrength': return applyBounceStrength(next);
+                    case 'localEnvStrength': return applyLocalEnvStrength(next);
+                    case 'ssrOn': return setSsrOnValue(next);
+                    case 'ssrStrength': return applySsrStrength(next);
+                    case 'ssrMaxRoughness': return applySsrMaxRoughness(next);
+                    case 'diffuseEnv': return setDiffuseEnvConvolveValue(next === 'convolve');
+                    case 'textureAnisotropy': setTextureAnisotropyState(Number(next)); return sceneWrite('textureAnisotropy', Number(next));
+                    case 'subdivision': return stageQualityValue('subdivision', Number(next));
+                    case 'displacementSubdivision': return stageQualityValue('displacementSubdivision', next === 'follow' ? 'follow' : Number(next));
+                    case 'triangleLimits': return stageQualityValue('triangleLimits', next !== false);
+                    default: return stageQualityValue(row.key, next);
+                }
+            },
+            visible: (row) => {
+                switch (row.key) {
+                    case 'stageLightsEv': return stageLightsOn;
+                    case 'skyVisStrength': return skyVisOn;
+                    case 'aoStrength': return aoOn;
+                    case 'bounceStrength': return bounceOn;
+                    case 'localEnvStrength': return localEnvOn;
+                    case 'ssrOn': return !SSR_ROWS_HIDDEN;
+                    case 'ssrStrength': case 'ssrMaxRoughness': return !SSR_ROWS_HIDDEN && ssrOn;
+                    case 'bloomStrength': case 'bloomThreshold': case 'bloomKnee': case 'bloomRadius':
+                        return !!(presentation.enabled && presentation.bloom && presentation.supported);
+                    case 'hdrView': return !!presentation.supported;
+                    default: return true;
+                }
+            },
+            disabled: (row) => {
+                switch (row.key) {
+                    case 'hdrPresentation': return !handle || !presentation.supported;
+                    case 'bloom': return !handle || !presentation.enabled || !presentation.supported;
+                    case 'hdrView': return !handle;
+                    case 'textureMaxSize': case 'textureBudgetGib': case 'subdivision': case 'displacementSubdivision': case 'triangleLimits': return busy;
+                    default: return false;
+                }
+            },
+            dirty: (row) => {
+                const field = SCENE_PRESENTATION_FIELD_OF[row.key];
+                if (field) return !valuesEqual(row.key === 'hdrView' ? (presentation.debugView || 'final') : presentation[field], SCENE_PRESENTATION_DEFAULT[field]);
+                const key = rowQualityKey(row);
+                return ALL_QUALITY_KEYS.includes(key) && !!draftLevel && !valuesEqual(rowValue(key), draftLevel.values[key]);
+            },
+            cost: (row) => settingsCostKind(row.key),
+            pending: (row) => hasStage && row.key in draftDiff,
+            defaultValue: (row) => {
+                const field = SCENE_PRESENTATION_FIELD_OF[row.key];
+                if (field) return SCENE_PRESENTATION_DEFAULT[field];
+                return draftLevel && draftLevel.values[rowQualityKey(row)];
+            },
+            hint: (row) => (row.key === 'stageLightsOn'
+                ? (stageLightInfo.count || 0) + ' light(s) imported from the stage. Area lights are split into several point samples across their surface, sharing the emitter\'s power.'
+                : null),
+            title: (row) => {
+                switch (row.key) {
+                    case 'displayTransform': return 'This is the Scene\'s own setting; the Material Viewer keeps sRGB.';
+                    case 'materialWorkspace': return 'This is the Scene\'s own setting; the Material Viewer, Compare, Builder and Graph previews always assume Rec.709.';
+                    case 'specularAA': return draftValues.specularAA ? 'Turn off geometric specular anti-aliasing' : 'Widen specular roughness where it is changing fast on screen';
+                    case 'stageLightsOn': return stageLightsOn ? 'Ignore the lights authored on this stage' : 'Light the stage with its own lights';
+                    case 'shadows': return draftValues.shadows ? 'Turn shadows off' : 'Cast shadows from the brightest light';
+                    case 'skyVis': return draftValues.skyVis ? 'Turn baked sky visibility off' : 'Let room geometry block the environment light';
+                    case 'ao': return draftValues.ao ? 'Turn ambient occlusion off' : 'Occlude environment light in creases and corners';
+                    case 'bounce': return draftValues.bounce ? 'Turn the baked diffuse bounce off' : 'Bounce blocked sky light back off nearby surfaces';
+                    case 'localReflections': return draftValues.localReflections ? 'Turn the local reflection capture off' : 'Reflect the captured studio set instead of only the environment';
+                    case 'ssrOn': return ssrOn ? 'Turn screen-space reflections off' : 'Reflect the scene colour in specular through a screen-space trace';
+                    case 'transparency': return draftValues.transparency ? 'Disable scene material transparency' : 'Enable scene material transparency';
+                    case 'diffuseEnv': return diffuseEnvConvolve ? 'Use the second-order spherical harmonic fit instead' : 'Cosine-convolve the environment on the GPU instead';
+                    case 'displacement': return draftValues.displacement ? 'Disable displacement' : 'Enable displacement';
+                    case 'hdrView': return handle ? undefined : 'Load a stage first';
+                    default: return undefined;
+                }
+            },
+        };
+        // Environment popover and sidebar backdrop: view state, not staged.
+        const envRowBinding = {
+            value: (row) => (row.key === 'envRotation' ? envRotation
+                : row.key === 'envExposure' ? linearToEv(envExposureLinear)
+                : !!sceneStored('keyLight')),
+            onChange: (row, next) => {
+                if (row.key === 'envRotation') applyEnvRotation(next);
+                else if (row.key === 'envExposure') setEnvExposureVal(evToLinear(next));
+                else { sceneWrite('keyLight', next); callHandle('refreshKeyLight'); }
+            },
+            disabled: (row) => (row.key === 'keyLight' ? false : !canTuneEnvironment),
+            defaultValue: () => 0,
+            title: (row) => (row.key === 'keyLight' ? row.hint : undefined),
+        };
+        const backdropRowBinding = {
+            value: () => backdrop,
+            onChange: (row, next) => { setBackdrop(next); callHandle('setBackdrop', next); },
+            disabled: () => !handle || typeof handle.setBackdrop !== 'function',
+            title: () => (handle ? undefined : 'Load a scene first'),
+            testId: () => 'usd-scene-backdrop-select',
+        };
         const renderDisplayTab = () => (
-            <React.Fragment>
-                <SelectRow
-                    label="Display transform" experimental settingKey="displayTransform"
-                    title="This is the Scene's own setting; the Material Viewer keeps sRGB."
-                    control={
-                        <MtlxSelect
-                            value={displayTransform}
-                            options={['neutral', 'aces', 'srgb', 'lin_rec709']}
-                            labels={{ neutral: 'Neutral', aces: 'ACES', srgb: 'sRGB', lin_rec709: 'lin_rec709' }}
-                            onChange={pickDisplayTransform}
-                            defValue="neutral"
-                            size="sm"
-                        />
-                    }
-                    description="How the linear render is encoded for display. Neutral rolls highlights off while keeping hue; sRGB clips at 1.0 and matches the official MaterialX viewer."
-                />
-                <SelectRow
-                    label="Material working space" experimental settingKey="materialWorkspace"
-                    title="This is the Scene's own setting; the Material Viewer, Compare, Builder and Graph previews always assume Rec.709."
-                    control={
-                        <MtlxSelect
-                            value={materialWorkspace}
-                            options={['rec709', 'acescg']}
-                            labels={{ rec709: 'Rec.709', acescg: 'ACEScg' }}
-                            onChange={pickMaterialWorkspace}
-                            defValue="rec709"
-                            size="sm"
-                        />
-                    }
-                    description="How untagged colour numbers in the material (constants, interface values, USD overrides, displayColor) are read. Rec.709 takes them literally; ACEScg treats them as Houdini/Karma's scene-linear space and converts them, which matches Karma's albedo more closely. Tagged textures and colorspace-tagged inputs are unaffected."
-                />
-                <ToggleRow label="Specular anti-aliasing" experimental checked={draftValues.specularAA}
-                    settingKey="specularAA"
-                    title={draftValues.specularAA ? 'Turn off geometric specular anti-aliasing' : 'Widen specular roughness where it is changing fast on screen'}
-                    onChange={(next) => stageQualityValue('specularAA', next)}
-                    description="Widens anisotropic specular roughness by the screen-space variance of the shading normal and of the roughness input, so a fine procedural roughness noise network does not sparkle under a single-sample rasterizer the way a multi-sample path tracer would not. Smooth, constant-roughness materials are essentially unaffected. Staged: takes effect on Apply." />
-                <SliderRow settingKey="displayExposure" description="Scales the whole image before the display transform, the way a camera would. The exposure in Environment settings only scales the image based lighting.">
-                    <SliderField label="Camera exposure" unit="EV" value={displayExposure} min={-8} max={8} step={0.25} decimals={2}
-                        defaultValue={draftLevel && draftLevel.values.displayExposure}
-                        onSlider={applyDisplayExposure} onNumber={applyDisplayExposure} />
-                </SliderRow>
-                <ToggleRow label="HDR presentation" checked={!!presentation.enabled} disabled={!handle || !presentation.supported}
-                    settingKey="presentation"
-                    onChange={(enabled) => updatePresentation({ enabled })}
-                    description="Capture scene-linear HDR before a single display transform. Off uses the previous rendering path." />
-                <ToggleRow label="Highlight glow" checked={!!presentation.bloom} disabled={!handle || !presentation.enabled || !presentation.supported}
-                    dirty={presentation.bloom !== SCENE_PRESENTATION_DEFAULT.bloom}
-                    onChange={(bloom) => updatePresentation({ bloom })}
-                    description="Optical glow from actual HDR highlights. This does not add lighting to nearby geometry." />
-                {presentation.enabled && presentation.bloom && presentation.supported ? (
-                    <SliderRow description="Controls how much of the glow highlight bleeds into the image."
-                        dirty={!valuesEqual(presentation.strength, SCENE_PRESENTATION_DEFAULT.strength)}>
-                        <SliderField label="Glow strength" value={presentation.strength} min={0} max={1} step={0.025} decimals={3}
-                            defaultValue={SCENE_PRESENTATION_DEFAULT.strength}
-                            onSlider={(strength) => updatePresentation({ strength })} onNumber={(strength) => updatePresentation({ strength })} />
-                    </SliderRow>
-                ) : null}
-                {presentation.supported ? (
-                    <SelectRow
-                        label="HDR view"
-                        title={handle ? undefined : 'Load a stage first'}
-                        dirty={(presentation.debugView || 'final') !== SCENE_PRESENTATION_DEFAULT.debugView}
-                        control={
-                            <MtlxSelect
-                                value={presentation.debugView || 'final'}
-                                options={['final', 'linear', 'no-bloom', 'highlights', 'bloom', 'composite']}
-                                labels={{ final: 'Final', linear: 'Scene linear', 'no-bloom': 'No glow', highlights: 'Highlights', bloom: 'Glow', composite: 'Composite' }}
-                                onChange={(debugView) => updatePresentation({ debugView })}
-                                defValue="final"
-                                size="sm"
-                                disabled={!handle}
-                            />
-                        }
-                        description="Temporary inspection view for the HDR presentation pipeline."
-                    />
-                ) : null}
-                {presentation.supported && presentation.enabled && presentation.bloom ? (
-                    <React.Fragment>
-                        <SliderRow description="Luminance level above which highlights start to glow."
-                            dirty={!valuesEqual(presentation.threshold, SCENE_PRESENTATION_DEFAULT.threshold)}>
-                            <SliderField label="Glow threshold" value={presentation.threshold} min={0.01} max={1000} step={0.01} decimals={2}
-                                defaultValue={SCENE_PRESENTATION_DEFAULT.threshold}
-                                onSlider={(threshold) => updatePresentation({ threshold })} onNumber={(threshold) => updatePresentation({ threshold })} />
-                        </SliderRow>
-                        <SliderRow description="How softly the glow threshold transitions."
-                            dirty={!valuesEqual(presentation.knee, SCENE_PRESENTATION_DEFAULT.knee)}>
-                            <SliderField label="Glow knee" value={presentation.knee} min={0} max={1} step={0.01} decimals={2}
-                                defaultValue={SCENE_PRESENTATION_DEFAULT.knee}
-                                onSlider={(knee) => updatePresentation({ knee })} onNumber={(knee) => updatePresentation({ knee })} />
-                        </SliderRow>
-                        <SliderRow description="How far the glow spreads from each highlight."
-                            dirty={!valuesEqual(presentation.radius, SCENE_PRESENTATION_DEFAULT.radius)}>
-                            <SliderField label="Glow radius" value={presentation.radius} min={0} max={1} step={0.01} decimals={2}
-                                defaultValue={SCENE_PRESENTATION_DEFAULT.radius}
-                                onSlider={(radius) => updatePresentation({ radius })} onNumber={(radius) => updatePresentation({ radius })} />
-                        </SliderRow>
-                    </React.Fragment>
-                ) : null}
-            </React.Fragment>
+            <RenderSettingsSection surface="scene" groups={['display']} exclude={['backdrop']} variant="panel" draft={sceneRowBinding} />
         );
         const renderLightingTab = () => (
-            <React.Fragment>
-                <ToggleRow label="Stage lights" experimental checked={stageLightsOn}
-                    settingKey="stageLightsOn"
-                    title={stageLightsOn ? 'Ignore the lights authored on this stage' : 'Light the stage with its own lights'}
-                    onChange={setStageLightsOnValue}
-                    description={(stageLightInfo.count || 0) + ' light(s) imported from the stage. Area lights are split into several point samples across their surface, sharing the emitter\'s power.'} />
-                {stageLightsOn ? (
-                    <SliderRow settingKey="stageLightsEv" description="Scales the imported stage lights' overall brightness.">
-                        <SliderField label="Stage light intensity" unit="EV" value={stageLightsEv} min={-8} max={8} step={0.25} decimals={2}
-                            defaultValue={draftLevel && draftLevel.values.stageLightsEv}
-                            onSlider={applyStageLightsEv} onNumber={applyStageLightsEv} />
-                    </SliderRow>
-                ) : null}
-                <ToggleRow label="Shadows" experimental checked={draftValues.shadows}
-                    settingKey="shadows"
-                    title={draftValues.shadows ? 'Turn shadows off' : 'Cast shadows from the brightest light'}
-                    onChange={(next) => stageQualityValue('shadows', next)}
-                    description="Up to 32 shadow faces, packed into one shadow atlas, chosen by the light they deliver to sampled receivers. The atlas is rebuilt when the camera or lighting changes. Staged: takes effect on Apply." />
-                <ToggleRow label="Sky visibility" experimental checked={draftValues.skyVis}
-                    settingKey="skyVis"
-                    title={draftValues.skyVis ? 'Turn baked sky visibility off' : 'Let room geometry block the environment light'}
-                    onChange={(next) => stageQualityValue('skyVis', next)}
-                    description="Environment light has no visibility term, so a wall does not block the sky and interiors read flat and overlit. This bakes how much sky each part of the stage can see into a coarse volume. Staged: takes effect on Apply." />
-                {skyVisOn ? (
-                    <SliderRow settingKey="skyVisStrength" description="How strongly the baked sky visibility darkens occluded areas.">
-                        <SliderField label="Sky visibility strength" value={skyVisStrength} min={0} max={1} step={0.05} decimals={2}
-                            defaultValue={draftLevel && draftLevel.values.skyVisStrength}
-                            onSlider={applySkyVisStrength} onNumber={applySkyVisStrength} />
-                    </SliderRow>
-                ) : null}
-            </React.Fragment>
+            <RenderSettingsSection surface="scene" groups={['lighting']} exclude={['envRotation', 'envExposure', 'keyLight']} variant="panel" draft={sceneRowBinding} />
         );
         const renderEffectsTab = () => (
-            <React.Fragment>
-                <ToggleRow label="Ambient occlusion" experimental checked={draftValues.ao}
-                    settingKey="ao"
-                    title={draftValues.ao ? 'Turn ambient occlusion off' : 'Occlude environment light in creases and corners'}
-                    onChange={(next) => stageQualityValue('ao', next)}
-                    description="Environment light reaches every surface equally, including ones facing a wall, which makes interiors read flat. This estimates how much sky each pixel can actually see. Staged: takes effect on Apply." />
-                {aoOn ? (
-                    <SliderRow settingKey="aoStrength" description="How strongly the estimated occlusion darkens creases and corners.">
-                        <SliderField label="Ambient occlusion strength" value={aoStrength} min={0} max={1} step={0.05} decimals={2}
-                            defaultValue={draftLevel && draftLevel.values.aoStrength}
-                            onSlider={applyAoStrength} onNumber={applyAoStrength} />
-                    </SliderRow>
-                ) : null}
-                <ToggleRow label="Diffuse bounce" experimental checked={draftValues.bounce}
-                    settingKey="bounce"
-                    title={draftValues.bounce ? 'Turn the baked diffuse bounce off' : 'Bounce blocked sky light back off nearby surfaces'}
-                    onChange={(next) => stageQualityValue('bounce', next)}
-                    description="Environment light is not reflected back off the room, so shadowed sides and corners lose the light the walls and floor bounce onto them. This bakes a coarse estimate of that bounce and adds it back where the sky is blocked. Staged: takes effect on Apply." />
-                {bounceOn ? (
-                    <SliderRow settingKey="bounceStrength" description="How strongly the baked bounce term fills back in.">
-                        <SliderField label="Diffuse bounce strength" value={bounceStrength} min={0} max={1} step={0.05} decimals={2}
-                            defaultValue={draftLevel && draftLevel.values.bounceStrength}
-                            onSlider={applyBounceStrength} onNumber={applyBounceStrength} />
-                    </SliderRow>
-                ) : null}
-                <ToggleRow label="Local reflections" experimental checked={draftValues.localReflections}
-                    settingKey="localReflections"
-                    title={draftValues.localReflections ? 'Turn the local reflection capture off' : 'Reflect the captured studio set instead of only the environment'}
-                    onChange={(next) => stageQualityValue('localReflections', next)}
-                    description="Reflections only show the environment, so the floor and the wall of a studio set never appear in a metal or a glossy surface. This captures the scene once from the subject and reflects that instead wherever it covers the sky. Staged: takes effect on Apply." />
-                {localEnvOn ? (
-                    <SliderRow settingKey="localEnvStrength" description="How strongly the captured local reflection blends in.">
-                        <SliderField label="Local reflection strength" value={localEnvStrength} min={0} max={1} step={0.05} decimals={2}
-                            defaultValue={draftLevel && draftLevel.values.localEnvStrength}
-                            onSlider={applyLocalEnvStrength} onNumber={applyLocalEnvStrength} />
-                    </SliderRow>
-                ) : null}
-                {SSR_ROWS_HIDDEN ? null : (<React.Fragment>
-                <ToggleRow label="Screen-space reflections" experimental checked={ssrOn}
-                    settingKey="ssrOn"
-                    title={ssrOn ? 'Turn screen-space reflections off' : 'Reflect the scene colour in specular through a screen-space trace'}
-                    onChange={setSsrOnValue}
-                    description="Traces a screen-space ray through last frame's colour buffer for a reflection, falling back to the environment when it misses." />
-                {ssrOn ? (
-                    <React.Fragment>
-                        <SliderRow settingKey="ssrStrength" description="How much of the traced reflection blends into specular.">
-                            <SliderField label="Reflection strength" value={ssrStrength} min={0} max={1} step={0.05} decimals={2}
-                                defaultValue={draftLevel && draftLevel.values.ssrStrength}
-                                onSlider={applySsrStrength} onNumber={applySsrStrength} />
-                        </SliderRow>
-                        <SliderRow settingKey="ssrMaxRoughness" description="Roughest surface that still receives a screen-space reflection.">
-                            <SliderField label="Reflection max roughness" value={ssrMaxRoughness} min={0.05} max={1} step={0.05} decimals={2}
-                                defaultValue={draftLevel && draftLevel.values.ssrMaxRoughness}
-                                onSlider={applySsrMaxRoughness} onNumber={applySsrMaxRoughness} />
-                        </SliderRow>
-                    </React.Fragment>
-                ) : null}
-                </React.Fragment>)}
-                <ToggleRow label="Transparency" experimental checked={draftValues.transparency}
-                    settingKey="transparency"
-                    title={draftValues.transparency ? 'Disable scene material transparency' : 'Enable scene material transparency'}
-                    onChange={(next) => stageQualityValue('transparency', next)}
-                    description="Render opacity/transmission authored by scene materials. When off, transparent materials render opaque. Staged: takes effect on Apply." />
-                <ToggleRow label="Convolved diffuse environment" checked={diffuseEnvConvolve}
-                    settingKey="diffuseEnvConvolve"
-                    title={diffuseEnvConvolve ? 'Use the second-order spherical harmonic fit instead' : 'Cosine-convolve the environment on the GPU instead'}
-                    onChange={setDiffuseEnvConvolveValue}
-                    description="Cosine-convolves the environment instead of a 9 term spherical harmonic fit. More accurate diffuse under small bright lights." />
-            </React.Fragment>
+            <RenderSettingsSection surface="scene" groups={['effects']} variant="panel" draft={sceneRowBinding} />
         );
         const renderGeometryTab = () => (
-            <React.Fragment>
-                <SelectRow label="Texture resolution"
-                    settingKey="textureMaxSize"
-                    control={
-                        <MtlxSelect value={draftValues.textureMaxSize} options={[512, 1024, 2048, 4096, Infinity]}
-                            labels={{ 512: '512 px', 1024: '1024 px', 2048: '2048 px', 4096: '4096 px', Infinity: 'Original' }}
-                            onChange={(next) => stageQualityValue('textureMaxSize', next)} defValue={2048} size="sm" disabled={busy} />
-                    }
-                    description="The maximum size each texture loads at. Higher values show finer detail in color, normal and roughness maps, but loading takes longer and uses more memory. If all textures together would go over Texture memory, they load smaller than this. Staged: takes effect on Apply." />
-                <SelectRow label="Texture memory"
-                    settingKey="textureBudgetGib"
-                    control={
-                        <MtlxSelect value={draftValues.textureBudgetGib} options={[1, 2, 4]} labels={{ 1: '1 GB', 2: '2 GB', 4: '4 GB' }}
-                            onChange={(next) => stageQualityValue('textureBudgetGib', next)} defValue={1} size="sm" disabled={busy} />
-                    }
-                    description="How much memory all scene textures may use. Over the limit, all textures load at a lower resolution (1024, then 512 px) until they fit; if they still do not fit, the rest are left out (default values, grey UDIM tiles). Too high a value can exceed GPU memory and blank the view. Staged: takes effect on Apply." />
-                <SelectRow label="Subdivision"
-                    settingKey="subdivision"
-                    control={
-                        <MtlxSelect value={draftValues.subdivision} options={[0, 1, 2]} labels={{ 0: 'Off', 1: '1', 2: '2' }}
-                            onChange={(next) => stageQualityValue('subdivision', Number(next))} defValue={0} size="sm" disabled={busy} />
-                    }
-                    description="Loop-subdivides catmullClark meshes for preview; the runtime cannot expose the cage, so this approximates the limit surface. Staged: reloads the stage on Apply." />
-                <ToggleRow label="Displacement" checked={draftValues.displacement}
-                    settingKey="displacement"
-                    title={draftValues.displacement ? 'Disable displacement' : 'Enable displacement'}
-                    onChange={(next) => stageQualityValue('displacement', next)}
-                    description="Moves geometry bound to a displaced MaterialX material. Staged: takes effect on Apply." />
-                <SelectRow label="Displacement subdivision"
-                    settingKey="displacementSubdivision"
-                    control={
-                        <MtlxSelect value={draftValues.displacementSubdivision} options={['follow', 0, 1, 2, 3]}
-                            labels={{ follow: 'Follow stage', 0: 'Off', 1: '1', 2: '2', 3: '3' }}
-                            onChange={(next) => stageQualityValue('displacementSubdivision', next === 'follow' ? 'follow' : Number(next))} defValue="follow" size="sm" disabled={busy} />
-                    }
-                    description="Subdivision applied to meshes bound to displaced MaterialX materials. Staged: takes effect on Apply." />
-                <ToggleRow label="Triangle limits" checked={draftValues.triangleLimits}
-                    settingKey="triangleLimits"
-                    onChange={(next) => stageQualityValue('triangleLimits', next !== false)} disabled={busy}
-                    description="Skips or lowers subdivision and displacement detail that would exceed 700,000 triangles per mesh or 6,000,000 per scene. Turning this off can run out of memory or freeze the tab on heavy scenes. Staged: reloads the stage on Apply." />
-            </React.Fragment>
+            <RenderSettingsSection surface="scene" groups={['geometry']} variant="panel" draft={sceneRowBinding} />
         );
         // The Diagnostics button carries the count and the icon of the most severe
         // message, so problems show next to Statistics while the popover is closed.
@@ -3793,14 +3531,14 @@
                     <DiagGroup
                         id="transparent"
                         icon="color-filter"
-                        tone="text-sky-300/90"
+                        tone="text-info/90"
                         label="Transparency"
                         lines={transparentPrims.map((entry) => entry.primPath + ' [' + entry.materialPath + ']')}
                     >
                         {transparentPrims.map((entry, i) => (
-                            <div key={'t' + i} className="font-mono text-xs break-all text-sky-300/90">
+                            <div key={'t' + i} className="font-mono text-xs break-all text-info/90">
                                 {entry.primPath}
-                                <span className="text-gray-500"> [{entry.materialPath}]</span>
+                                <span className="text-fg-subtle"> [{entry.materialPath}]</span>
                             </div>
                         ))}
                     </DiagGroup>
@@ -3809,12 +3547,12 @@
                     <DiagGroup
                         id="materials"
                         icon="file-text"
-                        tone="text-gray-500"
+                        tone="text-fg-subtle"
                         label="Material sources"
                         lines={materials.map((material) => String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable'))}
                     >
                         {materials.map((material, i) => (
-                            <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
+                            <div key={'m' + i} className="text-fg-muted font-mono text-xs break-all">
                                 {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
                             </div>
                         ))}
@@ -3822,7 +3560,7 @@
                 ) : null}
             </div>
         ) : (
-            <div className="py-1 text-xs text-gray-500">No warnings.</div>
+            <div className="py-1 text-xs text-fg-subtle">No warnings.</div>
         );
         const statisticsRows = [
             ['Objects', objectCount.toLocaleString(), 'usd-stage-nodes', 'Every item under Scene in the hierarchy'],
@@ -3840,7 +3578,7 @@
             .filter((severity) => grouped[severity].length)
             .map((severity) => grouped[severity].length.toLocaleString() + ' ' + SEVERITY_NOUNS[severity][grouped[severity].length === 1 ? 0 : 1])
             .join(', ');
-        const severityTone = topSeverity ? SEVERITY_STYLE[topSeverity].text : 'text-gray-500';
+        const severityTone = topSeverity ? SEVERITY_STYLE[topSeverity].text : 'text-fg-subtle';
         const diagnosticsButton = (
             <button
                 ref={diagnosticsBtnRef}
@@ -3852,7 +3590,7 @@
                 title={'Diagnostics: ' + (diagnosticsSummary || 'no warnings')}
                 onClick={() => setDiagnosticsOpen((open) => !open)}
                 className={'ml-auto -my-0.5 h-6 inline-flex items-center gap-1.5 px-1.5 rounded-md border text-[11px] font-medium whitespace-nowrap transition-colors '
-                    + (diagnosticsOpen ? 'bg-gray-700 border-gray-500 text-gray-100' : 'bg-gray-800/80 border-gray-700 text-gray-300 hover:bg-gray-700/80 hover:text-gray-100')}
+                    + (diagnosticsOpen ? 'bg-pressed border-line-heavy text-hud-fg-strong' : 'bg-hud-raised/80 border-line text-hud-fg hover:bg-hud-hover/80 hover:text-hud-fg-strong')}
             >
                 <span data-testid="usd-scene-diagnostics-severity" className={'inline-flex ' + severityTone}>
                     <MtlxIcon name={topSeverity ? SEVERITY_STYLE[topSeverity].icon : 'check'} className="w-3.5 h-3.5" />
@@ -3864,23 +3602,23 @@
                     the info count, so the badge still shows a number. */}
                 {topSeverity && grouped[topSeverity].length ? (
                     <span data-testid="usd-scene-diagnostics-count"
-                        className={'text-[10px] font-mono font-normal tabular-nums bg-gray-900/60 border border-gray-700 rounded-full px-1.5 ' + severityTone}>
+                        className={'text-[10px] font-mono font-normal tabular-nums bg-surface-sunken/60 border border-line rounded-full px-1.5 ' + severityTone}>
                         {grouped[topSeverity].length.toLocaleString()}
                     </span>
                 ) : null}
             </button>
         );
         const statisticsFooter = (
-            <div className="shrink-0 border-t border-gray-700 px-3.5 py-3.5 space-y-1" style={{ background: PANEL_SURFACE }} data-testid="usd-stage-counts">
+            <div className="shrink-0 border-t border-line px-3.5 py-3.5 space-y-1 bg-surface-card" data-testid="usd-stage-counts">
                 <div className="flex items-center gap-2 mb-1.5">
-                    <MtlxIcon name="cube" className="w-4 h-4 text-gray-400 shrink-0" />
-                    <span className="text-[13px] font-semibold text-gray-200 shrink-0">Statistics</span>
+                    <MtlxIcon name="cube" className="w-4 h-4 text-fg-muted shrink-0" />
+                    <span className="text-[13px] font-semibold text-fg shrink-0">Statistics</span>
                     {diagnosticsButton}
                 </div>
-                <div className="space-y-1 text-[11px] text-gray-300">
+                <div className="space-y-1 text-[11px] text-fg-secondary">
                     {statisticsRows.map(([label, value, testId, title]) => (
                         <div key={label} className="flex justify-between" title={title}>
-                            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">{label}</span>
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">{label}</span>
                             <span className="font-mono tabular-nums" data-testid={testId}>{value}</span>
                         </div>
                     ))}
@@ -3895,18 +3633,18 @@
             const box = containerRef.current;
             const wanted = pill ? 8 + pill.offsetLeft : 8;
             const left = box ? Math.max(8, Math.min(wanted, box.clientWidth - HUD_POPOVER_W - 8)) : wanted;
-            return { left, width: 'min(' + HUD_POPOVER_W + 'px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)' };
+            return { left, width: 'min(' + HUD_POPOVER_W + 'px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)', backgroundColor: HUD_POPOVER_BG };
         };
-        const HUD_POPOVER_CLASS = 'absolute z-30 top-11 flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden';
+        const HUD_POPOVER_CLASS = 'absolute z-30 top-11 flex flex-col backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden';
         const popoverHeader = (icon, title, subtitle, onClose, tag, mono) => (
-            <div className="flex-none flex items-center gap-2 px-3 py-2 border-b border-gray-700">
-                <MtlxIcon name={icon} className="w-4 h-4 text-gray-400 shrink-0" />
+            <div className="flex-none flex items-center gap-2 px-3 py-2 border-b border-line">
+                <MtlxIcon name={icon} className="w-4 h-4 text-fg-muted shrink-0" />
                 <div className="flex-1 min-w-0 flex flex-col">
-                    <span className="text-[13px] font-semibold text-gray-200 truncate">{title}</span>
-                    {subtitle ? <span className={'text-[11px] text-gray-500 truncate' + (mono ? ' font-mono' : '')} title={subtitle}>{subtitle}</span> : null}
+                    <span className="text-[13px] font-semibold text-fg truncate">{title}</span>
+                    {subtitle ? <span className={'text-[11px] text-fg-subtle truncate' + (mono ? ' font-mono' : '')} title={subtitle}>{subtitle}</span> : null}
                 </div>
-                {tag ? <span className="shrink-0 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border border-gray-600 text-gray-400">{tag}</span> : null}
-                <button type="button" aria-label="Close" onClick={onClose} className="shrink-0 p-1 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700">
+                {tag ? <span className="shrink-0 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border border-line-strong text-fg-muted">{tag}</span> : null}
+                <button type="button" aria-label="Close" onClick={onClose} className="shrink-0 p-1 rounded text-fg-secondary hover:text-fg hover:bg-hover">
                     <MtlxIcon name="x" className="w-3.5 h-3.5" />
                 </button>
             </div>
@@ -3918,14 +3656,14 @@
                 {popoverHeader('sun', 'Environment', [envFileName || 'Default environment', (envRotation !== 0 || envExposureLinear !== 1) ? envSummary : ''].filter(Boolean).join(', '), () => setEnvPopoverOpen(false))}
                 <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-3 space-y-3">
                     {envNode && envNode.path ? (
-                        <div data-testid="usd-scene-env-dome" className="text-[11px] text-gray-400">
+                        <div data-testid="usd-scene-env-dome" className="text-[11px] text-fg-muted">
                             {envOverrideRef.current ? 'The imported environment replaces the stage\'s dome light ' : (envDome ? 'From the stage\'s dome light ' : 'The stage\'s dome light could not be applied, see Diagnostics: ')}
-                            <span className="font-mono text-gray-300">{sceneTreeSegments(envNode.path).join('/')}</span>
+                            <span className="font-mono text-fg-secondary">{sceneTreeSegments(envNode.path).join('/')}</span>
                             {envDome && envDome.fileName && !envOverrideRef.current ? ' (' + envDome.fileName + ')' : ''}
                         </div>
                     ) : null}
                     {envLightingOff ? (
-                        <div data-testid="usd-scene-env-lighting-off" className="text-[11px] text-amber-300/90">
+                        <div data-testid="usd-scene-env-lighting-off" className="text-[11px] text-warning/90">
                             {backdrop === 'environment'
                                 ? 'The environment\'s lighting is turned off in the hierarchy; the Environment backdrop goes black until it is turned back on.'
                                 : 'The environment\'s lighting is turned off in the hierarchy; the backdrop is unaffected.'}
@@ -3939,23 +3677,9 @@
                         onFiles={importEnvironment}
                         onClear={clearImportedEnvironment}
                     />
-                    {envImportError && <div className="text-xs text-red-400">{envImportError}</div>}
-                    <SliderField
-                        disabled={!canTuneEnvironment}
-                        label="Environment rotation" unit="deg"
-                        value={envRotation} min={0} max={360} step={1} decimals={0}
-                        defaultValue={0}
-                        onSlider={applyEnvRotation}
-                        onNumber={applyEnvRotation}
-                    />
-                    <SliderField
-                        disabled={!canTuneEnvironment}
-                        label="Exposure" unit="EV"
-                        value={linearToEv(envExposureLinear)} min={EV_MIN} max={EV_MAX} step={EV_STEP} decimals={1}
-                        defaultValue={0}
-                        onSlider={(v) => setEnvExposureVal(evToLinear(v))}
-                        onNumber={(v) => setEnvExposureVal(evToLinear(v))}
-                    />
+                    {envImportError && <div className="text-xs text-error">{envImportError}</div>}
+                    <RenderSettingsSection surface="scene" keys={['envRotation', 'envExposure']} variant="popover" draft={envRowBinding} />
+                    <RenderSettingsSection surface="scene" keys={['keyLight']} variant="popover" labelClassName="text-xs font-medium text-fg-secondary" draft={envRowBinding} />
                     <button type="button" data-testid="usd-scene-env-reset" onClick={resetEnvironment} className={BTN_SECONDARY + ' w-full'}>Reset</button>
                 </div>
             </div>
@@ -4004,8 +3728,8 @@
                             {Number(lightRecord.specular) !== 1 && lightRecord.specular != null ? <LightInfoRow label="Specular multiplier" raw="inputs:specular">{lightNumber(lightRecord.specular) + ' (not applied)'}</LightInfoRow> : null}
                             {lightRecord.textureFile ? <LightInfoRow label="Texture" raw="inputs:texture:file">{String(lightRecord.textureFile)}</LightInfoRow> : null}
                         </div>
-                        <div className="pt-2 border-t border-gray-700/70">
-                            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">In the viewport</div>
+                        <div className="pt-2 border-t border-line/60">
+                            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">In the viewport</div>
                             <LightInfoRow label="Status" testId="usd-scene-light-status">{status}</LightInfoRow>
                             <LightInfoRow label="Imported as" testId="usd-scene-light-imported">{imported}</LightInfoRow>
                             {lightDetails && lightDetails.converted ? (
@@ -4022,9 +3746,9 @@
                             ) : null}
                         </div>
                         {notes.length ? (
-                            <div data-testid="usd-scene-light-notes" className="pt-2 border-t border-gray-700/70 space-y-1">
-                                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Notes</div>
-                                {notes.map((text, i) => <div key={i} className="text-[11px] text-gray-400 break-words">{text}</div>)}
+                            <div data-testid="usd-scene-light-notes" className="pt-2 border-t border-line/60 space-y-1">
+                                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">Notes</div>
+                                {notes.map((text, i) => <div key={i} className="text-[11px] text-fg-muted break-words">{text}</div>)}
                             </div>
                         ) : null}
                     </div>
@@ -4038,8 +3762,8 @@
                 role="dialog"
                 aria-label="Diagnostics"
                 data-testid="usd-scene-diagnostics-popover"
-                style={Object.assign({ position: 'fixed', zIndex: 9999 }, diagnosticsPos || {})}
-                className={(diagnosticsOpen && diagnosticsPos ? 'flex' : 'hidden') + ' flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden'}
+                style={Object.assign({ position: 'fixed', zIndex: 9999, backgroundColor: HUD_POPOVER_BG }, diagnosticsPos || {})}
+                className={(diagnosticsOpen && diagnosticsPos ? 'flex' : 'hidden') + ' flex-col backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden'}
             >
                 {popoverHeader('alert-triangle', 'Diagnostics', diagnosticsSummary || 'No warnings', () => setDiagnosticsOpen(false))}
                 <div
@@ -4084,7 +3808,7 @@
                             </div>
                             <label
                                 title="Choose a folder"
-                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-gray-700 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 cursor-pointer"
+                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control/80 hover:bg-hover text-fg-secondary cursor-pointer"
                             >
                                 <MtlxIcon name="folder" className="w-3.5 h-3.5" />
                                 <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => chooseFiles(e.target.files)} />
@@ -4145,21 +3869,7 @@
                     })()}
 
                     {cardStage ? (
-                        <div className="flex items-center justify-between gap-3" title={handle ? undefined : 'Load a scene first'}>
-                            <span className={SCENE_ROW_LABEL + ' shrink-0 pl-4'}>Backdrop</span>
-                            <div data-testid="usd-scene-backdrop-select">
-                                <MtlxSelect
-                                    value={backdrop}
-                                    options={['studio', 'studio-dark', 'environment', 'none']}
-                                    labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
-                                    onChange={(value) => { setBackdrop(value); callHandle('setBackdrop', value); }}
-                                    ariaLabel="Backdrop"
-                                    defValue="studio"
-                                    size="sm"
-                                    disabled={!handle || typeof handle.setBackdrop !== 'function'}
-                                />
-                            </div>
-                        </div>
+                        <RenderSettingsSection surface="scene" keys={['backdrop']} variant="flat" labelClassName={SCENE_ROW_LABEL + ' shrink-0 pl-4'} draft={backdropRowBinding} />
                     ) : null}
 
                     {cardStage ? (
@@ -4171,13 +3881,13 @@
                                     aria-expanded={sceneInfoOpen}
                                     title={sceneInfoOpen ? 'Hide the scene facts' : 'Show the scene facts'}
                                     onClick={() => setSceneInfoOpen((open) => !open)}
-                                    className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-gray-800/60"
+                                    className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-hover-subtle/60"
                                 >
                                     <span className={SCENE_ROW_LABEL + ' inline-flex items-center gap-1 shrink-0'}>
                                         <MtlxIcon name={sceneInfoOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />Info
                                     </span>
                                     {!sceneInfoOpen ? (
-                                        <span data-testid="usd-scene-info-summary" className="min-w-0 truncate text-right text-[11px] text-gray-500">
+                                        <span data-testid="usd-scene-info-summary" className="min-w-0 truncate text-right text-[11px] text-fg-subtle">
                                             {[sceneFormat, sceneUpAxis ? sceneUpAxis.split(' ')[0] + ' up' : ''].filter(Boolean).join(', ') || rootBasename}
                                         </span>
                                     ) : null}
@@ -4197,28 +3907,28 @@
                                     aria-expanded={sceneFilesOpen}
                                     title={sceneFilesOpen ? 'Hide the loaded files' : 'List the loaded files'}
                                     onClick={() => setSceneFilesOpen((open) => !open)}
-                                    className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-gray-800/60"
+                                    className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-hover-subtle/60"
                                 >
                                     <span className={SCENE_ROW_LABEL + ' inline-flex items-center gap-1 shrink-0'}>
                                         <MtlxIcon name={sceneFilesOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />Files loaded
                                     </span>
-                                    <span data-testid="usd-scene-info-files" className="min-w-0 truncate text-right text-[11px] text-gray-300">
+                                    <span data-testid="usd-scene-info-files" className="min-w-0 truncate text-right text-[11px] text-fg-secondary">
                                         {sceneFilesText}
-                                        {sceneMissing.length ? <span className="text-amber-300/90">{', ' + sceneMissing.length + ' missing'}</span> : null}
+                                        {sceneMissing.length ? <span className="text-warning/90">{', ' + sceneMissing.length + ' missing'}</span> : null}
                                     </span>
                                 </button>
                                 {sceneFilesOpen && (
-                                    <div data-testid="usd-scene-info-files-list" className="mt-1 max-h-40 overflow-y-auto custom-scrollbar rounded-md border border-gray-700 bg-gray-900/60 py-1">
+                                    <div data-testid="usd-scene-info-files-list" className="mt-1 max-h-40 overflow-y-auto custom-scrollbar rounded-md border border-line bg-surface-sunken/60 py-1">
                                         {files.map((file) => (
                                             <div key={file.path} className="flex items-baseline justify-between gap-2 px-2 py-0.5 text-[11px]">
-                                                <span className="min-w-0 truncate font-mono text-gray-300" title={file.path}>{file.path}</span>
-                                                <span className="shrink-0 font-mono tabular-nums text-gray-500">{formatByteSize(sceneFileBytes(file))}</span>
+                                                <span className="min-w-0 truncate font-mono text-fg-secondary" title={file.path}>{file.path}</span>
+                                                <span className="shrink-0 font-mono tabular-nums text-fg-subtle">{formatByteSize(sceneFileBytes(file))}</span>
                                             </div>
                                         ))}
                                         {sceneMissing.map((asset) => (
                                             <div key={'missing:' + asset} data-missing="true" className="flex items-baseline justify-between gap-2 px-2 py-0.5 text-[11px]">
-                                                <span className="min-w-0 truncate font-mono text-gray-500" title={asset}>{asset}</span>
-                                                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-300/90">Missing</span>
+                                                <span className="min-w-0 truncate font-mono text-fg-subtle" title={asset}>{asset}</span>
+                                                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-warning/90">Missing</span>
                                             </div>
                                         ))}
                                     </div>
@@ -4226,7 +3936,7 @@
                             </div>
                         </div>
                     ) : (!busy && (IN_VSCODE || files.length > 0) ? (
-                        <div data-testid="usd-scene-info-empty" className="text-xs text-gray-500">No scene loaded</div>
+                        <div data-testid="usd-scene-info-empty" className="text-xs text-fg-subtle">No scene loaded</div>
                     ) : null)}
 
                     {sceneSlotButton ? (
@@ -4237,11 +3947,11 @@
                 </section>
 
                 {sceneTree && (
-                    <section data-testid="usd-scene-section-hierarchy" className="flex-1 flex flex-col gap-2 px-3.5 py-3 border-t border-gray-700">
+                    <section data-testid="usd-scene-section-hierarchy" className="flex-1 flex flex-col gap-2 px-3.5 py-3 border-t border-line">
                         <SidebarSectionHeader icon="list-details" title="Hierarchy" summary={objectCount.toLocaleString() + ' object' + (objectCount === 1 ? '' : 's')} testId="usd-scene-section-header" />
-                        <div className="flex-none rounded-md border border-gray-700 bg-gray-900 overflow-hidden focus-within:border-blue-500">
+                        <div className="flex-none rounded-md border border-line-control bg-surface-sunken overflow-hidden focus-within:border-focus">
                         <div className="relative h-[26px]">
-                            <MtlxIcon name="search" className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" />
+                            <MtlxIcon name="search" className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-subtle pointer-events-none" />
                             <input
                                 type="text"
                                 value={treeFilter}
@@ -4259,7 +3969,7 @@
                                 aria-label="Filter objects"
                                 data-testid="usd-scene-tree-filter"
                                 spellCheck={false}
-                                className="w-full h-full bg-transparent border-0 pl-7 pr-2 text-[11px] text-gray-300 placeholder-gray-500 focus:outline-none"
+                                className="w-full h-full bg-transparent border-0 pl-7 pr-2 text-[11px] text-fg-secondary placeholder-fg-subtle focus:outline-none"
                             />
                         </div>
                         <SceneTreeGroupSegments value={treeGroup} onChange={setTreeGroup} />
@@ -4283,9 +3993,9 @@
                                 onActivate={activateTreeNode}
                             />
                         ) : (
-                            <div className="flex-1 text-xs text-gray-500">No objects match the filter.</div>
+                            <div className="flex-1 text-xs text-fg-subtle">No objects match the filter.</div>
                         )}
-                        <div className="flex-none text-[11px] text-gray-500 truncate" title="Click a camera to look through it; while the material preview is open, a single click switches it.">
+                        <div className="flex-none text-[11px] text-fg-subtle truncate" title="Click a camera to look through it; while the material preview is open, a single click switches it.">
                             Double-click a row to preview its material.
                         </div>
                     </section>
@@ -4293,16 +4003,13 @@
             </div>
         );
 
-        // Context value, not a component type: rowDirtyFor/draftDiff are new
-        // every render, but that only re-renders the hoisted row consumers,
-        // it never remounts them (see the rowDirtyFor comment above).
-        return <SceneRowCtx.Provider value={{ rowDirtyFor, draftDiff, hasStage }}>
-        <div data-testid="usd-scene-viewer" className="absolute inset-0 overflow-hidden flex bg-gray-900">
+        return (
+        <div data-testid="usd-scene-viewer" className="absolute inset-0 overflow-hidden flex bg-surface-base">
             <span className="sr-only" data-testid="usd-scene-status">{status}</span>
             {dragOver && (
                 <div className="fixed left-0 right-0 bottom-0 top-14 z-40 pointer-events-none p-2 sm:p-4">
-                    <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
-                        <div className="flex items-center gap-2 text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
+                    <div className="w-full h-full rounded-xl border-4 border-dashed border-accent-base/70 bg-drop-target/40 flex items-center justify-center">
+                        <div className="flex items-center gap-2 text-accent-fg-bright text-lg font-semibold bg-hud/80 rounded-lg px-5 py-3">
                             <MtlxIcon name="file-upload" className="w-6 h-6" /> Drop to load
                         </div>
                     </div>
@@ -4310,9 +4017,9 @@
             )}
 
             {sidebarOpen && (
-                <div data-testid="usd-scene-sidebar" className="flex-none w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden">
-                    <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
-                        <span className="text-[13px] font-semibold text-gray-200">Scene Viewer</span>
+                <div data-testid="usd-scene-sidebar" className="flex-none w-80 max-w-[90%] flex flex-col bg-surface-base border-r border-line overflow-hidden">
+                    <div className="flex-none flex items-center px-3 py-2 border-b border-line">
+                        <span className="text-[13px] font-semibold text-fg">Scene Viewer</span>
                         <button
                             ref={knownIssuesBtnRef}
                             type="button"
@@ -4320,12 +4027,12 @@
                             aria-expanded={knownIssuesOpen}
                             title="Known issues"
                             onClick={() => setKnownIssuesOpen((o) => !o)}
-                            className="ml-2 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300 hover:bg-amber-600/40 hover:border-amber-500/70"
+                            className="ml-2 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-hue/10 border border-experimental-hue/40 text-experimental hover:bg-experimental-hue/20 hover:border-experimental-hue/60"
                         >Experimental</button>
                         <button
                             onClick={() => setSidebarOpen(false)}
                             title="Collapse the scene viewer panel"
-                            className="flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
+                            className="flex-none ml-auto text-fg-muted hover:text-fg-soft px-1 leading-none text-sm"
                         ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
                     </div>
                     {knownIssuesOpen && knownIssuesPos && ReactDOM.createPortal(
@@ -4333,12 +4040,12 @@
                             ref={knownIssuesPopRef}
                             data-testid="usd-scene-known-issues"
                             onPointerDown={(e) => e.stopPropagation()}
-                            style={{ position: 'fixed', zIndex: 9999, width: KNOWN_ISSUES_POPOVER_W, left: knownIssuesPos.left, top: knownIssuesPos.top }}
-                            className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden"
+                            style={{ position: 'fixed', zIndex: 9999, width: KNOWN_ISSUES_POPOVER_W, left: knownIssuesPos.left, top: knownIssuesPos.top, backgroundColor: HUD_POPOVER_BG }}
+                            className="backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden"
                         >
                             <div className="px-3 py-2.5 space-y-1.5">
-                                <div className="text-[12px] font-semibold text-gray-200">Known issues</div>
-                                <ul className="list-disc pl-4 space-y-1 text-[11px] text-gray-400">
+                                <div className="text-[12px] font-semibold text-fg">Known issues</div>
+                                <ul className="list-disc pl-4 space-y-1 text-[11px] text-fg-muted">
                                     {SCENE_KNOWN_ISSUES.map((issue, i) => <li key={i}>{issue}</li>)}
                                 </ul>
                             </div>
@@ -4352,20 +4059,20 @@
             {diagnosticsPopover}
 
             <div className="relative flex-1 min-w-0">
-                <div ref={containerRef} data-testid="usd-scene-canvas" className="absolute inset-0 bg-gray-900" aria-label="Rendered scene">
+                <div ref={containerRef} data-testid="usd-scene-canvas" className="absolute inset-0 bg-stage" aria-label="Rendered scene">
                     <LoadingOverlay
                         show={busy}
                         label={progressLabel + (progressText ? ' ' + progressText : '')}
                         fraction={fraction}
                         testId="usd-scene-progress"
-                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
-                        labelClassName="text-sm text-gray-300 animate-pulse"
+                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-veil/70"
+                        labelClassName="text-sm text-fg-secondary animate-pulse"
                         barWidthClass="w-56"
                     >
                         {progressDetail && (
                             <span
                                 data-testid="usd-scene-progress-detail"
-                                className="text-xs text-gray-500 truncate w-56 text-center"
+                                className="text-xs text-fg-subtle truncate w-56 text-center"
                             >{progressDetail}</span>
                         )}
                         <button type="button" data-testid="usd-scene-progress-cancel" onClick={cancel} className={HUD_PILL + ' pointer-events-auto'}>Cancel</button>
@@ -4373,7 +4080,7 @@
 
                     {IN_VSCODE && status === 'cancelled' && (
                         <div data-testid="usd-scene-cancelled" className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 text-center px-6">
-                            <div className="text-gray-400 text-sm">Loading cancelled</div>
+                            <div className="text-stage-fg-muted text-sm">Loading cancelled</div>
                             <button type="button" data-testid="usd-scene-reload" onClick={reloadFromHost} className={PILL_ACTION}>
                                 <MtlxIcon name="refresh" className="w-3.5 h-3.5" /> Reload
                             </button>
@@ -4393,7 +4100,7 @@
                                 }}
                             />
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6">
-                                <div className="text-gray-500 text-sm max-w-sm">
+                                <div className="text-stage-fg-subtle text-sm max-w-sm">
                                     Drop a USD stage (.usd, .usda, .usdc, .usdz), a glTF (.gltf, .glb) or an OBJ (.obj) and its referenced files
                                 </div>
                             </div>
@@ -4452,7 +4159,7 @@
                             <MtlxIcon name="settings-cog" className="w-4 h-4" />
                             {!hudCompact && <span>Render settings</span>}
                             {draftDirty ? (
-                                <span title="Unapplied changes" className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400 border border-gray-900" />
+                                <span title="Unapplied changes" className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-warning-marker border border-surface-base" />
                             ) : null}
                         </button>
                         <button
@@ -4494,25 +4201,25 @@
                         <div
                             ref={renderSettingsPopRef}
                             data-testid="usd-scene-render-settings-popover"
-                            className={(renderSettingsOpen ? '' : 'hidden ') + 'absolute z-30 top-11 left-2 flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden'}
-                            style={{ width: 'min(560px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)' }}
+                            className={(renderSettingsOpen ? '' : 'hidden ') + 'absolute z-30 top-11 left-2 flex flex-col backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden'}
+                            style={{ width: 'min(560px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)', backgroundColor: HUD_POPOVER_BG }}
                         >
-                            <div className="flex-none px-3 py-2 border-b border-gray-700">
+                            <div className="flex-none px-3 py-2 border-b border-line">
                                 <div className="flex items-center gap-2">
-                                    <span className="text-xs font-medium text-gray-300">Preset</span>
+                                    <span className="text-xs font-medium text-fg-secondary">Preset</span>
                                     <QualitySegments tone="panel" value={draftStagedOverrides.length ? 'custom' : (draftLevel ? draftLevel.id : 'default')}
                                         onChange={stageQualityLevel} disabled={busy || !!presetApplying} />
                                 </div>
-                                <div className="mt-1 text-[11px] text-gray-400">{qualitySummaryText()}</div>
+                                <div className="mt-1 text-[11px] text-fg-muted">{qualitySummaryText()}</div>
                             </div>
-                            <div className="flex-none flex items-center gap-1 px-2 pt-2 border-b border-gray-700 overflow-x-auto">
+                            <div className="flex-none flex items-center gap-1 px-2 pt-2 border-b border-line overflow-x-auto">
                                 {RENDER_TABS.map((tab) => (
                                     <button
                                         key={tab}
                                         type="button"
                                         onClick={() => setRenderTab(tab)}
                                         className={'shrink-0 px-2.5 py-1.5 text-[11px] font-medium rounded-t-md border-b-2 whitespace-nowrap '
-                                            + (renderTab === tab ? 'border-blue-500 text-blue-300' : 'border-transparent text-gray-400 hover:text-gray-200')}
+                                            + (renderTab === tab ? 'border-accent-base text-accent-fg-strong' : 'border-transparent text-fg-muted hover:text-fg-soft')}
                                     >
                                         {RENDER_TAB_LABELS[tab]}
                                     </button>
@@ -4524,8 +4231,8 @@
                                 {renderTab === 'effects' && renderEffectsTab()}
                                 {renderTab === 'geometry' && renderGeometryTab()}
                             </div>
-                            <div className="flex-none flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-700">
-                                <span className="text-[11px] text-gray-400 truncate">
+                            <div className="flex-none flex items-center justify-between gap-2 px-3 py-2 border-t border-line">
+                                <span className="text-[11px] text-fg-muted truncate">
                                     {presetApplying ? ('Applying ' + presetApplying) : footerHintText()}
                                 </span>
                                 <div className="flex items-center gap-1.5 shrink-0">
@@ -4548,7 +4255,7 @@
                         (3s, see showDoubleClickNote) so it never crowds the
                         status pill further down. */}
                     {doubleClickNote && (
-                        <div data-testid="usd-scene-dblclick-note" className="absolute bottom-[4.5rem] left-2 z-10 pointer-events-none px-2 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-[11px] text-amber-200">
+                        <div data-testid="usd-scene-dblclick-note" className="absolute bottom-[4.5rem] left-2 z-10 pointer-events-none px-2 py-1 rounded-full bg-warning-hue/10 border border-warning-hue/40 text-[11px] text-warning-text">
                             {doubleClickNote}
                         </div>
                     )}
@@ -4570,8 +4277,8 @@
                         say so plainly, the Materials group still lists them. */}
                     {handle && status === 'rendered' && meshes.length === 0 && (sceneTree ? sceneTree.materialCount : materials.length) > 0 && (
                         <div data-testid="usd-scene-empty-geometry" className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center px-6 pointer-events-none">
-                            <MtlxIcon name="info-circle" className="w-5 h-5 text-gray-500" />
-                            <div className="text-gray-400 text-sm max-w-sm">
+                            <MtlxIcon name="info-circle" className="w-5 h-5 text-fg-subtle" />
+                            <div className="text-fg-muted text-sm max-w-sm">
                                 {/* materials.length only counts stage.materials (mesh-bound,
                                     resolved documents); an unbound Material prim only shows
                                     up in sceneTree via stage.materialPrims, so use the same
@@ -4587,7 +4294,7 @@
                         if (mtlxVersion) segments.push('v' + mtlxVersion);
                         return (
                             <div data-testid="usd-scene-status-pill" className="absolute bottom-2 left-2 z-10 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90">
-                                <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-success shrink-0" />
                                 {segments.filter(Boolean).map((seg, i) => (
                                     <React.Fragment key={i}>
                                         {i > 0 && <span className="text-white/40">/</span>}
@@ -4616,10 +4323,10 @@
             </div>
 
             {status === 'cancelled' && !busy && !IN_VSCODE && (
-                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-gray-800/90 backdrop-blur border border-gray-600 text-gray-300 text-sm rounded-lg px-4 py-2 break-words shadow-lg">Cancelled</div>
+                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-hud-raised/90 backdrop-blur border border-hud-line text-hud-fg text-sm rounded-lg px-4 py-2 break-words shadow-lg">Cancelled</div>
             )}
             {error && (
-                <div role="alert" data-testid="usd-scene-error" className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
+                <div role="alert" data-testid="usd-scene-error" className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
             )}
 
             {recordOpen && (
@@ -4627,7 +4334,7 @@
                     viewRef={handleRef} baseName={rootBasename ? rootBasename.replace(/\.[^.]+$/, '') : 'usd-scene'} transparent={false} />
             )}
         </div>
-        </SceneRowCtx.Provider>;
+        );
     }
     window.SceneViewerApp = SceneViewerApp;
 })();

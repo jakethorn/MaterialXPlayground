@@ -17,7 +17,7 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 ## Rendering Engine
 
 - [in progress] **Displacement**: render MaterialX displacement in every tool by subdividing the mesh and evaluating the displacement shader per vertex, with one global on/off setting and a subdivision level.
-- [planned] **One renderer for both viewers**: the Material Viewer and the Scene Viewer still keep separate copies of some rendering code. Move it into shared modules so every feature (transparency, textures, environment, diagnostics) works the same in both.
+- [in progress] **One renderer for both viewers**: both viewers now run on one shared render session with one settings manifest (Performance, Default and Quality levels, listed per surface in `docs/RENDER-FEATURES.md`). Shipped: shared environment, display, transparency, post, ambient occlusion, effect files loaded on demand, Quality in the Material Viewer. Open follow-ups: shadows for the preview (a one-face shadow atlas plus a compile-time check), thickness and refraction at preview Quality, deciding which Quality effects join preview Default and giving them UI rows, Scene rollback when a rebuild fails to compile, UDIM with displacement on custom geometry in the preview, saving Scene settings inside VS Code, and separate displacement normal settings per surface.
 - [planned] **MaterialXView parity**: close the remaining differences to the reference MaterialX viewer: per-image sampler settings, document validation, mipmaps on float textures, extra vertex streams.
 - [planned] **Validate documents at load**: warn about duplicate inputs, unknown colorspaces and mix weights outside 0 to 1 instead of letting MaterialX drop them silently. Type mismatches are already reported.
 - [planned] **Correct transparency blending**: blend transparent layers in linear light instead of display space.
@@ -82,10 +82,12 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 
 ## Themes
 
-- [planned] **Theme colors**: move every color in the app, the embed and the integrations onto one set of named theme colors (surfaces, borders, text, accent, status), with today's dark look as the only theme. Nothing changes visually, checked with before and after screenshots of every view.
-- [planned] **Light mode**: a light theme with a light, dark or system switch that follows the operating system's setting live unless you override it, on the website, in the desktop app, in VS Code and in embeds (as a `theme` attribute). The 3D viewport backdrop stays a separate setting.
-- [idea] **Follow the VS Code theme**: the extension picks light, dark or high contrast from your VS Code theme and uses its colors by default, with a setting to override it.
-- [idea] **Theme presets and custom themes**: more built-in themes and your own color themes, shared by every integration.
+- [in progress] **Theme colors**: Step 1 of the theme work. Move every color in the app, the embed and the integrations onto one set of named theme colors (surfaces, borders, text, accent, status), with today's dark look as the only theme. Nothing changes visually, checked with before and after screenshots of every view.
+- [in progress] **Light mode**: Step 2 of the theme work. A light theme with a light, dark or system switch that follows the operating system's setting live unless you override it, on the website, in the desktop app, in VS Code and in embeds (as a `theme` attribute). The 3D viewport backdrop stays a separate setting.
+- [in progress] **Custom themes and presets**: Step 3 of the theme work. A theme can be a partial set of colors, and the missing ones are derived from a few seed colors (background, foreground and accent). A contrast check adjusts text and control colors that would be hard to read and rejects a theme it cannot fix. The built-in presets are made with the same engine: High contrast dark and High contrast light (WCAG AAA text), Dim and Paper, loaded only when chosen.
+- [in progress] **Follow the VS Code theme**: Step 4 of the theme work. A Match VS Code theme reads your editor's background, text and button colors, derives every other color from them with the same contrast check as the presets, and follows theme changes live. High contrast editor themes use the High contrast presets. It is on by default in the extension, with a setting to override it.
+- [in progress] **Theme editor and sharing**: Step 5 of the theme work. An in-app editor for your own themes, import and export, and theme settings shared across the website, the desktop app, VS Code and embeds. A custom theme is three base colors, optional per-color overrides and two sliders (contrast and tint), checked to WCAG AA when saved, and travels as a short theme code that you can paste into another app or into an embed's `theme` attribute.
+- [idea] **Theme cleanup and hardening**: Step 6 of the theme work. Retire the legacy `js/site-tokens.css` once the Learn pages use the theme colors; and commit the screenshot suite as a visual regression test for dark, light and preset themes, with checks in the real desktop app and real VS Code.
 
 ## Desktop App
 
