@@ -464,26 +464,3 @@ test('copy and paste of a code node keeps its name and entry function in step', 
   expect(pasted.fn).not.toBe('brighten');
   expect(new Set(nodes.map((n) => n.fn)).size).toBe(nodes.length);
 });
-
-test('a code node whose source does not compile shows its error on load', async ({ page, embedURL }) => {
-  test.skip(!HAS_MXSLC, 'vendor/mxslc not on disk (gitignored, run npm run vendor first)');
-  const broken = '[[nodegraph]]\nfloat broken(float a = 0.0) { return a + ; }';
-  await openGraphWith(page, embedURL, [
-    '<?xml version="1.0"?>',
-    '<materialx version="1.39">',
-    '  <nodegraph name="NG_broken" slxsource="' + attr(broken) + '" xpos="0" ypos="0">',
-    '    <input name="a" type="float" value="0" />',
-    '    <add name="var__0" type="float">',
-    '      <input name="in1" type="float" interfacename="a" />',
-    '      <input name="in2" type="float" value="0" />',
-    '    </add>',
-    '    <output name="out" type="float" nodename="var__0" />',
-    '  </nodegraph>',
-    '</materialx>',
-  ].join('\n'));
-  const node = card(page, 'g:NG_broken');
-  await node.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
-  // No Compile click: the error is there from the load.
-  await expect(node.locator('.mtlx-slx-error')).toContainText(/\S/, { timeout: 10000 });
-  await expect(node.locator('.slx-marks .slx-error')).toHaveCount(1);
-});

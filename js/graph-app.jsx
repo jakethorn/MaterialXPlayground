@@ -948,54 +948,6 @@
                 if (st) slxDraftsRef.current.set(name, st);
                 else slxDraftsRef.current.delete(name);
             };
-            // Code that did not compile when its document was loaded, by graph
-            // name: { source, text }. Checked once per load, after the graph is
-            // on screen, on a scratch document: the node and its undo history
-            // are left alone, and the card shows the error as a failed
-            // compile. slxCheckedRef caches by source, so an undo that
-            // re-parses the document doesn't compile again.
-            const slxLoadErrorsRef = React.useRef(new Map());
-            const slxCheckedRef = React.useRef(new Map());
-            const slxLoadErrorFor = (name, source) => {
-                const e = slxLoadErrorsRef.current.get(name);
-                return (e && e.source === source) ? { code: source, text: e.text } : null;
-            };
-            const patchSlxLoadError = (name, source, loadError) => setFlow((prev) => {
-                const id = 'g:' + name;
-                if (!prev.nodes.some((n) => n.id === id && n.data.slx && n.data.slx.source === source)) return prev;
-                return {
-                    edges: prev.edges,
-                    nodes: prev.nodes.map((n) => ((n.id === id && n.data.slx)
-                        ? Object.assign({}, n, { data: Object.assign({}, n.data, { slx: Object.assign({}, n.data.slx, { loadError }) }) })
-                        : n)),
-                };
-            });
-            React.useEffect(() => {
-                slxLoadErrorsRef.current = new Map();
-                if (!parsed || !slxCompilerAvailable()) return undefined;
-                const todo = docChildren(parsed.doc).filter(isSlxGraph)
-                    .map((g) => [mxElName(g), mxElAttr(g, SLX_SOURCE_ATTR)]);
-                if (!todo.length) return undefined;
-                let live = true;
-                const timer = setTimeout(async () => {
-                    const checked = slxCheckedRef.current;
-                    for (const [name, source] of todo) {
-                        let text = checked.get(source);
-                        if (text === undefined) {
-                            try { await compileSlxGraph(parsed.mx, source, name); text = null; } catch (e) { text = slxErrorText(e); }
-                            checked.set(source, text);
-                            if (checked.size > 64) checked.delete(checked.keys().next().value);
-                        }
-                        if (!live) return;
-                        if (text) {
-                            slxLoadErrorsRef.current.set(name, { source, text });
-                            patchSlxLoadError(name, source, { code: source, text });
-                        }
-                    }
-                }, 0);
-                return () => { live = false; clearTimeout(timer); };
-                // eslint-disable-next-line react-hooks/exhaustive-deps
-            }, [parsed]);
             // Points a code node's card at new code in place (no rebuild).
             const patchSlxCard = (name, source) => setFlow((prev) => {
                 const id = 'g:' + name;
@@ -4589,7 +4541,6 @@
                     onSlxCompile: slxEditable ? (name, src) => compileSlxNodeRef.current(name, src) : undefined,
                     onSlxDraft: setSlxDraft,
                     slxDraftFor,
-                    slxLoadErrorFor,
                     slxUnavailable: !slxEditable,
                 });
             };
@@ -6043,7 +5994,6 @@
                     return { ok: false, error: 'The node could not be updated: ' + errMsg(e) };
                 }
                 setSlxDraft(gName, null);
-                slxLoadErrorsRef.current.delete(gName);
                 // Renaming the entry function renames the graph to match,
                 // the compiler's own NG_<function>.
                 const newFn = slxFunctionForGraph(mxElName(compiled));
