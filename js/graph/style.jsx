@@ -180,6 +180,7 @@
                     // only scope, graph previews) the code shows read-only.
                     slx: d.slx ? Object.assign({}, d.slx, {
                         draft: o.slxDraftFor ? o.slxDraftFor(d.name, d.slx.source) : null,
+                        loadError: o.slxLoadErrorFor ? o.slxLoadErrorFor(d.name, d.slx.source) : null,
                         unavailable: !!o.slxUnavailable,
                     }) : undefined,
                     onSlxCompile: (d.slx && o.onSlxCompile) ? (src) => o.onSlxCompile(d.name, src) : undefined,

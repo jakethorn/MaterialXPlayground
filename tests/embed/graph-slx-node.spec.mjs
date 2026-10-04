@@ -429,3 +429,61 @@ test('an interface input\'s value set inside a code node\'s graph becomes the co
   await expect(editorOf(page, 'g:NG_brighten')).toHaveValue(/float brighten\(float in1 = 0\.0, float in2 = 0\.5, float gain = 4\.0\)/, { timeout: WAIT_TIMEOUT });
   expect(graphBody(await graphXml(page), 'NG_brighten')).toMatch(/<input name="gain" type="float" value="4" \/>/);
 });
+
+// Names of every nodegraph in the document, and the entry function each one's
+// slxsource defines (the first function after [[nodegraph]]).
+const codeNodes = (xml) => Array.from(xml.matchAll(/<nodegraph name="([^"]+)"[^>]*>/g)).map((m) => {
+  const src = slxSource(xml, m[1]);
+  const fn = src ? (/(?:^|\n)[^\n(]*?\b(\w+)\s*\(/.exec(src.replace(/^\[\[nodegraph\]\]\n?/, '')) || [])[1] : null;
+  return { name: m[1], src, fn };
+}).filter((n) => n.src !== null);
+
+test('copy and paste of a code node keeps its name and entry function in step', async ({ page, embedURL }) => {
+  test.skip(!HAS_MXSLC, 'vendor/mxslc not on disk (gitignored, run npm run vendor first)');
+  await openGraphWith(page, embedURL, WITH_NODE);
+  const node = card(page, 'g:NG_brighten');
+  await node.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+
+  // Select the card by its header (not its code editor), then the app's
+  // Ctrl+C / Ctrl+V (graph-app.jsx, stage keydown handler).
+  await node.locator('span', { hasText: /^in2$/ }).click();
+  await focusStage(page);
+  await page.keyboard.press('Control+C');
+  await page.keyboard.press('Control+V');
+
+  await expect.poll(async () => codeNodes(await graphXml(page)).length, { timeout: 10000 }).toBe(2);
+  const nodes = codeNodes(await graphXml(page));
+  const original = nodes.find((n) => n.name === 'NG_brighten');
+  const pasted = nodes.find((n) => n.name !== 'NG_brighten');
+  // The original is untouched.
+  expect(original.src).toBe(CODE);
+  // The pasted graph keeps an slxsource whose entry function matches its
+  // own name (NG_<fn>), and no two code nodes define the same function.
+  expect(pasted.fn).toBeTruthy();
+  expect(pasted.name).toBe('NG_' + pasted.fn);
+  expect(pasted.fn).not.toBe('brighten');
+  expect(new Set(nodes.map((n) => n.fn)).size).toBe(nodes.length);
+});
+
+test('a code node whose source does not compile shows its error on load', async ({ page, embedURL }) => {
+  test.skip(!HAS_MXSLC, 'vendor/mxslc not on disk (gitignored, run npm run vendor first)');
+  const broken = '[[nodegraph]]\nfloat broken(float a = 0.0) { return a + ; }';
+  await openGraphWith(page, embedURL, [
+    '<?xml version="1.0"?>',
+    '<materialx version="1.39">',
+    '  <nodegraph name="NG_broken" slxsource="' + attr(broken) + '" xpos="0" ypos="0">',
+    '    <input name="a" type="float" value="0" />',
+    '    <add name="var__0" type="float">',
+    '      <input name="in1" type="float" interfacename="a" />',
+    '      <input name="in2" type="float" value="0" />',
+    '    </add>',
+    '    <output name="out" type="float" nodename="var__0" />',
+    '  </nodegraph>',
+    '</materialx>',
+  ].join('\n'));
+  const node = card(page, 'g:NG_broken');
+  await node.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  // No Compile click: the error is there from the load.
+  await expect(node.locator('.mtlx-slx-error')).toContainText(/\S/, { timeout: 10000 });
+  await expect(node.locator('.slx-marks .slx-error')).toHaveCount(1);
+});

@@ -109,7 +109,12 @@
             const [draft, setDraft] = React.useState(() => (slx.draft ? slx.draft.draft : slx.source));
             // The last compile that failed, { code, text }: the message, and
             // the code its line numbers point into, which gets squiggled.
-            const [failed, setFailed] = React.useState(() => (slx.draft ? slx.draft.failed : null));
+            const [failed, setFailed] = React.useState(() => (slx.draft ? slx.draft.failed : (slx.loadError || null)));
+            // The code failed to compile when its document loaded (checked
+            // after the card first rendered): shown like a failed compile.
+            React.useEffect(() => {
+                if (slx.loadError && draft === slx.source) setFailed((f) => f || slx.loadError);
+            }, [slx.loadError]);
             const [busy, setBusy] = React.useState(false);
             // A ref, not `busy`: a blur and a click can both ask within one render.
             const busyRef = React.useRef(false);
