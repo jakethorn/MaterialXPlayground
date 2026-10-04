@@ -174,6 +174,9 @@ const ALLOW = [
   { key: "mtlx_light_limit", file: "js/mtlx-engine.js", reason: "debug kill switch, not a user-facing setting" },
   { key: "mtlxDebugShaders", file: "js/mtlx-engine.js", reason: "debug flag" },
   { key: "mtlxDebugShaders", file: "js/usd-scene-app.jsx", reason: "debug flag" },
+  { key: "mtlxTheme", file: "js/shared/theme.js", reason: "site theme preference (light/dark/system), UI chrome only, not a render setting" },
+  { key: "mtlxCustomThemes", file: "js/shared/theme.js", reason: "label cache of saved custom themes, read before theme-custom.js loads; UI chrome only" },
+  { key: "mtlxCustomThemes", file: "js/shared/theme-custom.js", reason: "saved custom theme codes (web store; Electron and VS Code persist through their host hook), UI chrome only, not a render setting" },
   { key: "mtlxPerfLog", file: "js/mtlx-engine.js", reason: "debug flag" },
   { key: "mtlxPerfLog", file: "js/shell.jsx", reason: "debug flag" },
   { key: "mtlxPerfLog", file: "js/graph/model.jsx", reason: "debug flag" },
@@ -433,8 +436,10 @@ function checkRenderFeaturesDoc() {
 // Raised for P4c: createTextureSession (js/mtlx-engine.js, precompiled into
 // embed/gen/mtlx-engine.js) adds the refcounted-source/wrapper/idle-LRU
 // texture pipeline and the exact:true resolvers.
+// Raised for the light theme: palette and runtime (js/shared/theme*.js, js/gen/theme-tokens.css), embed theme handling.
+// Raised for the code-syntax-* theme tokens (+2.7 KB in theme-tokens.js and theme-tokens.css).
 // Raise deliberately (with a comment on why) if the payload grows further.
-const EMBED_PAYLOAD_BUDGET = 2350595;
+const EMBED_PAYLOAD_BUDGET = 2400000;
 
 const EAGER_EMBED_FILES = [
   "vendor/react/react.production.min.js",
@@ -451,6 +456,9 @@ const EAGER_EMBED_FILES = [
   "vendor/three/OBJLoader.js",
   "vendor/three/OrbitControls.js",
   "js/mtlx-assets.js",
+  "js/shared/theme-tokens.js",
+  "js/shared/theme.js",
+  "js/gen/theme-tokens.css",
   "js/shared/ui-commons.js",
   "js/shared/gif-encoder.js",
   "js/shared/mesh-subdivision.js",
@@ -464,6 +472,7 @@ const EAGER_EMBED_FILES = [
   "embed/gen/mtlx-engine.js",
   "embed/gen/mtlx-ui.js",
   "embed/gen/viewer-app.js",
+  "embed/gen/theme-utilities.css",
   "embed/embed-boot.js",
 ];
 

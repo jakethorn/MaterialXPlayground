@@ -162,7 +162,20 @@
     // Applies one theme param, or reports+skips it (leaving whatever was
     // there before, default or previously-applied) if it fails validation.
     function applyTheme(name, value) {
-        if (value == null || value === '') return;
+        if (name === 'theme') {
+            // Unknown or cleared values behave as dark, the default; auto follows the OS. Any registry id is accepted
+            // except 'vscode' (webview-only); a theme code (mtlx2.) passes through and theme.js decodes it strictly.
+            var raw = String(value == null ? '' : value).trim();
+            var t = raw.toLowerCase();
+            var known = window.MtlxTheme && window.MtlxTheme.list ? window.MtlxTheme.list() : [{ id: 'dark' }, { id: 'light' }];
+            var pref = /^mtlx\d+\./.test(raw) ? raw : t === 'auto' ? 'system' : (t !== 'vscode' && known.some(function (x) { return x.id === t; }) ? t : 'dark');
+            if (window.MtlxTheme && window.MtlxTheme.setPreference) window.MtlxTheme.setPreference(pref, { persist: false });
+            return;
+        }
+        if (value == null || value === '') {
+            document.documentElement.style.removeProperty(THEME_VARS[name]);
+            return;
+        }
         if (!themeValueOk(name, value)) {
             post('error', { message: 'Invalid `' + name + '` value "' + value + '" rejected (failed CSS validation).' });
             return;
@@ -673,7 +686,7 @@
     // as the initial query-param pass, so a bad live value still can't
     // reach the stylesheet.
     function handleSetTheme(msg) {
-        if (!THEME_VARS.hasOwnProperty(msg.name)) return;
+        if (msg.name !== 'theme' && !THEME_VARS.hasOwnProperty(msg.name)) return;
         applyTheme(msg.name, msg.value);
     }
 
