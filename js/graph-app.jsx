@@ -787,6 +787,39 @@
             const previewViewRef = React.useRef(null);
             const scopeRef = React.useRef('');
             scopeRef.current = scope;
+            // ---- Node thumbnails (js/graph/thumb-client.js). One client per mount,
+            // created on first use; it spawns no worker until something is enabled.
+            const previewBusyRef = React.useRef(false);
+            const thumbClientRef = React.useRef(null);
+            const thumbStoreRef = React.useRef(null);
+            const thumbCardsRef = React.useRef([]);
+            const thumbEnterRef = React.useRef(true); // next setScope counts as "entered"
+            const thumbKeepRef = React.useRef(false); // set by undo/redo and external reload
+            const [thumbProgress, setThumbProgress] = React.useState(null);
+            const [, setThumbRev] = React.useState(0);
+            const getThumbs = () => {
+                if (!thumbClientRef.current && window.MtlxThumbClient && window.MtlxThumbScheduler) {
+                    thumbClientRef.current = window.MtlxThumbClient.create({
+                        getPreviewBusy: () => !!((previewViewRef.current && previewViewRef.current.__outdated) || previewBusyRef.current),
+                        getCameraActive: () => !!(previewViewRef.current && previewViewRef.current.isInteracting && previewViewRef.current.isInteracting()),
+                        isViewActive: () => !!activeRef.current,
+                        onProgress: (p) => setThumbProgress(p ? { done: p.done, total: p.total } : null),
+                    });
+                    const c = thumbClientRef.current;
+                    thumbStoreRef.current = { subscribe: (key, fn) => c.subscribe(key, fn), get: (key) => c.get(key) };
+                }
+                return thumbClientRef.current;
+            };
+            React.useEffect(() => () => {
+                if (thumbClientRef.current) { thumbClientRef.current.dispose(); thumbClientRef.current = null; }
+            }, []);
+            // A new document starts with no overrides; its text and files are fed again right away.
+            const resetThumbSession = () => {
+                const c = thumbClientRef.current;
+                if (!c) return;
+                c.resetSession();
+                c.noteFiles(fileMapRef.current);
+            };
             // Set right before setScope('') on scope EXIT (e.g. 'g:' +
             // the nodegraph just left) so the flow-rebuild effect can
             // select/highlight it instead of wiping the selection. A code
@@ -1083,6 +1116,7 @@
                 // same `xml` value, so it's cheap (no extra serialize).
                 noteDocXml(xml);
                 noteSlxDocXml(xml);
+                if (thumbClientRef.current) thumbClientRef.current.noteXml(xml);
                 const u = undoStateRef.current;
                 u.stack.length = u.index + 1; // drop any redo branch
                 if (u.savedIndex > u.index) u.savedIndex = -1;
@@ -1116,6 +1150,8 @@
             };
 
             const markDirty = (undoTag) => {
+                // Thumbnails read the document themselves once the edit settles, ahead of the undo snapshot.
+                if (thumbClientRef.current) thumbClientRef.current.noteEdit(() => serializeDocXml(parsedRef.current));
                 setDirtyRev((r) => r + 1);
                 pushUndoSnapshot(undoTag || null);
             };
@@ -1134,6 +1170,7 @@
                     // start fresh, or a same-named node in another file would
                     // silently inherit the previous one's visibility.
                     restorePortModesRef.current = capturePortModes();
+                    thumbKeepRef.current = true;
                     setParsed(p);
                     setScope(nextScope);
                     setDocRev((r) => r + 1);
@@ -1142,6 +1179,7 @@
                     // (restoringRef suppresses it), so hand the xml here.
                     noteDocXml(entry.xml);
                     noteSlxDocXml(entry.xml);
+                    if (thumbClientRef.current) thumbClientRef.current.noteXml(entry.xml);
                     const u = undoStateRef.current;
                     if (u.index === u.savedIndex) markSaved();
                     else {
@@ -1466,6 +1504,16 @@
             // version badge right away).
             React.useEffect(() => { getMxEnv().catch(() => {}); }, []);
 
+            // Thumbnail feed: the document text the parse used, and the texture files.
+            React.useEffect(() => {
+                const c = getThumbs();
+                if (c && parsed && parsed.sourceText != null) c.noteXml(parsed.sourceText);
+            }, [parsed]);
+            React.useEffect(() => {
+                const c = getThumbs();
+                if (c) c.noteFiles(fileMap);
+            }, [fileMap]);
+
             // Set right before setParsed in externalReload so the two
             // "parsed changed" reset effects each skip one run — an
             // external VS Code reload of the SAME doc keeps the selection/pin.
@@ -1642,6 +1690,7 @@
                     // original .mxsl name.
                     const mxslOrigin = mxslOriginFor(path);
                     p.label = mxslOrigin ? mxslOrigin.filename : path;
+                    resetThumbSession();
                     setParsed(p);
                     // Consume the view-only handoff flag here, the single
                     // point where a newly loaded document actually becomes
@@ -1705,6 +1754,7 @@
                     setMxslOriginal(null);
                     resetCodeView();
                     slxSyncedRef.current = new Map();
+                    resetThumbSession();
                     setParsed(p);
                     setScope('');
                     setStatus(null);
@@ -1768,6 +1818,7 @@
                     // below: a stale Original from the OLD session must not
                     // survive into the new one.
                     mxslOriginalsRef.current = mxslOrigins;
+                    resetThumbSession();
                     setParsed(null);
                     setScope('');
                     setFlow({ nodes: [], edges: [] });
@@ -1910,6 +1961,7 @@
                 // SAME doc keeps the current selection/pin, unlike other setParsed sites.
                 softReloadSkipRef.current.preview = true;
                 softReloadSkipRef.current.selection = true;
+                thumbKeepRef.current = true;
 
                 setParsed(p);
                 if (nextScope !== scopeRef.current) setScope(nextScope);
@@ -2247,6 +2299,11 @@
                 }
                 const switchedScope = cameFrom.parsed === parsed
                     && cameFrom.scope !== scope;
+                // Entering = a scope change, a new document or the first build. Undo/redo and
+                // external reload on the same scope keep the previous "more than 50 cards" call.
+                const keepThumbs = thumbKeepRef.current;
+                thumbKeepRef.current = false;
+                thumbEnterRef.current = !(keepThumbs && cameFrom.parsed && cameFrom.scope === scope);
                 // Consume the pending post-scope-exit selection (set by
                 // Backspace/breadcrumb) — mark it .selected on the freshly
                 // built flow, the same way focusNode() does.
@@ -2349,6 +2406,9 @@
                     inputs: (n.data && n.data.inputs) || [],
                     outputs: (n.data && n.data.outputs) || [],
                     slx: n.data && n.data.slx, // a code node's wider, taller card
+                    thumb: !!(n.data && n.data.thumb),
+                    thumbSize: n.data && n.data.thumbSize,
+                    value: n.data && n.data.value,
                     pos: null, // ignore stored editor positions: full re-layout
                 }));
                 const posOf = layoutScope(descsLike, flow.edges);
@@ -2363,6 +2423,18 @@
                 };
                 restackByPrefix('i:');
                 restackByPrefix('o:');
+                // The restack swaps y between cards of different heights (thumbnails), so push
+                // down anything that now overlaps the card above it in its column.
+                const columns = {};
+                for (const d of descsLike) if (posOf[d.id]) (columns[posOf[d.id].x] = columns[posOf[d.id].x] || []).push(d);
+                for (const col of Object.values(columns)) {
+                    col.sort((m, k) => posOf[m.id].y - posOf[k.id].y);
+                    let floor = -Infinity;
+                    for (const d of col) {
+                        if (posOf[d.id].y < floor) posOf[d.id] = Object.assign({}, posOf[d.id], { y: floor });
+                        floor = posOf[d.id].y + nodeHeight(d) + 28;
+                    }
+                }
 
                 const c = scopeContainer();
                 if (c && parsed) {
@@ -2824,6 +2896,7 @@
             // uniforms (no rebuild); any non-match falls back to a full
             // rebuild — never wrong-but-fast.
             const tryFastUniformUpdate = (nodeId, inputName, newValue, type) => {
+                if (thumbClientRef.current) thumbClientRef.current.noteActivity();
                 const view = previewViewRef.current;
                 // view.__outdated: an in-place material swap (APPLY path
                 // in graph/preview.jsx) is in flight — bail and let the
@@ -4515,6 +4588,110 @@
             // Silent, since the amber "View only" strip already explains the lock.
             const guardLocked = () => scopeLockedRef.current;
 
+            // ---- Node thumbnails: cards, in-place toggles, visible set ----
+            const thumbMenuKeyRef = React.useRef('');
+            // Registers every card of the scope (the 50-card rule counts all of them) and
+            // decides the enable state before toFlow lays the cards out. Targets are built
+            // exactly like the idle-warm walk's.
+            const prepThumbs = (descs) => {
+                const c = getThumbs();
+                if (!c) return;
+                const sc = scopeRef.current;
+                const origin = scopeOriginRef.current;
+                const hasOrigin = !!(origin && origin.graph === sc);
+                const cards = descs.map((d) => ({
+                    id: d.id, eligible: thumbEligible(d), kind: thumbKind(d) || 'pattern', x: 0, y: 0,
+                    target: { id: d.id, scope: sc, originId: hasOrigin ? origin.id : null, originScope: hasOrigin ? origin.scope : null },
+                }));
+                thumbCardsRef.current = cards;
+                const entered = thumbEnterRef.current;
+                thumbEnterRef.current = false;
+                c.setScope(sc, cards, { entered });
+                const ms = c.menuState(sc);
+                const sm = c.shaderMenuState(sc);
+                const mk = [ms.checked, ms.big, ms.disabled, ms.title, sm.checked, sm.disabled, sm.title].join('|');
+                if (mk !== thumbMenuKeyRef.current) { thumbMenuKeyRef.current = mk; setThumbRev((r) => r + 1); }
+            };
+            const thumbFor = (d) => {
+                const c = thumbClientRef.current;
+                if (!c) return null;
+                const kind = thumbKind(d);
+                const eligible = !!kind;
+                return {
+                    on: c.isEnabled(scopeRef.current, d.id, eligible, kind || 'pattern'), eligible, kind, size: c.sizeOf(scopeRef.current, d.id),
+                    key: c.keyOf(scopeRef.current, d.id), store: thumbStoreRef.current,
+                };
+            };
+            // After a menu or override change: flips data.thumb on the affected cards only.
+            // Positions are kept (no relayout), so a card that grows may sit close to its neighbour.
+            const patchThumbCards = () => {
+                const c = thumbClientRef.current;
+                if (!c) return;
+                const sc = scopeRef.current;
+                setFlow((prev) => {
+                    let changed = false;
+                    const nodes = prev.nodes.map((n) => {
+                        if (!n.data || n.data.thumbElig === undefined) return n;
+                        const on = !!n.data.thumbElig && c.isEnabled(sc, n.id, true, n.data.thumbKind || 'pattern');
+                        const size = c.sizeOf(sc, n.id);
+                        if (on === !!n.data.thumb && size === n.data.thumbSize) return n;
+                        changed = true;
+                        return Object.assign({}, n, { data: Object.assign({}, n.data, { thumb: on, thumbSize: size }) });
+                    });
+                    return changed ? { edges: prev.edges, nodes } : prev;
+                });
+                setThumbRev((r) => r + 1);
+            };
+            // Cards intersecting the viewport render first.
+            const updateThumbVisible = () => {
+                const c = thumbClientRef.current;
+                if (!c) return;
+                const nodes = flowRef.current.nodes;
+                const inst = rfInstRef.current;
+                const host = canvasHostRef.current;
+                if (!inst || !host || typeof inst.getViewport !== 'function') { c.setVisible(nodes.map((n) => n.id)); return; }
+                const vp = inst.getViewport();
+                const x0 = -vp.x / vp.zoom, y0 = -vp.y / vp.zoom;
+                const x1 = x0 + host.clientWidth / vp.zoom, y1 = y0 + host.clientHeight / vp.zoom;
+                c.setVisible(nodes.filter((n) => n.position
+                    && n.position.x + (n.width || NODE_W) > x0 && n.position.x < x1
+                    && n.position.y + (n.height || nodeHeight(n.data)) > y0 && n.position.y < y1).map((n) => n.id));
+            };
+            const toggleThumbSizeMenu = () => {
+                const c = getThumbs();
+                if (!c) return;
+                c.toggleMenuSize();
+                patchThumbCards();
+            };
+            const toggleShaderThumbsMenu = () => {
+                const c = getThumbs();
+                if (!c) return;
+                c.toggleShaderMenu();
+                patchThumbCards();
+            };
+            const toggleThumbsMenu = () => {
+                const c = getThumbs();
+                if (!c) return;
+                c.toggleMenu(scopeRef.current);
+                patchThumbCards();
+            };
+            const thumbActivity = () => { if (thumbClientRef.current) thumbClientRef.current.noteActivity(); };
+            const thumbCanvasIdle = () => {
+                if (thumbClientRef.current) thumbClientRef.current.noteCanvasIdle();
+                updateThumbVisible();
+            };
+            // Keeps the cards' sort positions and the visible set current without a re-registration.
+            React.useEffect(() => {
+                const c = thumbClientRef.current;
+                if (!c || !flow.nodes.some((n) => n.data && n.data.thumb)) return;
+                const byId = new Map(flow.nodes.map((n) => [n.id, n]));
+                for (const card of thumbCardsRef.current) {
+                    const n = byId.get(card.id);
+                    if (n && n.position) { card.x = n.position.x; card.y = n.position.y; }
+                }
+                updateThumbVisible();
+            }, [flow]);
+
             // Shared toFlow() options, built fresh for every rebuild site
             // (7 of them) so a locked (library) scope always renders inert
             // cards: no rename affordance, no port-add popover. Navigation
@@ -4529,6 +4706,8 @@
                     onTogglePorts: (id) => togglePortsRef.current(id),
                     // Ctrl/Cmd+click on a library call in a ShadingLanguageX node.
                     onOpenNodeDocs: (category) => openCategoryDocsRef.current(category),
+                    thumbPrep: prepThumbs,
+                    thumbFor,
                 };
                 if (locked) return base;
                 const slxEditable = slxCompilerAvailable();
@@ -5360,6 +5539,10 @@
                 if (keptModes[flowId] !== undefined) {
                     keptModes[kind + newName] = keptModes[flowId];
                     delete keptModes[flowId];
+                }
+                if (thumbClientRef.current) {
+                    thumbClientRef.current.remapNode(scope, flowId, kind + newName);
+                    if (kind === 'g:') thumbClientRef.current.remapScope(oldName, newName);
                 }
                 const rebuilt = toFlow(descs, edges, flowOpts(keptModes));
                 setFlow(rebuilt);
@@ -6832,7 +7015,21 @@
             // createDefinition: promotes an existing INSTANCE nodegraph to
             // a nodedef plus a renamed implementation graph, then replaces
             // the original graph in place with an instance node of it.
-            const promoteNodegraph = (gName, nodeName) => {
+            // The graph's real outputs (types) and input count, as promotion
+            // maps them onto the nodedef. Feeds both the panel and promoteNodegraph.
+            const nodegraphInterface = (g) => ({
+                outputs: vecToArray(mxSafe(() => g.getOutputs(), []))
+                    .filter((o) => mxElName(o).indexOf('__pv_') !== 0)
+                    .map((o) => ({ name: mxElName(o), type: mxElType(o) })),
+                inputCount: vecToArray(mxSafe(() => g.getInputs(), [])).length,
+            });
+            const promotionNamesFor = (doc, g, gName, nodeName) => computePromotionNames({
+                nodeName, gName,
+                outputTypes: nodegraphInterface(g).outputs.map((o) => o.type),
+                childNames: docChildren(doc).map((el) => mxElName(el)),
+            });
+
+            const promoteNodegraph = (gName, nodeName, extra) => {
                 if (!parsed) return;
                 if (scope !== '') {
                     setError('Converting is only available at the document root.');
@@ -6856,9 +7053,8 @@
                         // 1: snapshot everything BEFORE any mutation. The
                         // input elements themselves (`el`) are still read
                         // from below, so they must survive until step 3.
-                        const outputsSnapshot = vecToArray(mxSafe(() => g.getOutputs(), []))
-                            .filter((o) => mxElName(o).indexOf('__pv_') !== 0)
-                            .map((o) => ({ name: mxElName(o), type: mxElType(o) }));
+                        const outputsSnapshot = nodegraphInterface(g).outputs;
+                        const names = promotionNamesFor(doc, g, gName, trimmed);
                         const inputsSnapshot = vecToArray(mxSafe(() => g.getInputs(), [])).map((p) => ({
                             name: mxElName(p), type: mxElType(p), el: p,
                             nodename: mxElAttr(p, 'nodename'), nodegraph: mxElAttr(p, 'nodegraph'),
@@ -6869,12 +7065,13 @@
                         // 2: the nodedef, typed off the first output (or
                         // color3 when the graph has none yet); extra
                         // outputs and a missing default "out" reconcile after.
-                        const outType = outputsSnapshot.length > 1 ? 'multioutput'
-                            : (outputsSnapshot[0] ? outputsSnapshot[0].type : 'color3');
-                        const ndBase = 'ND_' + trimmed + '_' + (outType === 'multioutput' ? 'multi' : outType);
-                        const ndName = mxSafe(() => doc.createValidChildName(ndBase), ndBase);
+                        const { outType, ndName } = names;
                         const def = mxSafe(() => doc.addNodeDef(ndName, outputsSnapshot[0] ? outputsSnapshot[0].type : 'color3', trimmed), null);
                         if (!def) { setError('Could not create the node definition.'); return; }
+                        const ndGroup = extra && extra.nodegroup ? String(extra.nodegroup) : '';
+                        const ndDoc = extra && extra.doc ? String(extra.doc).trim() : '';
+                        if (ndGroup) mxSafe(() => { def.setNodeGroup(ndGroup); return true; }, false);
+                        if (ndDoc) mxSetAttr(def, 'doc', ndDoc);
                         for (const o of outputsSnapshot) {
                             const existing = mxSafe(() => def.getOutput(o.name), null);
                             if (existing) {
@@ -6910,15 +7107,13 @@
                         mxSafe(() => { g.setNodeDefString(ndName); return true; }, false);
                         // A definition's implementation is no longer a code node.
                         mxRemoveAttr(g, SLX_SOURCE_ATTR);
-                        const ngBase = 'NG_' + trimmed + '_' + (outType === 'multioutput' ? 'multi' : outType);
-                        const newGName = mxSafe(() => doc.createValidChildName(ngBase), ngBase);
-                        mxSafe(() => { g.setName(newGName); return true; }, false);
+                        mxSafe(() => { g.setName(names.ngName); return true; }, false);
 
                         // 5: a root instance takes the OLD graph name (now
                         // free) and its xpos/ypos, then re-authors every
                         // connection the graph's boundary inputs used to carry.
-                        const instName = mxSafe(() => doc.createValidChildName(gName), gName);
-                        const inst = mxSafe(() => doc.addNode(trimmed, instName, outType), null);
+                        const instName = names.instName;
+                        const inst =mxSafe(() => doc.addNode(trimmed, instName, outType), null);
                         if (!inst) { setError('Could not create the instance node.'); return; }
                         mxSafe(() => { inst.setNodeDefString(ndName); return true; }, false);
                         const gxpos = mxElAttr(g, 'xpos');
@@ -7491,8 +7686,8 @@
                 (nodes || []).forEach((n) => { if (n && n.position) m[n.id] = { x: n.position.x, y: n.position.y }; });
                 return m;
             };
-            const onNodeDragStart = (evt, node, nodes) => { dragStartPosRef.current = dragPositions(nodes && nodes.length ? nodes : [node]); };
-            const onSelectionDragStart = (evt, nodes) => { dragStartPosRef.current = dragPositions(nodes); };
+            const onNodeDragStart = (evt, node, nodes) => { thumbActivity(); dragStartPosRef.current = dragPositions(nodes && nodes.length ? nodes : [node]); };
+            const onSelectionDragStart = (evt, nodes) => { thumbActivity(); dragStartPosRef.current = dragPositions(nodes); };
             const pointerTravel = (evt) => {
                 const down = pointerDownRef.current;
                 const p = evt && evt.changedTouches && evt.changedTouches[0] ? evt.changedTouches[0] : evt;
@@ -7520,6 +7715,7 @@
             };
             const onSelectionDragStopMoved = (evt, nodes) => { if (dragMoved(evt, nodes)) onNodeDragStop(); };
             const onNodeDragStop = () => {
+                thumbActivity();
                 if (scopeLockedRef.current) return;
                 const c = scopeContainer();
                 if (!c || !parsed) return;
@@ -7898,6 +8094,59 @@
             React.useEffect(() => {
                 if (displayNode) setPromoteNameDraft(defaultDefinitionNodeName(displayNode.data.name));
             }, [displayNode && displayNode.id]);
+            // Convert to Node Def panel: closed until the button is pressed.
+            const [promoteOpen, setPromoteOpen] = React.useState(false);
+            const [promoteGroup, setPromoteGroup] = React.useState('');
+            const [promoteDocText, setPromoteDocText] = React.useState('');
+            const [promoteLib, setPromoteLib] = React.useState(null);
+            const promoteBtnRef = React.useRef(null);
+            const promoteNameRef = React.useRef(null);
+            React.useEffect(() => {
+                setPromoteOpen(false); setPromoteGroup(''); setPromoteDocText('');
+            }, [displayNode && displayNode.id]);
+            // Library node names and node groups, from the memoized stdlib catalog.
+            React.useEffect(() => {
+                if (!promoteOpen || promoteLib) return;
+                let live = true;
+                buildNodeCatalog().then((cat) => {
+                    if (!live) return;
+                    const groups = [];
+                    cat.forEach((c) => { if (c.group && groups.indexOf(c.group) === -1) groups.push(c.group); });
+                    setPromoteLib({ nodes: new Set(cat.map((c) => c.category)), groups: groups.sort() });
+                }).catch(() => {});
+                return () => { live = false; };
+            }, [promoteOpen, promoteLib]);
+            React.useEffect(() => {
+                if (!promoteOpen || !promoteNameRef.current) return;
+                promoteNameRef.current.focus();
+                promoteNameRef.current.select();
+                const panel = promoteNameRef.current.closest('[data-testid="promote-panel"]');
+                if (panel && panel.scrollIntoView) panel.scrollIntoView({ block: 'nearest' });
+            }, [promoteOpen]);
+            const promoteInfo = React.useMemo(() => {
+                if (!promoteOpen || !parsed || !displayNode) return null;
+                const g = docChild(parsed.doc, displayNode.data.name);
+                if (!g) return null;
+                const iface = nodegraphInterface(g);
+                const name = promoteNameDraft.trim();
+                const error = promoteNameError(name, isValidMtlxName, describeInvalidMtlxName);
+                const localNodes = new Set((docCatalog || []).map((c) => c.category));
+                return {
+                    error,
+                    warning: error ? '' : promoteShadowWarning(name, promoteLib && promoteLib.nodes, localNodes),
+                    names: error ? null : promotionNamesFor(parsed.doc, g, displayNode.data.name, name),
+                    summary: promoteInterfaceSummary(iface.inputCount, iface.outputs.map((o) => o.type)),
+                };
+            }, [promoteOpen, promoteNameDraft, promoteLib, parsed, docRev, docCatalog, displayNode && displayNode.id]);
+            const closePromote = (refocus) => {
+                setPromoteOpen(false);
+                if (refocus) setTimeout(() => { if (promoteBtnRef.current) promoteBtnRef.current.focus(); }, 0);
+            };
+            const confirmPromote = () => {
+                if (!promoteInfo || promoteInfo.error || !displayNode) return;
+                promoteNodegraph(displayNode.data.name, promoteNameDraft, { nodegroup: promoteGroup, doc: promoteDocText });
+                setPromoteOpen(false);
+            };
             // Edges leaving the displayed element — feeds the Downstream
             // Connections group. Empty for o: pseudo-nodes (no outputs)
             // and unconnected nodes, which hides the group entirely.
@@ -8176,6 +8425,15 @@
                 },
             ];
 
+            const thumbMenu = thumbClientRef.current
+                ? thumbClientRef.current.menuState(scope)
+                : { checked: false, big: false, disabled: false, title: '' };
+            const thumbSizeMenu = thumbClientRef.current
+                ? thumbClientRef.current.sizeMenuState()
+                : { checked: false, disabled: false };
+            const shaderThumbMenu = thumbClientRef.current
+                ? thumbClientRef.current.shaderMenuState(scope)
+                : { checked: false, disabled: true, title: '' };
             const viewMenuItems = [
                 {
                     label: 'Node List', icon: 'list-details', keys: 'L', checked: leftOpen,
@@ -8185,6 +8443,24 @@
                     label: 'ShadingLanguageX', icon: 'code', checked: codeViewOpen,
                     onSelect: () => setCodeViewOpen((o) => !o),
                 }] : []),
+                {
+                    label: 'Node Thumbnails', icon: 'color-swatch', checked: thumbMenu.checked,
+                    disabled: !parsed || thumbMenu.disabled,
+                    title: thumbMenu.title || 'Show a small preview image on each pattern and data node',
+                    onSelect: toggleThumbsMenu,
+                },
+                {
+                    label: 'Large Thumbnails', icon: 'maximize', checked: thumbSizeMenu.checked,
+                    disabled: !parsed || thumbSizeMenu.disabled || !thumbMenu.checked,
+                    title: thumbMenu.checked ? 'Large (full card width) or small (header corner) previews' : 'Turn on Node Thumbnails first',
+                    onSelect: toggleThumbSizeMenu,
+                },
+                {
+                    label: 'Shader Thumbnails', icon: 'sphere', checked: shaderThumbMenu.checked,
+                    disabled: !parsed || shaderThumbMenu.disabled,
+                    title: shaderThumbMenu.title,
+                    onSelect: toggleShaderThumbsMenu,
+                },
             ];
 
             // ---- Context-menu contents ---------------------------------
@@ -8214,6 +8490,55 @@
                     .concat([ctxMenu.edgeId])))
                 : [];
 
+            // "Show Thumbnail(s)": one node, or every eligible node of a multi-selection.
+            const ctxThumbRow = (() => {
+                const c = thumbClientRef.current;
+                if (!c) return null;
+                const multi = selectedIds.length > 1;
+                const ids = multi ? selectedIds : (ctxNode ? [ctxNode.id] : []);
+                const elig = ids.filter((id) => {
+                    const n = flow.nodes.find((n2) => n2.id === id);
+                    return !!(n && n.data && n.data.thumbElig);
+                });
+                const label = multi ? 'Show Thumbnails' : 'Show Thumbnail';
+                if (!elig.length) {
+                    return { label, icon: 'color-swatch', disabled: true, title: 'Thumbnails are available for pattern, data, shader and material nodes' };
+                }
+                const kindOf = (id) => ((flow.nodes.find((n2) => n2.id === id) || {}).data || {}).thumbKind || 'pattern';
+                const allOn = elig.every((id) => c.isEnabled(scope, id, true, kindOf(id)));
+                return {
+                    label, icon: 'color-swatch', checked: allOn, disabled: thumbMenu.disabled,
+                    onSelect: () => {
+                        for (const kind of ['pattern', 'shader']) {
+                            const group = elig.filter((id) => kindOf(id) === kind);
+                            if (group.length) c.setOverrides(scope, group, !allOn, kind);
+                        }
+                        patchThumbCards();
+                    },
+                };
+            })();
+
+            // "Large Thumbnail(s)": the size of the shown previews among the selection, session only.
+            const ctxSizeRow = (() => {
+                const c = thumbClientRef.current;
+                if (!c) return null;
+                const multi = selectedIds.length > 1;
+                const ids = (multi ? selectedIds : (ctxNode ? [ctxNode.id] : [])).filter((id) => {
+                    const n = flow.nodes.find((n2) => n2.id === id);
+                    return !!(n && n.data && n.data.thumb);
+                });
+                const label = multi ? 'Large Thumbnails' : 'Large Thumbnail';
+                if (!ids.length) return { label, icon: 'maximize', disabled: true, title: 'Only nodes with a thumbnail have a size' };
+                const allLarge = ids.every((id) => c.sizeOf(scope, id) === 'large');
+                return {
+                    label, icon: 'maximize', checked: allLarge,
+                    onSelect: () => {
+                        c.setSizeOverrides(scope, ids, allLarge ? 'small' : 'large');
+                        patchThumbCards();
+                    },
+                };
+            })();
+
             const ctxRowsForNode = () => (selectedIds.length > 1 ? [
                 { label: 'Copy', icon: 'copy', keys: 'Ctrl+C', disabled: !parsed || !selectedIds.length,
                     onSelect: () => copySelectionRef.current() },
@@ -8227,6 +8552,8 @@
                 { label: 'Group into Nodegraph', icon: 'cube', keys: 'Ctrl+G', disabled: !canGroupSelection || scopeLocked,
                     title: canGroupSelection ? undefined : 'Grouping is only available at the document root',
                     onSelect: encapsulateSelection },
+                ctxThumbRow,
+                ctxSizeRow,
                 { separator: true },
                 { label: 'Frame Selection', icon: 'zoom-in-area',
                     onSelect: () => smartFitView({ nodes: selectedIds.map((id) => ({ id })), duration: 400, padding: 0.3 }) },
@@ -8246,10 +8573,12 @@
                     onSelect: () => pasteClipboard() },
                 { label: 'Delete', icon: 'trash', keys: 'Del', disabled: !canDelete || scopeLocked,
                     onSelect: () => deleteSelectionRef.current() },
-                (ctxHasDefaults || canUngroupSelection) && { separator: true },
+                (ctxHasDefaults || canUngroupSelection || !!ctxThumbRow) && { separator: true },
                 ctxHasDefaults && {
                     label: 'Show All Inputs', icon: 'code', checked: ctxNode.data.portMode === 'all',
                     onSelect: () => togglePortsRef.current(ctxNode.id) },
+                ctxThumbRow,
+                ctxSizeRow,
                 canUngroupSelection && {
                     label: 'Ungroup Nodegraph', icon: 'cube-off', keys: 'Ctrl+Shift+G', disabled: scopeLocked,
                     onSelect: () => ungroupNodegraph(displayNode.data.name) },
@@ -8613,6 +8942,9 @@
                                     onEdgesChange={onEdgesChange}
                                     onSelectionStart={onSelectionStart}
                                     onSelectionEnd={onSelectionEnd}
+                                    onMoveStart={thumbActivity}
+                                    onMove={thumbActivity}
+                                    onMoveEnd={thumbCanvasIdle}
                                     onNodeDragStart={onNodeDragStart}
                                     onSelectionDragStart={onSelectionDragStart}
                                     onNodeDragStop={onNodeDragStopMoved}
@@ -8831,6 +9163,13 @@
                                 above the type-color legend card (or its chip), in
                                 one flex column so it rides up/down with legendShowAll. */}
                             <div className="absolute bottom-2 left-2 z-30 flex flex-col items-start gap-1.5">
+                                {thumbProgress && (
+                                    <div role="status" data-mtlx-thumb-pill
+                                        className="h-6 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-hud-line/50 bg-hud/70 backdrop-blur text-hud-fg whitespace-nowrap pointer-events-none">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-accent-fill animate-pulse" />
+                                        Rendering Thumbnails {thumbProgress.done}/{thumbProgress.total}
+                                    </div>
+                                )}
                                 <div className="flex items-center gap-0.5 bg-control/80 backdrop-blur border border-line-strong rounded-lg p-0.5">
                                     <button
                                         onClick={() => { const inst = rfInstRef.current; if (inst) inst.zoomOut({ duration: 150 }); }}
@@ -8902,7 +9241,7 @@
                             {/* The preview target on a shaderball — same
                                 render pipeline as the docs page. Re-renders
                                 on every committed param edit and target change. */}
-                            <GraphNodePreview parsed={parsed} target={previewTarget} docRev={docRev} fileMap={fileMap} viewRef={previewViewRef} active={active}
+                            <GraphNodePreview parsed={parsed} target={previewTarget} docRev={docRev} fileMap={fileMap} viewRef={previewViewRef} busyRef={previewBusyRef} active={active}
                                 overlay={
                                     <button
                                         onClick={() => setPinnedTarget(pinnedTarget ? null : previewTarget)}
@@ -9170,32 +9509,112 @@
                                     // root, same gate as the keybind.
                                     canUngroupSelection && (
                                         <div key="ungroup" className="py-1.5 space-y-1.5">
-                                            <button
-                                                onClick={() => ungroupNodegraph(displayNode.data.name)}
-                                                title="Dissolve this nodegraph back into its nodes, keeping every connection"
-                                                className="h-7 text-[11px] px-2 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
-                                            >
-                                                Ungroup (Ctrl+Shift+G)
-                                            </button>
-                                            <div className={'flex items-center gap-1.5' + (panelSlx ? ' cursor-not-allowed' : '')}
-                                                title={panelSlx ? SLX_PANEL_DISABLED : undefined}>
-                                                <input
-                                                    className="flex-1 min-w-0 px-1.5 py-0.5 placeholder-fg-subtle bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-accent-base focus:outline-none disabled:opacity-50 disabled:pointer-events-none"
-                                                    value={promoteNameDraft}
-                                                    placeholder="node name"
-                                                    spellCheck={false}
-                                                    disabled={panelSlx}
-                                                    onChange={(e) => setPromoteNameDraft(e.target.value)}
-                                                />
+                                            <div className="grid grid-cols-2 gap-1.5">
                                                 <button
-                                                    onClick={() => promoteNodegraph(displayNode.data.name, promoteNameDraft)}
+                                                    onClick={() => ungroupNodegraph(displayNode.data.name)}
+                                                    title="Dissolve this nodegraph back into its nodes, keeping every connection"
+                                                    className="w-full min-w-0 h-7 text-[11px] px-1 whitespace-nowrap rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
+                                                >
+                                                    Ungroup (Ctrl+Shift+G)
+                                                </button>
+                                                {/* A code node's interior comes from its code: converting is disabled, as in the menus. */}
+                                                <div className={'min-w-0' + (panelSlx ? ' cursor-not-allowed' : '')}
+                                                    title={panelSlx ? SLX_PANEL_DISABLED : undefined}>
+                                                <button
+                                                    ref={promoteBtnRef}
+                                                    aria-pressed={promoteOpen && !panelSlx}
+                                                    aria-expanded={promoteOpen && !panelSlx}
+                                                    onClick={() => (promoteOpen ? closePromote(false) : setPromoteOpen(true))}
                                                     disabled={panelSlx}
                                                     title={panelSlx ? undefined : 'Turn this nodegraph into a nodedef plus implementation graph and replace it with an instance'}
-                                                    className="h-7 flex-none text-[11px] px-2 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                                                    className={'block w-full min-w-0 h-7 text-[11px] px-1 whitespace-nowrap rounded border transition-colors disabled:opacity-50 disabled:pointer-events-none '
+                                                        + (promoteOpen && !panelSlx
+                                                            ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover'
+                                                            : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80')}
                                                 >
-                                                    Convert to Definition
+                                                    Convert to Node Def
                                                 </button>
+                                                </div>
                                             </div>
+                                            {promoteOpen && promoteInfo && !panelSlx && (
+                                                <div data-testid="promote-panel" className="rounded border border-line-strong bg-surface-sunken/60 p-2 space-y-2">
+                                                    <div className="space-y-1">
+                                                        <label htmlFor="promote-name" className="block text-[10px] uppercase tracking-wider text-fg-subtle">Node name</label>
+                                                        <input
+                                                            id="promote-name"
+                                                            ref={promoteNameRef}
+                                                            className={'w-full min-w-0 px-1.5 py-0.5 placeholder-fg-subtle bg-surface-sunken border rounded text-[11px] font-mono text-fg-soft focus:outline-none '
+                                                                + (promoteInfo.error ? 'border-error-hue/60 focus:border-error-hue' : 'border-line-strong focus:border-accent-base')}
+                                                            value={promoteNameDraft}
+                                                            placeholder="node name"
+                                                            spellCheck={false}
+                                                            aria-invalid={!!promoteInfo.error}
+                                                            onChange={(e) => setPromoteNameDraft(e.target.value)}
+                                                            onKeyDown={(e) => {
+                                                                if (e.key === 'Enter') { e.preventDefault(); confirmPromote(); }
+                                                                else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePromote(true); }
+                                                            }}
+                                                        />
+                                                        {promoteInfo.error && (
+                                                            <div data-testid="promote-error" className="text-[10px] leading-snug text-error-text">{promoteInfo.error}</div>
+                                                        )}
+                                                        {promoteInfo.warning && (
+                                                            <div data-testid="promote-warning" className="text-[10px] leading-snug text-warning-text">{promoteInfo.warning}</div>
+                                                        )}
+                                                    </div>
+                                                    {promoteInfo.names && (
+                                                        <div data-testid="promote-preview" className="rounded border border-line bg-surface-raised px-1.5 py-1 space-y-0.5 text-[10px] font-mono">
+                                                            <div className="text-[9px] uppercase tracking-wider text-fg-subtle font-sans">Will create</div>
+                                                            <div className="flex gap-1.5"><span className="flex-none w-10 text-fg-subtle">def</span><span data-testid="promote-nd" className="min-w-0 break-all text-fg-soft">{promoteInfo.names.ndName}</span></div>
+                                                            <div className="flex gap-1.5"><span className="flex-none w-10 text-fg-subtle">graph</span><span data-testid="promote-ng" className="min-w-0 break-all text-fg-soft">{promoteInfo.names.ngName}</span></div>
+                                                            <div className="flex gap-1.5"><span className="flex-none w-10 text-fg-subtle">node</span><span data-testid="promote-inst" className="min-w-0 break-all text-fg-soft">{promoteInfo.names.instName}</span></div>
+                                                        </div>
+                                                    )}
+                                                    <div className="space-y-1">
+                                                        <div className="text-[10px] uppercase tracking-wider text-fg-subtle">Node group (optional)</div>
+                                                        <MtlxSelect
+                                                            block
+                                                            align="left"
+                                                            size="sm"
+                                                            variant="sidebar"
+                                                            font="mono"
+                                                            theme={{ fontSize: '10px' }}
+                                                            defValue=""
+                                                            ariaLabel="Node group"
+                                                            value={promoteGroup}
+                                                            onChange={setPromoteGroup}
+                                                            options={[{ value: '', label: 'None' }].concat(((promoteLib && promoteLib.groups) || []).map((gr) => ({ value: gr, label: gr })))}
+                                                        />
+                                                    </div>
+                                                    <div className="space-y-1">
+                                                        <label htmlFor="promote-doc" className="block text-[10px] uppercase tracking-wider text-fg-subtle">Description (optional)</label>
+                                                        <textarea
+                                                            id="promote-doc"
+                                                            rows={2}
+                                                            className="block w-full px-1.5 py-0.5 placeholder-fg-subtle bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-accent-base focus:outline-none resize-none custom-scrollbar"
+                                                            value={promoteDocText}
+                                                            placeholder="What does this node do?"
+                                                            spellCheck={false}
+                                                            onChange={(e) => setPromoteDocText(e.target.value)}
+                                                            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePromote(true); } }}
+                                                        />
+                                                    </div>
+                                                    <div data-testid="promote-summary" className="text-[10px] text-fg-muted">{promoteInfo.summary}</div>
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            data-testid="promote-confirm"
+                                                            onClick={confirmPromote}
+                                                            disabled={!!promoteInfo.error}
+                                                            className="h-7 text-[11px] px-2.5 rounded border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        >Convert</button>
+                                                        <button
+                                                            data-testid="promote-cancel"
+                                                            onClick={() => closePromote(true)}
+                                                            className="h-7 text-[11px] px-2.5 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
+                                                        >Cancel</button>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     ),
                                     // Interface metadata: an order row for both 'i:' and 'o:'

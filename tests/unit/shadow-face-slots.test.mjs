@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 // patchShadowLightScope's face arrays are a generation parameter (render parity
 // P9): the default keeps the Scene's 32-face atlas, a preview can ask for one.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const source = fs.readFileSync(path.join(root, 'js', 'mtlx-engine.js'), 'utf8');
+const source = fs.readFileSync(path.join(root, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
 const start = source.indexOf('const SHADOW_FACE_SLOTS = ');
 const end = source.indexOf('\n};\n', source.indexOf('const patchShadowLightScope = ')) + 3;
 const ctx = {};

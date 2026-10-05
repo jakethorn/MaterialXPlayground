@@ -238,6 +238,76 @@
             );
         }
 
+        // Full-width square preview on top of the card. State comes from the stable store passed
+        // in node data, so a bitmap arriving redraws this canvas only and never rebuilds the flow.
+        const SHADER_PENDING_TITLE = {
+            queued: 'Queued: shader thumbnails render after pattern thumbnails',
+            generate: 'Compiling shader', compile: 'Compiling shader', render: 'Rendering',
+        };
+        function NodeThumb({ thumbKey, store, isIface, small, rowH, center }) {
+            const sub = React.useCallback((fn) => store.subscribe(thumbKey, fn), [store, thumbKey]);
+            const snap = React.useSyncExternalStore(sub, () => store.get(thumbKey));
+            const canvasRef = React.useRef(null);
+            const bmp = snap.bitmap;
+            const failed = snap.state === 'error';
+            const showImage = !!bmp && !failed;
+            React.useEffect(() => {
+                const cv = canvasRef.current;
+                if (!cv || !showImage) return;
+                try {
+                    // The bitmap is always the large render. Small scales it down, in two halving
+                    // steps so noise patterns do not alias.
+                    const side = small ? Math.round(THUMB_SMALL * Math.min(window.devicePixelRatio || 1, 2)) : bmp.width;
+                    if (cv.width !== side || cv.height !== side) { cv.width = side; cv.height = side; }
+                    const g = cv.getContext('2d');
+                    g.imageSmoothingEnabled = true;
+                    g.imageSmoothingQuality = 'high';
+                    g.clearRect(0, 0, side, side);
+                    let src = bmp;
+                    if (small && bmp.width >= side * 2) {
+                        const half = document.createElement('canvas');
+                        half.width = half.height = Math.round(bmp.width / 2);
+                        const h = half.getContext('2d');
+                        h.imageSmoothingEnabled = true;
+                        h.imageSmoothingQuality = 'high';
+                        h.drawImage(bmp, 0, 0, half.width, half.height);
+                        src = half;
+                    }
+                    g.drawImage(src, 0, 0, side, side);
+                } catch (e) { /* the bitmap was closed by cache eviction; the next result redraws */ }
+            }, [bmp, showImage, small]);
+            // Same separator the header draws, so the image and header read as one stack.
+            // Small: the left end of the header, 64px plus a 1px vertical separator; the header clips its corner.
+            const sep = isIface ? 'border-line/60 border-dashed ' : 'border-line ';
+            const wrap = small ? 'relative flex-none self-stretch overflow-hidden border-r ' + sep
+                : 'relative overflow-hidden rounded-t-lg border-b ' + sep;
+            const shader = snap.kind === 'shader';
+            const pendingShader = shader && !showImage && snap.state === 'pending';
+            const state = showImage ? '' : pendingShader ? 'flex items-center justify-center bg-surface-sunken text-fg-subtle' : failed ? 'flex items-center justify-center bg-surface-sunken text-fg-subtle' : 'bg-surface-sunken animate-pulse';
+            const centered = !small && center;
+            const box = (
+                <div className={centered ? wrap.replace('rounded-t-lg ', '').replace(/border-b /, '') + state : wrap + state}
+                    style={small ? { width: THUMB_SMALL + 1 } : centered ? { width: THUMB_SIDE, height: THUMB_SIDE, flex: 'none' } : { height: rowH }} data-mtlx-thumb={snap.state} data-mtlx-thumb-size={small ? 'small' : 'large'}
+                    title={failed ? (snap.title || 'No thumbnail for this node') : pendingShader ? SHADER_PENDING_TITLE[snap.phase || 'queued'] : undefined}>
+                    {showImage && <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />}
+                    {showImage && snap.state === 'approx' && (
+                        <span className={'absolute rounded-full bg-warning-marker ' + (small ? 'bottom-1 right-1 w-1.5 h-1.5' : 'bottom-2 right-2 w-2 h-2')}
+                            title={snap.title || (shader ? 'Approximate shaderball render' : 'Approximate: a texture format this preview cannot read is shown as a stand-in')} />
+                    )}
+                    {pendingShader && <MtlxIcon name={snap.phase && snap.phase !== 'queued' ? 'rotate' : 'sphere'} className={(small ? 'w-4 h-4' : 'w-6 h-6') + (snap.phase && snap.phase !== 'queued' ? ' animate-spin' : '')} />}
+                    {failed && <MtlxIcon name="alert-triangle" className={small ? 'w-4 h-4' : 'w-6 h-6'} />}
+                </div>
+            );
+            if (!centered) return box;
+            // Code nodes: the normal-size square sits centered on a header-colored full-width row.
+            return (
+                <div className={'flex justify-center overflow-hidden rounded-t-lg border-b ' + sep + (isIface ? 'bg-transparent' : 'bg-graph-node-header/70')}
+                    style={{ height: rowH }}>
+                    {box}
+                </div>
+            );
+        }
+
         function MtlxGraphNode({ data, selected }) {
             if (MTLX_PERF_LOG) {
                 const now = performance.now();
@@ -262,6 +332,51 @@
             // Only offered when the node actually has some.
             const hasDefaults = (data.allInputs || []).some((i) => i.authored === false);
             const expanded = data.portMode === 'all';
+            const showToggle = hasDefaults && !!data.onTogglePorts;
+            const showEdit = data.kind === 'nodegraph' && !!data.onOpen;
+            const showImpl = !!data.onOpenImpl;
+            const toggleLabel = expanded ? 'Hide default inputs' : 'Show all inputs';
+            const actionCls = 'mtlx-node-act mtlx-node-open border text-[10px] leading-none bg-chip border-accent-wash text-accent-fg-strong hover:bg-hover-strong hover:text-accent-fg-bright';
+            const hasThumb = !!(data.thumb && data.thumbStore);
+            const smallThumb = hasThumb && data.thumbSize === 'small';
+            const dotEl = isIface ? (
+                <span className="w-2 h-2 rotate-45 flex-none border"
+                    style={{ background: 'transparent', borderColor: getNodeColor(data) }} />
+            ) : (
+                <span className="w-2 h-2 rounded-full flex-none" style={{ background: getNodeColor(data) }} />
+            );
+            // One line, ellipsis; the full name (and the rename hint) is in the tooltip.
+            const nameEl = data.renaming ? (
+                <InlineRename data={data} isIface={isIface} />
+            ) : (
+                <span
+                    className={(isIface ? 'italic text-fg-secondary' : 'font-bold text-fg')
+                        + ' mtlx-node-name min-w-0 truncate' + (data.onRenameStart ? ' cursor-text' : '')}
+                    title={data.onRenameStart ? data.name + '. Double-click to rename' : data.name}
+                    onDoubleClick={(e) => {
+                        // Stops React Flow's own node dblclick (open nodegraph); the native
+                        // listener is handled by .mtlx-node-name.
+                        e.stopPropagation();
+                        if (data.onRenameStart) data.onRenameStart();
+                    }}
+                >
+                    {data.name}
+                </span>
+            );
+            const nameRow = (
+                <div className="flex items-center gap-1.5 min-w-0" style={{ height: 18 }}>
+                    {dotEl}
+                    {nameEl}
+                </div>
+            );
+            // DEFINITION / INTERFACE / OUTPUT, right-aligned on the type row.
+            const badgeText = isDef ? 'definition' : (isIface ? (data.kind === 'input' ? 'interface' : 'output') : '');
+            const badgeEl = badgeText ? (
+                <span className="ml-auto flex-none text-[8px] leading-[10px] uppercase tracking-wider text-fg-subtle border border-line-strong border-dashed rounded px-1">
+                    {badgeText}
+                </span>
+            ) : null;
+            const subtle = isIface ? 'text-fg-disabled italic' : 'text-fg-subtle';
             return (
                 <div
                     title={isDef
@@ -275,86 +390,81 @@
                         + (selected ? 'border-graph-node-selected ring-1 ring-graph-node-selected/50'
                                     : ((isIface || isDef) ? 'border-graph-node-line-iface' : 'border-graph-node-line'))}
                     style={{ width: nodeWidth(data) }}>
-                    {hasDefaults && data.onTogglePorts && (
-                        <button
-                            onClick={(e) => { e.stopPropagation(); data.onTogglePorts(); }}
-                            onDoubleClick={(e) => e.stopPropagation()}
-                            title={expanded ? 'Hide the inputs left at their defaults' : 'Show all inputs (defaults included)'}
-                            className={'absolute -top-2 -right-2 z-10 w-4 h-4 rounded-full border text-[10px] leading-none flex items-center justify-center transition-colors '
-                                + (expanded
-                                    ? 'bg-accent-fill border-accent-base text-on-accent hover:bg-accent-fill-hover'
-                                    : 'bg-chip border-graph-node-line-iface text-fg-secondary hover:bg-hover-strong hover:text-fg')}
-                        >{expanded ? '\u2212' : '+'}</button>
-                    )}
-                    <div className={'px-2 py-1.5 border-b rounded-t-lg leading-tight '
-                            + (isIface ? 'border-line/60 border-dashed bg-transparent'
-                                       : 'border-line bg-graph-node-header/70')}>
-                        <div className="flex items-center gap-1.5 min-w-0">
-                            {isIface ? (
-                                <span className="w-2 h-2 rotate-45 flex-none border"
-                                    style={{ background: 'transparent',
-                                            borderColor: getNodeColor(data) }} />
-                            ) : (
-                                <span className="w-2 h-2 rounded-full flex-none"
-                                    style={{ background: getNodeColor(data) }} />
-                            )}
-                            {data.renaming ? (
-                                <InlineRename data={data} isIface={isIface} />
-                            ) : (
-                                <span
-                                    className={(isIface ? 'italic text-fg-secondary' : 'font-bold text-fg')
-                                        + ' mtlx-node-name truncate'
-                                        + (data.onRenameStart ? ' cursor-text' : '')}
-                                    title={data.onRenameStart ? 'Double-click to rename' : undefined}
-                                    onDoubleClick={(e) => {
-                                        // Stops React Flow's own node dblclick
-                                        // (open nodegraph); the native listener
-                                        // is handled by .mtlx-node-name.
-                                        e.stopPropagation();
-                                        if (data.onRenameStart) data.onRenameStart();
-                                    }}
+                    {(showToggle || showEdit || showImpl) && (
+                        // Round chips on the right edge, stacked; each grows to the right into a labelled pill
+                        // on hover or keyboard focus (CSS in graph-preview.css). The open chips keep
+                        // mtlx-node-open so read-only previews stay inert except for them.
+                        <div className="mtlx-node-acts absolute -top-2 left-full -ml-2 z-10 flex flex-col items-start gap-1 w-max">
+                            {showToggle && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); data.onTogglePorts(); }}
+                                    onDoubleClick={(e) => e.stopPropagation()}
+                                    title={toggleLabel}
+                                    aria-label={toggleLabel}
+                                    className={'mtlx-node-act border text-[10px] leading-none '
+                                        + (expanded
+                                            ? 'bg-accent-fill border-accent-base text-on-accent hover:bg-accent-fill-hover'
+                                            : 'bg-chip border-graph-node-line-iface text-fg-secondary hover:bg-hover-strong hover:text-fg')}
                                 >
-                                    {data.name}
-                                </span>
+                                    <span className="mtlx-node-act-icon">{expanded ? '−' : '+'}</span>
+                                    <span className="mtlx-node-act-label">{toggleLabel}</span>
+                                </button>
                             )}
-                            {isIface && (
-                                <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-fg-subtle border border-line-strong border-dashed rounded px-1">
-                                    {data.kind === 'input' ? 'interface' : 'output'}
-                                </span>
-                            )}
-                            {isDef && (
-                                <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-fg-subtle border border-line-strong border-dashed rounded px-1">
-                                    definition
-                                </span>
-                            )}
-                            {/* data.onOpen is what makes a read-only render inert (no
-                                callback, no chip). mtlx-node-open is a CSS hook so a
-                                pointer-events:none preview can re-enable just this chip. */}
-                            {data.kind === 'nodegraph' && data.onOpen && (
+                            {showEdit && (
                                 <button
                                     onClick={openScope}
                                     onDoubleClick={openScope}
                                     title="Open this nodegraph"
-                                    className={'mtlx-node-open flex-none inline-flex items-center gap-1 text-[9px] text-accent-fg-strong/90 border border-accent-wash/40 rounded px-1 hover:bg-accent-wash/20 hover:text-accent-fg-bright transition-colors'
-                                        + (isDef ? '' : ' ml-auto')}
-                                >edit <MtlxIcon name="pencil" className="w-2.5 h-2.5" /></button>
+                                    aria-label="Edit nodegraph"
+                                    className={actionCls}
+                                >
+                                    <span className="mtlx-node-act-icon"><MtlxIcon name="pencil" className="w-2.5 h-2.5" /></span>
+                                    <span className="mtlx-node-act-label">Edit nodegraph</span>
+                                </button>
                             )}
-                            {/* A data node backed by a library implementation
-                                nodegraph, pill-navigates in view only, same
-                                inert-on-preview contract as onOpen above. */}
-                            {data.onOpenImpl && (
+                            {showImpl && (
                                 <button
                                     onClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
                                     onDoubleClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
                                     title="Explore the implementation nodegraph (view only)"
-                                    className="mtlx-node-open flex-none ml-auto inline-flex items-center gap-1 text-[9px] text-accent-fg-strong/90 border border-accent-wash/40 rounded px-1 hover:bg-accent-wash/20 hover:text-accent-fg-bright transition-colors"
-                                >view <MtlxIcon name="eye" className="w-2.5 h-2.5" /></button>
+                                    aria-label="View implementation"
+                                    className={actionCls}
+                                >
+                                    <span className="mtlx-node-act-icon"><MtlxIcon name="eye" className="w-2.5 h-2.5" /></span>
+                                    <span className="mtlx-node-act-label">View implementation</span>
+                                </button>
                             )}
                         </div>
-                        <div className={'text-[10px] truncate pl-3.5 ' + (isIface ? 'text-fg-disabled italic' : 'text-fg-subtle')}>
-                            {data.slx ? 'ShadingLanguageX' : data.category}{data.type ? ' : ' + data.type : ''}
+                    )}
+                    {hasThumb && !smallThumb && <NodeThumb thumbKey={data.thumbKey} store={data.thumbStore} isIface={isIface} rowH={thumbRowH(data)} center={!!data.slx} />}
+                    {smallThumb ? (
+                        // Small preview: it fills the header's full height at the left end, three fixed rows to its right.
+                        <div className={'flex border-b leading-tight rounded-t-lg overflow-hidden '
+                                + (isIface ? 'border-line/60 border-dashed bg-transparent' : 'border-line bg-graph-node-header/70')}
+                            style={{ height: THUMB_SMALL + 1 }}>
+                            <NodeThumb thumbKey={data.thumbKey} store={data.thumbStore} isIface={isIface} small />
+                            <div className="flex-1 min-w-0 px-2 flex flex-col justify-center gap-0.5 overflow-hidden">
+                                {nameRow}
+                                <div className={'text-[10px] truncate pl-3.5 ' + subtle} style={{ height: 13 }}>{data.slx ? 'ShadingLanguageX' : data.category}</div>
+                                <div className="flex items-center gap-1.5 min-w-0 pl-3.5" style={{ height: 13 }}>
+                                    <span className="min-w-0 truncate text-[10px]" style={{ color: data.type ? typeColor(data.type) : undefined }}>{data.type}</span>
+                                    {badgeEl}
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                    <div className={'px-2 py-1 border-b leading-tight ' + (hasThumb ? '' : 'rounded-t-lg ')
+                            + (isIface ? 'border-line/60 border-dashed bg-transparent'
+                                       : 'border-line bg-graph-node-header/70')}>
+                        {nameRow}
+                        <div className="flex items-center gap-1.5 min-w-0 pl-3.5" style={{ height: 13 }}>
+                            <span className={'min-w-0 truncate text-[10px] ' + subtle}>
+                                {data.slx ? 'ShadingLanguageX' : data.category}{data.type ? ' : ' + data.type : ''}
+                            </span>
+                            {badgeEl}
                         </div>
                     </div>
+                    )}
                     <div className="py-0.5">
                         {safePortList(data.inputs, data.id, 'inputs').map((inp) => (
                             <div key={'in:' + inp.name}

@@ -1947,7 +1947,7 @@ const useRenderContextRecovery = ({
       const idx = groupsRef.current.findIndex(refs => refs.some(r => r && r.current === d.canvas));
       if (idx === -1) return;
       if (d.state === 'lost') {
-        if (!isHiddenRef.current() && onLostRef.current) onLostRef.current(idx);
+        if (!isHiddenRef.current() && !d.suspended && onLostRef.current) onLostRef.current(idx);
       } else if (d.state === 'restored') {
         if (isHiddenRef.current()) pendingRef.current.add(idx);else bump(idx);
       }
@@ -2277,8 +2277,11 @@ const GEOM_ICONS = {
 // manual-pick only); every flat pattern/operator group renders as a
 // 2D buffer. Group strings are lowercase nodedef getNodeGroup()
 // values (the same strings as js/gen/nodelib.json's group keys).
-const SHADERBALL_GROUPS = ['pbr', 'translation', 'material', 'shader', 'light', 'npr', 'geometric', 'texture3d'];
-const defaultGeomFor = nodegroup => SHADERBALL_GROUPS.indexOf(String(nodegroup || '').toLowerCase()) !== -1 ? 'shaderball-scene' : 'buffer2d';
+// Both live in js/shared/mtlx-gen-core.js so the thumbnail worker shares them.
+const {
+  SHADERBALL_GROUPS,
+  defaultGeomFor
+} = MtlxGenCore;
 const TEXT_INPUT_CLS = 'w-full bg-surface-sunken border border-line-control rounded px-2.5 py-1.5 text-sm text-fg-soft placeholder-fg-subtle focus:outline-none focus:border-focus';
 
 // Fixed-height (20px) field label row shared by every field on the page,

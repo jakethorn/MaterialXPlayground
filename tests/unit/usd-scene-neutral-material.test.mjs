@@ -9,12 +9,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'usd-scene-renderer.js'), 'utf8');
 
 // The Scene resolves files through the engine's exact resolvers (P6 S4); a
-// window carrying the real ones, extracted from js/mtlx-engine.js.
+// window carrying the real ones, extracted from js/shared/mtlx-gen-core.js.
 function engineResolverWindow() {
-  const engine = fs.readFileSync(path.join(ROOT, 'js', 'mtlx-engine.js'), 'utf8');
+  const engine = fs.readFileSync(path.join(ROOT, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
   const extract = (name) => {
     const idx = engine.indexOf('const ' + name + ' = ');
-    assert.ok(idx >= 0, name + ' is present in mtlx-engine.js');
+    assert.ok(idx >= 0, name + ' is present in mtlx-gen-core.js');
     let depth = 0;
     for (let i = idx; i < engine.length; i++) {
       const c = engine[i];

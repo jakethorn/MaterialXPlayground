@@ -8,7 +8,8 @@
     const ENGINE_DEPS = ['getDisplayTransform', 'applyThreeToneMappingChunk', 'displayExposureScale', 'clockTick',
         'createPeelPipeline', 'getForceTransparency', 'getEnvironment', 'getEnvOverride', 'resolveShadingEnv',
         'makeEnvTexture', 'makeBackgroundTexture', 'parseEnvBuffer', 'buildEnvFromParsedTexture',
-        'displayTransformId', 'fullscreenElement', 'registerLiveView', 'unregisterLiveView', 'compileFilteringDriverNoise'];
+        'displayTransformId', 'fullscreenElement', 'registerLiveView', 'unregisterLiveView', 'compileFilteringDriverNoise',
+        'enforceGlContextCap'];
     let ENGINE = null;
 
     const bindEngine = (deps) => {
@@ -103,7 +104,7 @@
     // and the PMREM bake downstream stay byte-identical.
     // The Scene passes no size (its resize() sizes the buffer) and its own
     // display mode/exposure; the preview uses the engine-global display.
-    const acquireRenderer = ({ canvas, wantsStudio, maxPixelRatio, width, height, display = null }) => {
+    const acquireRenderer = ({ canvas, wantsStudio, maxPixelRatio, width, height, display = null, isSuspended = () => false }) => {
         const THREE = window.THREE;
         // Acquire WebGL2 ourselves and pass it via `context`, so three
         // skips its own getContext('webgl2')-then-'webgl' fallback: a
@@ -124,7 +125,7 @@
         // restored re-inits three's GL state but not render-target
         // contents (PMREM bake, shadow map), so owners of this view
         // must fully rebuild on restore, not just resume.
-        const onGlLost = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'lost' } })); };
+        const onGlLost = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'lost', suspended: isSuspended() } })); };
         const onGlRestored = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'restored' } })); };
         canvas.addEventListener('webglcontextlost', onGlLost);
         canvas.addEventListener('webglcontextrestored', onGlRestored);
@@ -153,13 +154,10 @@
     // Renderer output for the built-in three materials. CustomToneMapping
     // carries our own chunk (applyThreeToneMappingChunk), so they run the SAME
     // curve and exposure as the MaterialX surfaces, not only in 'aces'.
+    // The one implementation lives in mtlx-scene-assembly.js (shared with the
+    // thumbnail worker), resolved at call time: it loads before any view is built.
     const applyRendererDisplay = (renderer, mode, exposure) => {
-        const THREE = window.THREE;
-        const customTone = ENGINE.applyThreeToneMappingChunk(mode);
-        if ('outputEncoding' in renderer) renderer.outputEncoding = mode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
-        renderer.toneMapping = customTone ? THREE.CustomToneMapping
-            : (mode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping);
-        renderer.toneMappingExposure = exposure;
+        window.MtlxSceneAssembly.applyRendererDisplay(renderer, { mode, exposureScale: exposure });
     };
 
     const createRenderScene = () => new window.THREE.Scene();
@@ -472,11 +470,9 @@
     // content-side hook that runs AFTER this returns.
     const createDefaultCamera = ({ flat2d, width, height, cameraDistance }) => {
         const THREE = window.THREE;
-        const camera = flat2d
-            ? new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10)
-            : new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-        if (flat2d) camera.position.set(0, 0, 1);
-        else camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
+        if (flat2d) return window.MtlxThreeMaterial.createFlat2dCamera();
+        const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+        camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
         return camera;
     };
 
@@ -824,6 +820,8 @@
         canvas, content, maxPixelRatio = 2, wheelMode = 'zoom', autoRotate = true,
         backdrop, envBackground = false, cameraDistance = 3.6, label = '',
         isMounted = () => true, isActive = () => true, isAlive = null, liveViews = true,
+        // True keeps this view's context while inactive (Compare's diff mode reads its pixels).
+        holdContext = () => false,
     }) => {
         const aliveFn = isAlive || isMounted;
         // Unknown values fall back to 'studio'; envBackground only applies
@@ -840,6 +838,9 @@
         let peel = null, peelLinearOk = false, backdropParts = null, pmremRT = null, linearToggle = null;
         let caps = null, renderPathReady = false, stopped = false;
         let explicitActive = true, drawingBufferParked = false;
+        // Context budget (ENGINE.enforceGlContextCap): suspendedByUs marks a loss WE caused,
+        // so real GPU resets keep their own path.
+        let viewGl = null, loseExt = null, suspendedByUs = false, lastRenderAt = 0, applyBusy = 0;
         // No-OrbitControls fallback spin (script blocked) mirrors autoRotate.
         let fallbackSpin = !!autoRotate;
         // Environment state, fetched once per session; the content reads it
@@ -876,6 +877,20 @@
         // synchronous step keeps the old microtask order.
         const isThenable = (v) => !!v && typeof v.then === 'function';
 
+        const suspendGl = () => {
+            // Kept: a lost context answers getExtension with null, so resume needs the object from now.
+            loseExt = viewGl && !viewGl.isContextLost() && viewGl.getExtension('WEBGL_lose_context');
+            if (!loseExt) return false;
+            suspendedByUs = true;
+            loseExt.loseContext();
+            return true;
+        };
+        const resumeGl = () => {
+            suspendedByUs = false;
+            if (window.MTLX_PERF_LOG) console.log('[mtlx-gl] resumed ' + label);
+            try { if (loseExt) loseExt.restoreContext(); } catch (e) { /* context already gone */ }
+        };
+
         const disposeAll = () => {
             stopped = true;
             content.dispose();
@@ -890,7 +905,8 @@
             try { if (pmremRT) pmremRT.dispose(); } catch (e) { /* already disposed/invalid */ }
             try { envMapGate.disposeAll(); } catch (e) { /* already disposed/invalid */ }
             try { if (peel) peel.dispose(); } catch (e) { /* already disposed/invalid */ }
-            // No forceContextLoss(): callers rebuild on the SAME canvas right away.
+            // No forceContextLoss(): callers rebuild on the SAME canvas right away
+            // (handle.destroy() does it for discarded canvases).
             try {
                 if (onContextLostSleep) canvas.removeEventListener('webglcontextlost', onContextLostSleep);
                 if (onContextRestoredWake) canvas.removeEventListener('webglcontextrestored', onContextRestoredWake);
@@ -912,7 +928,7 @@
                 peel.render(scene, camera, list);
             },
         });
-        const renderFrame = () => frame.render();
+        const renderFrame = () => { lastRenderAt = performance.now(); frame.render(); };
         const animateTick = (ts) => {
             // Idempotent per rAF timestamp, so every view reads one clock value.
             ENGINE.clockTick(ts);
@@ -922,6 +938,8 @@
                 updateControls({ controls, camera, clampBox: content.clampBox() });
             }
             // Paused views still track camera input (drag/damping).
+            // Suspended by the context cap: restore once wanted again, never render meanwhile.
+            if (suspendedByUs) { if (isActive() || holdContext()) resumeGl(); return; }
             if (!isActive()) return;
             if (!controls && fallbackSpin) content.root().rotation.y += 0.005;
             content.beforeRender();
@@ -1067,8 +1085,10 @@
                 host.height = ch;
                 if (!isMounted()) return bail();
                 const rendererPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
-                const acquired = acquireRenderer({ canvas, wantsStudio: !!content.capabilities().studio, maxPixelRatio, width: cw, height: ch });
+                if (liveViews) ENGINE.enforceGlContextCap(canvas);
+                const acquired = acquireRenderer({ canvas, wantsStudio: !!content.capabilities().studio, maxPixelRatio, width: cw, height: ch, isSuspended: () => suspendedByUs });
                 renderer = acquired.renderer;
+                viewGl = acquired.gl;
                 onGlLost = acquired.onGlLost;
                 onGlRestored = acquired.onGlRestored;
                 content.attach(host);
@@ -1133,7 +1153,8 @@
                         if (!stopped && aliveFn()) animate();
                     },
                 });
-                onContextLostSleep = () => sleepGate.notify({ contextLost: true });
+                // Our own cap suspension must not sleep the loop: animateTick is what resumes the context.
+                onContextLostSleep = () => { if (!suspendedByUs) sleepGate.notify({ contextLost: true }); };
                 onContextRestoredWake = () => sleepGate.notify({ contextLost: false });
                 canvas.addEventListener('webglcontextlost', onContextLostSleep);
                 canvas.addEventListener('webglcontextrestored', onContextRestoredWake);
@@ -1235,6 +1256,28 @@
                     setFallbackSpin: (v) => { fallbackSpin = v; },
                 });
                 handle = buildHandle(buildSessionApi(cameraHandle), content);
+                // Context budget: applyMaterial in flight keeps the view from being suspended.
+                if (typeof handle.applyMaterial === 'function') {
+                    const applyInner = handle.applyMaterial;
+                    handle.applyMaterial = async (...args) => { applyBusy++; try { return await applyInner(...args); } finally { applyBusy--; } };
+                }
+                // dispose() while the canvas is still in the page (rebuild on it), destroy() once React detached it.
+                handle.release = () => { if (canvas && canvas.isConnected) handle.dispose(); else handle.destroy(); };
+                // One-way teardown for a canvas discarded for good: dispose, then free the GL context now.
+                handle.destroy = () => {
+                    handle.dispose();
+                    suspendedByUs = false;
+                    try { const ext = viewGl && !viewGl.isContextLost() && viewGl.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } catch (e) { /* already lost */ }
+                    viewGl = null; loseExt = null;
+                };
+                // Context budget hooks read by ENGINE.enforceGlContextCap.
+                handle.glCtx = {
+                    canvas, label,
+                    lost: () => !viewGl || viewGl.isContextLost(),
+                    lastRender: () => lastRenderAt,
+                    suspendable: () => !stopped && !suspendedByUs && !applyBusy && !isActive() && !holdContext(),
+                    suspend: suspendGl,
+                };
                 if (liveViews) ENGINE.registerLiveView(handle);
                 // Diffuse-env method broadcast: rebind through setEnvironment.
                 if (caps.lit) {

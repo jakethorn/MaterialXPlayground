@@ -43,7 +43,7 @@ test('bindEngine accepts a complete deps object', () => {
   ['createPeelPipeline', 'getForceTransparency', 'getEnvironment', 'getEnvOverride', 'resolveShadingEnv',
     'makeEnvTexture', 'makeBackgroundTexture', 'parseEnvBuffer', 'buildEnvFromParsedTexture',
     'displayTransformId', 'fullscreenElement', 'registerLiveView', 'unregisterLiveView',
-    'compileFilteringDriverNoise'].forEach((k) => { deps[k] = () => {}; });
+    'compileFilteringDriverNoise', 'enforceGlContextCap'].forEach((k) => { deps[k] = () => {}; });
   assert.doesNotThrow(() => MtlxRender.bindEngine(deps));
 });
 

@@ -20,7 +20,7 @@ function loadWithStubPipelines() {
     'getForceTransparency', 'getEnvironment', 'getEnvOverride', 'resolveShadingEnv',
     'makeEnvTexture', 'makeBackgroundTexture', 'parseEnvBuffer', 'buildEnvFromParsedTexture',
     'displayTransformId', 'fullscreenElement', 'registerLiveView', 'unregisterLiveView',
-    'compileFilteringDriverNoise'].forEach((k) => { deps[k] = () => {}; });
+    'compileFilteringDriverNoise', 'enforceGlContextCap'].forEach((k) => { deps[k] = () => {}; });
   deps.createPeelPipeline = (renderer, options) => {
     const pipeline = {
       options, renders: [], disposed: 0, unsupported: null,

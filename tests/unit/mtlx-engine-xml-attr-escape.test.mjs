@@ -6,13 +6,14 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const source = fs.readFileSync(path.join(root, 'js/mtlx-engine.js'), 'utf8');
+// The XML text helpers live in the shared generation core (js/shared/mtlx-gen-core.js).
+const source = fs.readFileSync(path.join(root, 'js/shared/mtlx-gen-core.js'), 'utf8');
 
 // Isolate the pure XML text helpers (attribute escaping and the
 // formatting-preserving save) without pulling in the rest of the engine.
 const start = source.indexOf('const escapeXmlAttrSpecials =');
-const end = source.indexOf('// Session-lifetime texture cache', start);
-assert.ok(start >= 0 && end > start, 'could not locate the XML text helpers in mtlx-engine.js');
+const end = source.indexOf('// True for a real File', start);
+assert.ok(start >= 0 && end > start, 'could not locate the XML text helpers in mtlx-gen-core.js');
 const context = {};
 vm.createContext(context);
 vm.runInContext(source.slice(start, end)
